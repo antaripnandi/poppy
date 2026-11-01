@@ -96,7 +96,7 @@ class MediaManager(QObject):
         super().__init__(parent)
         self.sessions: list[SessionData] = []
         self._selected_index = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._loop = None
         self._thread = None
         self._running = False
@@ -334,16 +334,18 @@ class MediaManager(QObject):
     def next_session(self):
         """Cycle to next active media session."""
         with self._lock:
-            if self.sessions:
-                next_idx = (self._selected_index + 1) % len(self.sessions)
-                self.select_session(next_idx)
+            if not self.sessions:
+                return
+            next_idx = (self._selected_index + 1) % len(self.sessions)
+        self.select_session(next_idx)
 
     def previous_session(self):
         """Cycle to previous active media session."""
         with self._lock:
-            if self.sessions:
-                prev_idx = (self._selected_index - 1) % len(self.sessions)
-                self.select_session(prev_idx)
+            if not self.sessions:
+                return
+            prev_idx = (self._selected_index - 1) % len(self.sessions)
+        self.select_session(prev_idx)
 
     def toggle_play_pause(self):
         self._dispatch_command("toggle")
