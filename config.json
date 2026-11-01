@@ -1,0 +1,70 @@
+{
+  "appearance": {
+    "theme": "Pure black",
+    "style": "Notch",
+    "collapsed_width": 210,
+    "collapsed_height": 30,
+    "open_width": 660,
+    "open_height": 340,
+    "corner_radius": 16
+  },
+  "pomodoro": {
+    "work_duration": 1500,
+    "break_duration": 300,
+    "long_break_duration": 900,
+    "sound_enabled": true
+  },
+  "discord_rpc": {
+    "enabled": false,
+    "client_id": "120000000000000000",
+    "mode": "dynamic",
+    "custom_presence": {
+      "details": "Deep Work with Poppy",
+      "state": "Focus Session",
+      "large_image": "poppy_logo",
+      "large_text": "Poppy Productivity Island",
+      "small_image": "badge_pro",
+      "small_text": "Focusing",
+      "buttons": [
+        {
+          "label": "Get Poppy",
+          "url": "https://github.com"
+        }
+      ]
+    },
+    "dynamic_templates": {
+      "pomo_focus": {
+        "details": "Focus Sprint #{cycle}",
+        "state": "{task}",
+        "large_image": "focus_icon",
+        "large_text": "Focusing with Poppy",
+        "small_image": "clock",
+        "small_text": "{remaining} left"
+      },
+      "pomo_break": {
+        "details": "Short Break",
+        "state": "Recharging",
+        "large_image": "coffee_icon",
+        "large_text": "On Break",
+        "small_image": "green_check",
+        "small_text": "{remaining} left"
+      },
+      "media": {
+        "details": "{title}",
+        "state": "by {artist}",
+        "large_image": "music_disc",
+        "large_text": "{album}",
+        "small_image": "play_icon",
+        "small_text": "Playing"
+      }
+    }
+  },
+  "notch": {
+    "animation_duration_ms": 200,
+    "auto_hover_peek": true
+  },
+  "hardware_hud": {
+    "monitor_gpu": true,
+    "monitor_battery": true
+  }
+}

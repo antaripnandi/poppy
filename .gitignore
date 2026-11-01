@@ -1,0 +1,48 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# User Shelf runtime data & screenshots
+assets/shelf/*
+!assets/shelf/.gitkeep
+
+# Operating System files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.log
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
