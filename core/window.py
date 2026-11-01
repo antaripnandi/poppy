@@ -193,7 +193,7 @@ class DynamicNotchWindow(QWidget):
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(self._target_size[0], self._target_size[1])
+        return QSize(self._collapsed_w, self._collapsed_h)
 
     def sizeHint(self) -> QSize:
         return QSize(self._target_size[0], self._target_size[1])
@@ -202,13 +202,14 @@ class DynamicNotchWindow(QWidget):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
+        self.main_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
         # =====================================================================
         # 1. Collapsed View: Minimalist Top Pill (pill-v2.png)
         # Symmetrical 3-zone architecture: Left (Media icon) - Center (Time) - Right (Visualizer)
         # =====================================================================
         self.view_collapsed = QWidget(self)
-        self.view_collapsed.setFixedHeight(self._collapsed_h)
+        self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
         v_coll_layout.setContentsMargins(12, 0, 12, 0)
         v_coll_layout.setSpacing(0)
@@ -281,7 +282,7 @@ class DynamicNotchWindow(QWidget):
         # 2. Peek View (Hover HUD: Spotify / YouTube Media HUD)
         # =====================================================================
         self.view_peek = QWidget(self)
-        self.view_peek.setFixedHeight(68)
+        self.view_peek.setFixedSize(380, 68)
         v_peek_layout = QHBoxLayout(self.view_peek)
         v_peek_layout.setContentsMargins(14, 6, 14, 8)
         v_peek_layout.setSpacing(12)
@@ -354,7 +355,7 @@ class DynamicNotchWindow(QWidget):
         # 2b. Island View (Dynamic Island HUD for Screenshot & Staging)
         # =====================================================================
         self.view_island = QWidget(self)
-        self.view_island.setFixedHeight(64)
+        self.view_island.setFixedSize(420, 64)
         v_isl_layout = QHBoxLayout(self.view_island)
         v_isl_layout.setContentsMargins(12, 6, 12, 8)
         v_isl_layout.setSpacing(10)
@@ -467,6 +468,7 @@ class DynamicNotchWindow(QWidget):
         # 3. Expanded View (NotchX Navigation & Full Tabbed Suite)
         # =====================================================================
         self.view_expanded = QWidget(self)
+        self.view_expanded.setFixedSize(self._open_w, self._open_h)
         v_exp_layout = QVBoxLayout(self.view_expanded)
         v_exp_layout.setContentsMargins(14, 8, 14, 12)
         v_exp_layout.setSpacing(8)
@@ -1419,7 +1421,8 @@ class DynamicNotchWindow(QWidget):
         self.tab_music.set_accent(accent)
         self.tab_timer.set_accent(accent)
 
-        self.view_collapsed.setFixedHeight(self._collapsed_h)
+        self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
+        self.view_expanded.setFixedSize(self._open_w, self._open_h)
         self._apply_geometry_for_state(self.state, animate=False)
         self.update()
 
@@ -1449,7 +1452,7 @@ class DynamicNotchWindow(QWidget):
             self._island_timer.stop()
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
         if self.state == NotchState.COLLAPSED and auto_peek:
-            self._hover_peek_timer.start(120)
+            self._hover_peek_timer.start(80)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
@@ -1670,10 +1673,20 @@ class DynamicNotchWindow(QWidget):
 
         if animate:
             self.anim.stop()
-            # Fast snappy spring duration matching NotchX FastDuration (0.14s)
-            duration = 140 if state != NotchState.EXPANDED else 180
+            # Organic spring physics matching macOS Dynamic Island & NotchX
+            if state == NotchState.COLLAPSED:
+                duration = 220
+                curve = QEasingCurve(QEasingCurve.Type.OutCubic)
+            elif state in (NotchState.PEEK, NotchState.ISLAND):
+                duration = 270
+                curve = QEasingCurve(QEasingCurve.Type.OutBack)
+                curve.setOvershoot(1.15)
+            else:  # EXPANDED
+                duration = 300
+                curve = QEasingCurve(QEasingCurve.Type.OutCubic)
+
             self.anim.setDuration(duration)
-            self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self.anim.setEasingCurve(curve)
             # Clear mask during animation to eliminate SetWindowRgn DWM pipeline stalls
             self.clearMask()
             self.anim.setStartValue(self.geometry())
@@ -1686,8 +1699,6 @@ class DynamicNotchWindow(QWidget):
             self._update_clickthrough_mask()
 
     def _on_animation_finished(self):
-        self.resize(*self._target_size)
-        self._recenter_window()
         self._update_clickthrough_mask()
 
     def resizeEvent(self, event):
