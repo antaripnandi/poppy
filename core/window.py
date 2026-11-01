@@ -16,7 +16,7 @@ from enum import Enum
 from datetime import datetime
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QSize, QPropertyAnimation, QEasingCurve, QTimer
+    Qt, QRect, QRectF, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient

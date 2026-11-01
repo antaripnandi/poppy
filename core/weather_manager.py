@@ -124,3 +124,4 @@ class WeatherManager(QObject):
         elif code in (95, 96, 99):
             return "Thunderstorm", Icons.WEATHER_STORM
         return "Fair", Icons.WEATHER_SUN if is_day else Icons.WEATHER_MOON
+
