@@ -10,6 +10,15 @@ import threading
 import time
 
 
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ('Data1', wintypes.DWORD),
+        ('Data2', wintypes.WORD),
+        ('Data3', wintypes.WORD),
+        ('Data4', wintypes.BYTE * 8)
+    ]
+
+
 class SystemAudioController:
     """
     Direct Windows Core Audio master volume and mute controller.
@@ -19,14 +28,6 @@ class SystemAudioController:
     def __init__(self):
         self._ole32 = ctypes.oledll.ole32
         self._ole32.CoInitialize(None)
-
-        class GUID(ctypes.Structure):
-            _fields_ = [
-                ('Data1', wintypes.DWORD),
-                ('Data2', wintypes.WORD),
-                ('Data3', wintypes.WORD),
-                ('Data4', wintypes.BYTE * 8)
-            ]
         self._GUID = GUID
         self._ole32.CLSIDFromString.argtypes = [wintypes.LPCWSTR, POINTER(GUID)]
 
@@ -285,3 +286,95 @@ class SystemBrightnessController:
                 break
         self.set_brightness(next_val)
         return next_val
+
+
+class AudioPeakMeter:
+    """
+    Sub-millisecond Windows Core Audio peak level meter using IAudioMeterInformation.
+    Provides real-time (master_peak, left_peak, right_peak) audio telemetry directly from hardware.
+    Pure ctypes, zero dependencies, safe COM lifecycle management.
+    """
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = AudioPeakMeter()
+        return cls._instance
+
+    def __init__(self):
+        self._ole32 = ctypes.oledll.ole32
+        self._ole32.CoInitialize(None)
+        self._pMeter = None
+        self._GUID = GUID
+        self._clsid_enum = GUID()
+        self._iid_enum = GUID()
+        self._iid_meter = GUID()
+        self._ole32.CLSIDFromString('{BCDE0395-E52F-467C-8E3D-C4579291692E}', byref(self._clsid_enum))
+        self._ole32.CLSIDFromString('{A95664D2-9614-4F35-A746-DE8DB63617E6}', byref(self._iid_enum))
+        self._ole32.CLSIDFromString('{C02216F6-8C67-4B5B-9D00-D008E73E0064}', byref(self._iid_meter))
+        self._init_meter()
+
+    def _release(self, ptr):
+        if ptr and ptr.value:
+            try:
+                vtable = ctypes.cast(ptr, POINTER(POINTER(c_void_p))).contents
+                Release = ctypes.WINFUNCTYPE(wintypes.ULONG, c_void_p)(vtable[2])
+                Release(ptr)
+            except Exception:
+                pass
+
+    def _init_meter(self):
+        try:
+            pEnumerator = c_void_p()
+            hr = self._ole32.CoCreateInstance(byref(self._clsid_enum), None, 1, byref(self._iid_enum), byref(pEnumerator))
+            if hr != 0 or not pEnumerator.value:
+                return
+            vtable_enum = ctypes.cast(pEnumerator, POINTER(POINTER(c_void_p))).contents
+            GetDefaultEndpoint = ctypes.WINFUNCTYPE(HRESULT, c_void_p, wintypes.DWORD, wintypes.DWORD, POINTER(c_void_p))(vtable_enum[4])
+            pDevice = c_void_p()
+            hr = GetDefaultEndpoint(pEnumerator, 0, 1, byref(pDevice))
+            self._release(pEnumerator)
+            if hr != 0 or not pDevice.value:
+                return
+            vtable_dev = ctypes.cast(pDevice, POINTER(POINTER(c_void_p))).contents
+            Activate = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(self._GUID), wintypes.DWORD, c_void_p, POINTER(c_void_p))(vtable_dev[3])
+            pMeter = c_void_p()
+            hr = Activate(pDevice, byref(self._iid_meter), 23, None, byref(pMeter))
+            self._release(pDevice)
+            if hr == 0 and pMeter.value:
+                self._pMeter = pMeter
+        except Exception:
+            self._pMeter = None
+
+    def get_peaks(self) -> tuple[float, float, float]:
+        """Returns (master_peak, left_peak, right_peak) in range [0.0, 1.0]."""
+        if not self._pMeter:
+            self._init_meter()
+        if not self._pMeter:
+            return (0.0, 0.0, 0.0)
+        try:
+            vtable_meter = ctypes.cast(self._pMeter, POINTER(POINTER(c_void_p))).contents
+            GetPeakValue = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(c_float))(vtable_meter[3])
+            val = c_float()
+            hr1 = GetPeakValue(self._pMeter, byref(val))
+
+            GetChannelsPeaks = ctypes.WINFUNCTYPE(HRESULT, c_void_p, wintypes.UINT, POINTER(c_float))(vtable_meter[5])
+            peaks = (c_float * 2)()
+            hr2 = GetChannelsPeaks(self._pMeter, 2, peaks)
+            if hr1 != 0 or hr2 != 0:
+                self._release(self._pMeter)
+                self._pMeter = None
+                return (0.0, 0.0, 0.0)
+            return (float(val.value), float(peaks[0]), float(peaks[1]))
+        except Exception:
+            self._release(self._pMeter)
+            self._pMeter = None
+            return (0.0, 0.0, 0.0)
+
+    def __del__(self):
+        p = getattr(self, "_pMeter", None)
+        if p:
+            self._release(p)
+            self._pMeter = None
+

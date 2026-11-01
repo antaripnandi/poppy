@@ -92,3 +92,43 @@ def test_clickable_slider_jump(qapp):
     slider.setRange(0, 100)
     slider.setValue(10)
     assert slider.value() == 10
+
+
+def test_audio_peak_meter_telemetry():
+    from poppy.core.system_controls import AudioPeakMeter
+    meter = AudioPeakMeter.get_instance()
+    peaks = meter.get_peaks()
+    assert isinstance(peaks, tuple)
+    assert len(peaks) == 3
+    master, left, right = peaks
+    assert 0.0 <= master <= 1.0
+    assert 0.0 <= left <= 1.0
+    assert 0.0 <= right <= 1.0
+
+
+def test_audio_visualizer_bars_fluid_physics(qapp):
+    from poppy.ui.components import AudioVisualizerBars
+    viz = AudioVisualizerBars()
+    viz.show()
+    assert len(viz._heights) == 4
+    for h in viz._heights:
+        assert h == 2.5
+
+    # Start playing
+    viz.set_playing(True)
+    assert viz._is_playing is True
+    assert viz._timer.isActive()
+
+    # Step simulation
+    viz._animate_bars()
+    for h in viz._heights:
+        assert 2.5 <= h <= 14.0
+
+    # Stop playing -> should trigger decay
+    viz.set_playing(False)
+    assert viz._is_playing is False
+    # Simulate a decay tick
+    viz._animate_bars()
+    for h in viz._heights:
+        assert 2.5 <= h <= 14.0
+

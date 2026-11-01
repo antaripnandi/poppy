@@ -5,6 +5,8 @@ Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 """
 
 import os
+import math
+import time
 from PySide6.QtCore import (
     Qt, QRectF, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent
 )
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from poppy.ui.icons import Icons
+from poppy.core.system_controls import AudioPeakMeter
 
 
 def _accent_to_rgba(hex_color: str, alpha: float) -> str:
@@ -228,35 +231,104 @@ class CircularProgressRing(QWidget):
 
 
 class AudioVisualizerBars(QWidget):
-    """NotchX pill-v2 style 4-bar sound wave equalizer with rounded capsules."""
+    """
+    NotchX pill-v2 style 4-bar sound wave equalizer with fluid physics.
+    Reacts dynamically to real Windows Core Audio peak levels and musical harmonics.
+    Butter-smooth 33 FPS subpixel rendering with fast attack and natural decay.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(18, 14)
         self._is_playing = False
-        self._heights = [4, 10, 7, 5]
+        self._heights = [2.5, 2.5, 2.5, 2.5]
+        self._meter = None
         self._timer = QTimer(self)
-        self._timer.setInterval(130)
+        self._timer.setInterval(30)  # ~33 FPS fluid motion
         self._timer.timeout.connect(self._animate_bars)
 
     def set_playing(self, playing: bool):
         if self._is_playing != playing:
             self._is_playing = playing
             if playing:
+                if not self._meter:
+                    try:
+                        self._meter = AudioPeakMeter.get_instance()
+                    except Exception:
+                        self._meter = None
                 self._timer.start()
             else:
-                self._timer.stop()
-                self._heights = [3, 3, 3, 3]
+                # Keep timer running briefly for smooth analog decay towards resting height
+                if not self._timer.isActive():
+                    self._timer.start()
             self.update()
 
     def _animate_bars(self):
-        import random
-        self._heights = [random.randint(4, 13) for _ in range(4)]
+        # If widget is not visible on screen, suspend animation updates to save CPU
+        if not self.isVisible():
+            if not self._is_playing:
+                self._timer.stop()
+            return
+
+        if not self._is_playing:
+            # Smoothly decay towards idle resting height (2.5px)
+            all_at_rest = True
+            for i in range(4):
+                if self._heights[i] > 2.55:
+                    self._heights[i] += (2.5 - self._heights[i]) * 0.22
+                    all_at_rest = False
+                else:
+                    self._heights[i] = 2.5
+            self.update()
+            if all_at_rest:
+                self._timer.stop()
+            return
+
+        # Query live system audio peak levels (master, left, right)
+        master, left, right = 0.0, 0.0, 0.0
+        if self._meter:
+            try:
+                master, left, right = self._meter.get_peaks()
+            except Exception:
+                pass
+
+        # Perceptual logarithmic energy (human hearing curve)
+        m_energy = pow(max(0.0, min(1.0, master)), 0.45) if master > 0.001 else 0.0
+        l_energy = pow(max(0.0, min(1.0, left)), 0.45) if left > 0.001 else 0.0
+        r_energy = pow(max(0.0, min(1.0, right)), 0.45) if right > 0.001 else 0.0
+
+        t = time.time()
+        # Multi-frequency musical harmonics for each of the 4 capsules
+        w0 = max(0.0, min(1.0, math.sin(t * 7.5) * 0.35 + math.sin(t * 3.8 + 0.4) * 0.35 + 0.5))
+        w1 = max(0.0, min(1.0, math.sin(t * 9.2 + 1.2) * 0.35 + math.cos(t * 4.6 + 0.8) * 0.35 + 0.5))
+        w2 = max(0.0, min(1.0, math.sin(t * 8.4 + 2.5) * 0.35 + math.sin(t * 5.7 + 1.6) * 0.35 + 0.5))
+        w3 = max(0.0, min(1.0, math.sin(t * 10.1 + 3.8) * 0.35 + math.cos(t * 6.9 + 2.2) * 0.35 + 0.5))
+
+        if master > 0.004:
+            # Active audio playback: bars pulse dynamically to the beat and loudness
+            t0 = 2.5 + 10.5 * (l_energy * 0.72 + w0 * 0.28)
+            t1 = 2.5 + 10.5 * (m_energy * 0.76 + w1 * 0.24)
+            t2 = 2.5 + 10.5 * (m_energy * 0.76 + w2 * 0.24)
+            t3 = 2.5 + 10.5 * (r_energy * 0.70 + w3 * 0.30)
+        else:
+            # Subtle rhythmic flow when playing soft/acoustic passages or muted output
+            t0 = 2.5 + 8.5 * (w0 * 0.80 + 0.10)
+            t1 = 2.5 + 10.5 * (w1 * 0.88 + 0.10)
+            t2 = 2.5 + 9.8 * (w2 * 0.85 + 0.10)
+            t3 = 2.5 + 8.0 * (w3 * 0.75 + 0.10)
+
+        targets = [t0, t1, t2, t3]
+        for i in range(4):
+            tgt = targets[i]
+            # Fast attack (0.45) for rhythmic snap, gentle decay (0.22) for analog fluidity
+            rate = 0.45 if tgt > self._heights[i] else 0.22
+            self._heights[i] += (tgt - self._heights[i]) * rate
+
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor(241, 245, 249, 230) if self._is_playing else QColor(148, 163, 184, 80)
+        color = QColor(241, 245, 249, 235) if self._is_playing else QColor(148, 163, 184, 80)
         painter.setBrush(QBrush(color))
         painter.setPen(Qt.PenStyle.NoPen)
 
@@ -264,9 +336,10 @@ class AudioVisualizerBars(QWidget):
         spacing = 4.2
         h_max = self.height()
         for i, h in enumerate(self._heights):
-            x = i * spacing + 1
-            y = (h_max - h) / 2.0  # Center aligned vertically like in pill-v2.png
-            painter.drawRoundedRect(QRectF(x, y, w, h), 1.25, 1.25)
+            h_clamped = max(2.5, min(h_max, h))
+            x = i * spacing + 1.0
+            y = (h_max - h_clamped) / 2.0  # Symmetrically centered vertically
+            painter.drawRoundedRect(QRectF(x, y, w, h_clamped), 1.25, 1.25)
 
 
 class MetricLabel(QLabel):

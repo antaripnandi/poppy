@@ -162,3 +162,4 @@ class LyricsManager(QObject):
             pass
 
         return None
+
