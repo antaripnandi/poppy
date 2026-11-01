@@ -15,7 +15,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout
+    QVBoxLayout, QHBoxLayout, QStackedWidget
 )
 
 from poppy.ui.icons import Icons
@@ -477,7 +477,7 @@ class ClickableSlider(QSlider):
 
 
 class LyricLineWidget(QPushButton):
-    """Individual lyric row with smooth opacity and highlight."""
+    """Clean, high-grade lyric row matching modern streaming music apps."""
     def __init__(self, time_sec: float, text: str, parent=None):
         super().__init__(text, parent)
         self.time_sec = time_sec
@@ -494,41 +494,44 @@ class LyricLineWidget(QPushButton):
         if self._is_active:
             self.setStyleSheet("""
                 QPushButton {
-                    background-color: rgba(255, 255, 255, 0.12);
+                    background: rgba(255, 255, 255, 0.08);
                     border: none;
-                    border-radius: 8px;
+                    border-radius: 6px;
                     color: #ffffff;
-                    font-size: 14px;
+                    font-family: 'Segoe UI Variable Text', -apple-system, sans-serif;
+                    font-size: 13.5px;
                     font-weight: 700;
                     text-align: left;
-                    padding: 8px 12px;
+                    padding: 6px 10px;
                     margin: 2px 0px;
                 }
             """)
         else:
             self.setStyleSheet("""
                 QPushButton {
-                    background-color: transparent;
+                    background: transparent;
                     border: none;
                     border-radius: 6px;
                     color: rgba(255, 255, 255, 0.38);
-                    font-size: 12.5px;
+                    font-family: 'Segoe UI Variable Text', -apple-system, sans-serif;
+                    font-size: 13px;
                     font-weight: 500;
                     text-align: left;
-                    padding: 5px 12px;
+                    padding: 5px 10px;
                     margin: 1px 0px;
                 }
                 QPushButton:hover {
-                    color: #f1f5f9;
-                    background-color: rgba(255, 255, 255, 0.05);
+                    color: rgba(255, 255, 255, 0.85);
+                    background: rgba(255, 255, 255, 0.04);
                 }
             """)
 
 
 class SpotifyLyricsWidget(QFrame):
     """
-    Spotify-grade interactive animated lyrics view.
-    Smoothly tracks song playback with animated auto-scrolling to center the active line.
+    Clean, modern synchronized lyrics panel.
+    Seamlessly integrated with Poppy's design system.
+    Smoothly tracks song playback with animated vertical auto-scrolling to center the active line.
     Allows clicking any line to jump to that timestamp.
     """
     seek_requested = Signal(float)
@@ -538,9 +541,9 @@ class SpotifyLyricsWidget(QFrame):
         self.setObjectName("lyricsWidgetFrame")
         self.setStyleSheet("""
             QFrame#lyricsWidgetFrame {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255, 255, 255, 0.05), stop:1 rgba(255, 255, 255, 0.02));
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 16px;
+                background: rgba(255, 255, 255, 0.035);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 14px;
             }
         """)
 
@@ -550,11 +553,12 @@ class SpotifyLyricsWidget(QFrame):
 
         # Header bar
         hdr_row = QHBoxLayout()
+        hdr_row.setContentsMargins(2, 0, 2, 2)
         lbl_hdr = QLabel("LYRICS")
-        lbl_hdr.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; background: transparent; border: none; }")
+        lbl_hdr.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #64748b; letter-spacing: 0.8px; background: transparent; border: none; }")
 
         self.badge_sync = QLabel("SYNCED")
-        self.badge_sync.setStyleSheet("QLabel { font-size: 9px; font-weight: 700; color: #38bdf8; background: rgba(56, 189, 248, 0.18); border-radius: 4px; padding: 1px 5px; border: 1px solid rgba(56, 189, 248, 0.3); }")
+        self.badge_sync.setStyleSheet("QLabel { font-size: 9px; font-weight: 700; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border-radius: 4px; padding: 1px 6px; border: 1px solid rgba(56, 189, 248, 0.25); }")
         self.badge_sync.setVisible(False)
 
         hdr_row.addWidget(lbl_hdr)
@@ -562,12 +566,20 @@ class SpotifyLyricsWidget(QFrame):
         hdr_row.addStretch()
         layout.addLayout(hdr_row)
 
-        # Scroll Area for Lyrics
+        # Content stack: Page 0 = Lyrics Scroll Area, Page 1 = Placeholder / Status
+        self.content_stack = QStackedWidget(self)
+        self.content_stack.setStyleSheet("background: transparent; border: none;")
+
+        # Page 0: Scroll Area for Lyrics
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.viewport().setAutoFillBackground(False)
+        self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.scroll_area.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.scroll_area.setStyleSheet("""
-            QScrollArea {
+            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
                 background: transparent;
                 border: none;
             }
@@ -578,9 +590,12 @@ class SpotifyLyricsWidget(QFrame):
                 margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.2);
-                border-radius: 1px;
-                min-height: 20px;
+                background: rgba(255, 255, 255, 0.16);
+                border-radius: 1.5px;
+                min-height: 24px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(255, 255, 255, 0.35);
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
@@ -588,18 +603,28 @@ class SpotifyLyricsWidget(QFrame):
         """)
 
         self.lines_container = QWidget()
+        self.lines_container.setStyleSheet("background: transparent; border: none;")
         self.lines_layout = QVBoxLayout(self.lines_container)
         self.lines_layout.setContentsMargins(0, 4, 0, 8)
         self.lines_layout.setSpacing(2)
         self.scroll_area.setWidget(self.lines_container)
-        layout.addWidget(self.scroll_area, stretch=1)
+        self.content_stack.addWidget(self.scroll_area)
 
-        # Status / Placeholder Label
-        self.lbl_status = QLabel("Play music to view synchronized lyrics")
+        # Page 1: Centered Status / Placeholder
+        placeholder_wrap = QWidget()
+        placeholder_wrap.setStyleSheet("background: transparent; border: none;")
+        p_layout = QVBoxLayout(placeholder_wrap)
+        p_layout.setContentsMargins(12, 24, 12, 24)
+        p_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lbl_status = QLabel("Play music to view synchronized lyrics", placeholder_wrap)
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setWordWrap(True)
-        self.lbl_status.setStyleSheet("QLabel { font-size: 11px; color: #64748b; background: transparent; border: none; padding: 20px; }")
-        self.lines_layout.addWidget(self.lbl_status)
+        self.lbl_status.setStyleSheet("QLabel { font-size: 12px; font-weight: 500; color: #64748b; background: transparent; border: none; line-height: 1.5; }")
+        p_layout.addWidget(self.lbl_status)
+        self.content_stack.addWidget(placeholder_wrap)
+
+        layout.addWidget(self.content_stack, stretch=1)
 
         # Smooth Scroll Animation
         self._scroll_anim = QPropertyAnimation(self.scroll_area.verticalScrollBar(), b"value")
@@ -621,6 +646,9 @@ class SpotifyLyricsWidget(QFrame):
         self.scroll_area.verticalScrollBar().sliderPressed.connect(self._on_user_scroll)
         self.scroll_area.viewport().installEventFilter(self)
 
+        # Start on placeholder
+        self.content_stack.setCurrentIndex(1)
+
     def eventFilter(self, obj, event):
         if obj == self.scroll_area.viewport() and event.type() == QEvent.Type.Wheel:
             self._on_user_scroll()
@@ -641,46 +669,66 @@ class SpotifyLyricsWidget(QFrame):
     def set_loading(self, title: str, artist: str):
         self._clear_lines()
         self.badge_sync.setVisible(False)
-        self.lbl_status.setText(f"Searching lyrics for\n\"{title}\"...")
-        self.lbl_status.setVisible(True)
+        disp = f'"{title}"' if title else "track"
+        if artist:
+            disp += f"\n{artist}"
+        self.lbl_status.setText(f"Searching lyrics for\n{disp}...")
+        self.content_stack.setCurrentIndex(1)
 
     def set_not_found(self, title: str, artist: str):
         self._clear_lines()
         self.badge_sync.setVisible(False)
-        self.lbl_status.setText(f"No lyrics available for\n\"{title}\"")
-        self.lbl_status.setVisible(True)
+        disp = f'"{title}"' if title else "track"
+        if artist:
+            disp += f"\n{artist}"
+        self.lbl_status.setText(f"No lyrics found for\n{disp}")
+        self.content_stack.setCurrentIndex(1)
 
     def set_synced_lyrics(self, synced_lines: list[tuple[float, str]]):
         self._clear_lines()
-        self.lbl_status.setVisible(False)
+        self.content_stack.setCurrentIndex(0)
         self.badge_sync.setVisible(True)
         self._synced_lines = synced_lines
         self._current_line_idx = -1
 
+        self.lines_layout.addSpacing(12)
         for time_sec, text in synced_lines:
             btn = LyricLineWidget(time_sec, text, self.lines_container)
             btn.clicked.connect(lambda checked=False, t=time_sec: self.seek_requested.emit(t))
             self.lines_layout.addWidget(btn)
             self._line_buttons.append(btn)
 
+        self.lines_layout.addSpacing(24)
         self.lines_layout.addStretch()
 
     def set_plain_lyrics(self, plain_text: str):
         self._clear_lines()
-        self.lbl_status.setVisible(False)
+        self.content_stack.setCurrentIndex(0)
         self.badge_sync.setVisible(False)
         self._synced_lines = []
         self._current_line_idx = -1
 
+        self.lines_layout.addSpacing(12)
         for line in plain_text.splitlines():
             clean = line.strip()
             if not clean:
                 continue
             lbl = QLabel(clean, self.lines_container)
-            lbl.setStyleSheet("QLabel { font-size: 13px; font-weight: 500; color: #cbd5e1; background: transparent; padding: 4px 6px; }")
+            lbl.setStyleSheet("""
+                QLabel {
+                    font-family: 'Segoe UI Variable Text', -apple-system, sans-serif;
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: rgba(255, 255, 255, 0.7);
+                    background: transparent;
+                    border: none;
+                    padding: 4px 10px;
+                }
+            """)
             lbl.setWordWrap(True)
             self.lines_layout.addWidget(lbl)
 
+        self.lines_layout.addSpacing(24)
         self.lines_layout.addStretch()
 
     def update_playback_time(self, pos_sec: float):
@@ -728,7 +776,8 @@ class SpotifyLyricsWidget(QFrame):
         self._current_line_idx = -1
         while self.lines_layout.count() > 0:
             item = self.lines_layout.takeAt(0)
-            if item.widget() and item.widget() != self.lbl_status:
+            if item.widget():
                 item.widget().deleteLater()
+
 
 

@@ -67,8 +67,8 @@ class LyricsManager(QObject):
 
     @staticmethod
     def _make_key(title: str, artist: str) -> str:
-        t = re.sub(r'\(.*?\)|\[.*?\]', '', title or "").strip().lower()
-        a = re.sub(r'\(.*?\)|\[.*?\]', '', artist or "").strip().lower()
+        t = (title or "").strip().lower()
+        a = (artist or "").strip().lower()
         return f"{t}::: {a}"
 
     def request_lyrics(self, title: str, artist: str, album: str = ""):
@@ -89,26 +89,16 @@ class LyricsManager(QObject):
             synced = parse_lrc(raw_lrc)
             if plain or synced:
                 self.lyrics_loaded.emit(key, plain, synced)
-            else:
-                self.lyrics_not_found.emit(key)
-            return
+                return
 
         # 2. Fetch in background thread
         threading.Thread(target=self._fetch_worker, args=(key, title, artist, album), daemon=True).start()
 
     def _fetch_worker(self, req_key: str, title: str, artist: str, album: str):
         data = self._query_lrclib(title, artist, album)
-        if not data:
-            # Try cleaning artist or searching with simplified title
-            clean_title = re.sub(r'\(.*?\)|\[.*?\]|feat\..*|ft\..*', '', title, flags=re.IGNORECASE).strip()
-            clean_artist = re.sub(r'\(.*?\)|\[.*?\]', '', artist).strip()
-            if clean_title != title or clean_artist != artist:
-                data = self._query_lrclib(clean_title, clean_artist, album)
 
         with self._lock:
             if not data:
-                self._memory_cache[req_key] = {"plain": "", "synced": ""}
-                self._save_disk_cache()
                 if self._current_request_key == req_key:
                     self.lyrics_not_found.emit(req_key)
                 return
@@ -117,22 +107,24 @@ class LyricsManager(QObject):
             raw_lrc = data.get("syncedLyrics") or ""
             synced = parse_lrc(raw_lrc)
 
-            self._memory_cache[req_key] = {
-                "plain": plain,
-                "synced": raw_lrc
-            }
-            self._save_disk_cache()
+            if plain or raw_lrc:
+                self._memory_cache[req_key] = {
+                    "plain": plain,
+                    "synced": raw_lrc
+                }
+                self._save_disk_cache()
 
             if self._current_request_key == req_key:
-                self.lyrics_loaded.emit(req_key, plain, synced)
+                if plain or synced:
+                    self.lyrics_loaded.emit(req_key, plain, synced)
+                else:
+                    self.lyrics_not_found.emit(req_key)
 
     def _query_lrclib(self, title: str, artist: str, album: str) -> dict | None:
         headers = {"User-Agent": "PoppyNotch/1.0 (Windows)"}
 
-        # Attempt 1: Direct get endpoint
+        # 1. Direct get by track_name & artist_name (no album to prevent 503 errors)
         params = {"track_name": title, "artist_name": artist}
-        if album:
-            params["album_name"] = album
         url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(params)}"
         try:
             req = urllib.request.Request(url, headers=headers)
@@ -143,15 +135,13 @@ class LyricsManager(QObject):
         except Exception:
             pass
 
-        # Attempt 2: Search endpoint
-        q = f"{title} {artist}".strip()
-        url = f"https://lrclib.net/api/search?q={urllib.parse.quote(q)}"
+        # 2. Targeted search with track_name and artist_name fields
+        url = f"https://lrclib.net/api/search?{urllib.parse.urlencode(params)}"
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=4) as resp:
                 results = json.loads(resp.read().decode("utf-8"))
                 if results and isinstance(results, list):
-                    # Prefer results with synced lyrics
                     for r in results:
                         if r.get("syncedLyrics"):
                             return r
@@ -160,6 +150,55 @@ class LyricsManager(QObject):
                             return r
         except Exception:
             pass
+
+        # 3. Cleaned title & artist (strips (Reprise), [Remaster], feat., etc.)
+        clean_title = re.sub(r'\(.*?\)|\[.*?\]|feat\..*|ft\..*', '', title, flags=re.IGNORECASE).strip()
+        clean_artist = re.sub(r'\(.*?\)|\[.*?\]', '', artist).strip()
+        if clean_title != title or clean_artist != artist:
+            clean_params = {"track_name": clean_title, "artist_name": clean_artist}
+            url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(clean_params)}"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if data and (data.get("syncedLyrics") or data.get("plainLyrics")):
+                        return data
+            except Exception:
+                pass
+
+            url = f"https://lrclib.net/api/search?{urllib.parse.urlencode(clean_params)}"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    results = json.loads(resp.read().decode("utf-8"))
+                    if results and isinstance(results, list):
+                        for r in results:
+                            if r.get("syncedLyrics"):
+                                return r
+                        for r in results:
+                            if r.get("plainLyrics"):
+                                return r
+            except Exception:
+                pass
+
+        # 4. Fallback search with sanitized alphanumeric query string
+        sanitized_q = re.sub(r'[^\w\s]', ' ', f"{title} {artist}").strip()
+        sanitized_q = ' '.join(sanitized_q.split())
+        if sanitized_q:
+            url = f"https://lrclib.net/api/search?q={urllib.parse.quote(sanitized_q)}"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    results = json.loads(resp.read().decode("utf-8"))
+                    if results and isinstance(results, list):
+                        for r in results:
+                            if r.get("syncedLyrics"):
+                                return r
+                        for r in results:
+                            if r.get("plainLyrics"):
+                                return r
+            except Exception:
+                pass
 
         return None
 

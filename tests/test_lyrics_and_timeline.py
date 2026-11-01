@@ -45,10 +45,15 @@ def test_parse_lrc_unsorted_and_empty():
     assert parsed[1] == (60.0, "Second line")
 
 
-def test_lyrics_manager_key_clean():
-    key1 = LyricsManager._make_key("Strangers (Official Audio)", "Proderics [feat. Singer]")
-    key2 = LyricsManager._make_key("strangers", "proderics")
-    assert key1 == key2
+def test_lyrics_query_lrclib_mind_over_matter():
+    mgr = LyricsManager()
+    data = mgr._query_lrclib("Mind Over Matter (Reprise)", "Young the Giant", "Mirrorball / Mind Over Matter (Reprise)")
+    assert data is not None
+    assert bool(data.get("syncedLyrics")) is True
+    synced = parse_lrc(data.get("syncedLyrics"))
+    assert len(synced) > 10
+    assert any("matter" in text.lower() for _, text in synced)
+
 
 
 def test_music_tab_format_time(qapp):
