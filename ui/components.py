@@ -90,11 +90,10 @@ class TabButton(QPushButton):
     def update_style(self):
         if self._is_active:
             bg_color = _accent_to_rgba(self._accent, 0.22)
-            border_color = _accent_to_rgba(self._accent, 0.55)
             self.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {bg_color};
-                    border: 1px solid {border_color};
+                    border: none;
                     border-radius: 12px;
                     color: {self._accent};
                     font-size: 11px;
@@ -106,7 +105,7 @@ class TabButton(QPushButton):
             self.setStyleSheet("""
                 QPushButton {
                     background-color: transparent;
-                    border: 1px solid transparent;
+                    border: none;
                     border-radius: 12px;
                     color: #94a3b8;
                     font-size: 11px;
@@ -143,42 +142,41 @@ class SourcePill(QPushButton):
             self.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {bg_color};
-                    border: 1px solid {self._accent};
+                    border: none;
                     border-radius: 11px;
                     color: {self._accent};
                     font-size: 10px;
                     font-weight: 600;
-                    padding: 1px 10px;
+                    padding: 2px 10px;
                 }}
             """)
         else:
             self.setStyleSheet("""
                 QPushButton {
-                    background-color: rgba(255, 255, 255, 0.04);
-                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    background-color: rgba(255, 255, 255, 0.05);
+                    border: none;
                     border-radius: 11px;
                     color: #94a3b8;
                     font-size: 10px;
                     font-weight: 500;
-                    padding: 1px 10px;
+                    padding: 2px 10px;
                 }
                 QPushButton:hover {
-                    background-color: rgba(255, 255, 255, 0.08);
+                    background-color: rgba(255, 255, 255, 0.10);
                     color: #f8fafc;
-                    border: 1px solid rgba(255, 255, 255, 0.15);
                 }
             """)
 
 
 class CardFrame(QFrame):
-    """NotchX frosted card with top lighting and 16px radius, cleanly scoped."""
+    """NotchX frosted card with clean borderless styling."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.setStyleSheet("""
             CardFrame#cardFrame {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255, 255, 255, 0.05), stop:1 rgba(255, 255, 255, 0.02));
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                background: rgba(255, 255, 255, 0.035);
+                border: none;
                 border-radius: 16px;
             }
             QLabel {
@@ -350,8 +348,8 @@ class MetricLabel(QLabel):
         self.setText(f"{tag} {val}")
         self.setStyleSheet("""
             QLabel {
-                background: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.07);
+                background: rgba(255, 255, 255, 0.05);
+                border: none;
                 border-radius: 6px;
                 color: #94a3b8;
                 font-family: 'Segoe UI Variable Display', -apple-system, sans-serif;
@@ -381,12 +379,12 @@ class DraggableThumbnail(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(f"""
             QLabel {{
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.15);
+                background-color: rgba(255, 255, 255, 0.06);
+                border: none;
                 border-radius: {border_radius}px;
             }}
             QLabel:hover {{
-                border: 1px solid rgba(255, 255, 255, 0.35);
+                background-color: rgba(255, 255, 255, 0.12);
             }}
         """)
         self.setToolTip("Click and drag anywhere onto screen, desktop, or chat")
@@ -567,6 +565,7 @@ class SpotifyLyricsWidget(QFrame):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.viewport().setAutoFillBackground(False)
         self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.scroll_area.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -575,22 +574,21 @@ class SpotifyLyricsWidget(QFrame):
                 background: transparent;
                 border: none;
             }
-            QScrollBar:vertical {
+            QScrollBar:vertical, QScrollBar:horizontal {
                 border: none;
                 background: transparent;
-                width: 3px;
+                width: 0px;
+                height: 0px;
                 margin: 0px;
             }
-            QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.16);
-                border-radius: 1.5px;
-                min-height: 24px;
+            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+                background: transparent;
+                border: none;
             }
-            QScrollBar::handle:vertical:hover {
-                background: rgba(255, 255, 255, 0.35);
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            QScrollBar::add-line, QScrollBar::sub-line {
+                width: 0px;
                 height: 0px;
+                border: none;
             }
         """)
 

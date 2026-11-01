@@ -294,7 +294,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_peek_cycle.setStyleSheet("""
             QPushButton {
                 background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
+                border: none;
                 border-radius: 4px;
                 color: #94a3b8;
                 font-size: 9px;
@@ -383,7 +383,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_isl_chat.setStyleSheet("""
             QPushButton {
                 background: rgba(14, 165, 233, 0.2);
-                border: 1px solid rgba(56, 189, 248, 0.45);
+                border: none;
                 border-radius: 6px;
                 color: #38bdf8;
                 font-size: 10.5px;
@@ -404,7 +404,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_isl_pin.setStyleSheet("""
             QPushButton {
                 background: rgba(234, 179, 8, 0.2);
-                border: 1px solid rgba(234, 179, 8, 0.45);
+                border: none;
                 border-radius: 6px;
                 color: #facc15;
                 font-size: 10.5px;
@@ -425,7 +425,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_isl_shelf.setStyleSheet("""
             QPushButton {
                 background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
+                border: none;
                 border-radius: 6px;
                 color: #cbd5e1;
                 font-size: 10.5px;
@@ -475,8 +475,8 @@ class DynamicNotchWindow(QWidget):
         capsule = QFrame()
         capsule.setStyleSheet("""
             QFrame {
-                background-color: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.05);
+                border: none;
                 border-radius: 14px;
             }
         """)
@@ -691,8 +691,8 @@ class DynamicNotchWindow(QWidget):
         if is_on:
             tip = "Keep Awake: ON (Display & PC won't sleep)"
             style = """
-                background: rgba(245, 158, 11, 0.18);
-                border: 1px solid rgba(245, 158, 11, 0.4);
+                background: rgba(245, 158, 11, 0.22);
+                border: none;
                 border-radius: 6px;
                 color: #fbbf24;
                 font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
@@ -723,8 +723,8 @@ class DynamicNotchWindow(QWidget):
             self.tab_home.btn_act_mic.setText(Icons.MIC_MUTE)
             self.tab_home.btn_act_mic.setToolTip("Microphone: MUTED (Click to Unmute)")
             self.tab_home.btn_act_mic.setStyleSheet("""
-                background: rgba(239, 68, 68, 0.15);
-                border: 1px solid rgba(239, 68, 68, 0.35);
+                background: rgba(239, 68, 68, 0.22);
+                border: none;
                 border-radius: 6px;
                 color: #f87171;
                 font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
@@ -757,8 +757,8 @@ class DynamicNotchWindow(QWidget):
         else:
             self.pomodoro.start()
             self.tab_home.btn_act_shield.setStyleSheet(f"""
-                background: rgba(99, 102, 241, 0.2);
-                border: 1px solid {self._theme['accent']};
+                background: rgba(99, 102, 241, 0.25);
+                border: none;
                 border-radius: 6px;
                 color: #a5b4fc;
                 font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
@@ -799,7 +799,7 @@ class DynamicNotchWindow(QWidget):
         menu.setStyleSheet("""
             QMenu {
                 background-color: #181d27;
-                border: 1px solid rgba(255, 255, 255, 0.12);
+                border: none;
                 border-radius: 8px;
                 padding: 4px;
                 color: #f1f5f9;
@@ -957,7 +957,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_isl_chat.setStyleSheet("""
             QPushButton {
                 background: rgba(14, 165, 233, 0.2);
-                border: 1px solid rgba(56, 189, 248, 0.45);
+                border: none;
                 border-radius: 6px;
                 color: #38bdf8;
                 font-size: 10.5px;
@@ -986,8 +986,8 @@ class DynamicNotchWindow(QWidget):
                 self.btn_isl_chat.setText("Copied!")
                 self.btn_isl_chat.setStyleSheet("""
                     QPushButton {
-                        background: rgba(34, 197, 94, 0.25);
-                        border: 1px solid rgba(34, 197, 94, 0.6);
+                        background: rgba(34, 197, 94, 0.28);
+                        border: none;
                         border-radius: 6px;
                         color: #4ade80;
                         font-size: 10.5px;
@@ -1002,7 +1002,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_isl_chat.setStyleSheet("""
             QPushButton {
                 background: rgba(14, 165, 233, 0.2);
-                border: 1px solid rgba(56, 189, 248, 0.45);
+                border: none;
                 border-radius: 6px;
                 color: #38bdf8;
                 font-size: 10.5px;
@@ -1023,8 +1023,8 @@ class DynamicNotchWindow(QWidget):
                 self.tab_home.btn_home_shelf_chat.setText("Copied!")
                 self.tab_home.btn_home_shelf_chat.setStyleSheet("""
                     QPushButton {
-                        background: rgba(34, 197, 94, 0.25);
-                        border: 1px solid rgba(34, 197, 94, 0.6);
+                        background: rgba(34, 197, 94, 0.28);
+                        border: none;
                         border-radius: 5px;
                         color: #4ade80;
                         font-size: 9.5px;
@@ -1038,8 +1038,8 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.btn_home_shelf_chat.setText("Copy")
         self.tab_home.btn_home_shelf_chat.setStyleSheet("""
             QPushButton {
-                background: rgba(14, 165, 233, 0.18);
-                border: 1px solid rgba(56, 189, 248, 0.35);
+                background: rgba(14, 165, 233, 0.2);
+                border: none;
                 border-radius: 5px;
                 color: #38bdf8;
                 font-size: 9.5px;

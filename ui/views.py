@@ -290,16 +290,16 @@ class HomeTabView(QWidget):
         self.btn_pop_note.setToolTip("Spawn an on-screen floating sticky note")
         self.btn_pop_note.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.07);
-                border: 1px solid rgba(255, 255, 255, 0.12);
+                background: rgba(255, 255, 255, 0.08);
+                border: none;
                 border-radius: 5px;
                 color: #e2e8f0;
                 font-size: 10px;
                 font-weight: 600;
-                padding: 2px 8px;
+                padding: 3px 8px;
             }
             QPushButton:hover {
-                background: rgba(255, 255, 255, 0.14);
+                background: rgba(255, 255, 255, 0.15);
                 color: #ffffff;
             }
         """)
@@ -314,14 +314,11 @@ class HomeTabView(QWidget):
         self.txt_notes.setStyleSheet("""
             QTextEdit {
                 background: rgba(255, 255, 255, 0.035);
-                border: 1px solid rgba(255, 255, 255, 0.07);
+                border: none;
                 border-radius: 10px;
                 padding: 8px;
                 color: #f1f5f9;
                 font-size: 11px;
-            }
-            QTextEdit:focus {
-                border: 1px solid rgba(110, 155, 255, 0.6);
             }
         """)
         self._notes_file = Path(os.path.expanduser("~/.poppy/home_notes.txt"))
@@ -360,8 +357,8 @@ class HomeTabView(QWidget):
         self.shelf_preview_frame = QFrame()
         self.shelf_preview_frame.setStyleSheet("""
             QFrame {
-                background: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.07);
+                background: rgba(255, 255, 255, 0.04);
+                border: none;
                 border-radius: 8px;
             }
         """)
@@ -386,8 +383,8 @@ class HomeTabView(QWidget):
         self.btn_home_shelf_chat.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_home_shelf_chat.setStyleSheet("""
             QPushButton {
-                background: rgba(14, 165, 233, 0.18);
-                border: 1px solid rgba(56, 189, 248, 0.35);
+                background: rgba(14, 165, 233, 0.2);
+                border: none;
                 border-radius: 5px;
                 color: #38bdf8;
                 font-size: 9.5px;
@@ -395,7 +392,7 @@ class HomeTabView(QWidget):
                 padding: 2px 7px;
             }
             QPushButton:hover {
-                background: rgba(14, 165, 233, 0.3);
+                background: rgba(14, 165, 233, 0.35);
                 color: #ffffff;
             }
         """)
@@ -406,8 +403,8 @@ class HomeTabView(QWidget):
         self.btn_home_shelf_pin.setToolTip("Pin to screen as a floating sticky note")
         self.btn_home_shelf_pin.setStyleSheet("""
             QPushButton {
-                background: rgba(234, 179, 8, 0.18);
-                border: 1px solid rgba(234, 179, 8, 0.38);
+                background: rgba(234, 179, 8, 0.2);
+                border: none;
                 border-radius: 5px;
                 color: #facc15;
                 font-size: 9.5px;
@@ -415,7 +412,7 @@ class HomeTabView(QWidget):
                 padding: 2px 7px;
             }
             QPushButton:hover {
-                background: rgba(234, 179, 8, 0.3);
+                background: rgba(234, 179, 8, 0.35);
                 color: #ffffff;
             }
         """)
@@ -951,7 +948,7 @@ class TimerTabView(QWidget):
         self.btn_phase_short = QPushButton("Short Break")
         self.btn_phase_long = QPushButton("Long Break")
         for b in (self.btn_phase_focus, self.btn_phase_short, self.btn_phase_long):
-            b.setStyleSheet("font-size: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(255,255,255,0.05);")
+            b.setStyleSheet("font-size: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(255,255,255,0.06); border: none; color: #cbd5e1;")
             pills_row.addWidget(b)
         left_col.addLayout(pills_row)
 
@@ -1051,12 +1048,11 @@ class ShelfItemRow(QFrame):
         self.setStyleSheet("""
             ShelfItemRow {
                 background: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.07);
+                border: none;
                 border-radius: 8px;
             }
             ShelfItemRow:hover {
                 background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.18);
             }
         """)
         layout = QHBoxLayout(self)
@@ -1096,8 +1092,8 @@ class ShelfItemRow(QFrame):
         self.btn_pin.setToolTip("Pin screenshot directly on screen as a floating sticky note widget")
         self.btn_pin.setStyleSheet("""
             QPushButton {
-                background: rgba(99, 102, 241, 0.18);
-                border: 1px solid rgba(129, 140, 248, 0.35);
+                background: rgba(99, 102, 241, 0.22);
+                border: none;
                 border-radius: 5px;
                 color: #a5b4fc;
                 font-size: 10px;
@@ -1105,7 +1101,7 @@ class ShelfItemRow(QFrame):
                 padding: 4px 10px;
             }
             QPushButton:hover {
-                background: rgba(99, 102, 241, 0.35);
+                background: rgba(99, 102, 241, 0.38);
                 color: #ffffff;
             }
         """)
@@ -1118,8 +1114,8 @@ class ShelfItemRow(QFrame):
         self.btn_chat.setToolTip("Copy formatted image to paste directly into Discord, Slack, WhatsApp, ChatGPT, etc.")
         self.btn_chat.setStyleSheet("""
             QPushButton {
-                background: rgba(14, 165, 233, 0.18);
-                border: 1px solid rgba(56, 189, 248, 0.35);
+                background: rgba(14, 165, 233, 0.2);
+                border: none;
                 border-radius: 5px;
                 color: #38bdf8;
                 font-size: 10px;
@@ -1127,7 +1123,7 @@ class ShelfItemRow(QFrame):
                 padding: 4px 10px;
             }
             QPushButton:hover {
-                background: rgba(14, 165, 233, 0.32);
+                background: rgba(14, 165, 233, 0.35);
                 color: #ffffff;
             }
         """)
@@ -1186,8 +1182,8 @@ class ShelfItemRow(QFrame):
         self.btn_chat.setText("Copied!")
         self.btn_chat.setStyleSheet("""
             QPushButton {
-                background: rgba(34, 197, 94, 0.25);
-                border: 1px solid rgba(34, 197, 94, 0.6);
+                background: rgba(34, 197, 94, 0.28);
+                border: none;
                 border-radius: 5px;
                 color: #4ade80;
                 font-size: 10px;
@@ -1201,8 +1197,8 @@ class ShelfItemRow(QFrame):
         self.btn_chat.setText("Copy")
         self.btn_chat.setStyleSheet("""
             QPushButton {
-                background: rgba(14, 165, 233, 0.18);
-                border: 1px solid rgba(56, 189, 248, 0.35);
+                background: rgba(14, 165, 233, 0.2);
+                border: none;
                 border-radius: 5px;
                 color: #38bdf8;
                 font-size: 10px;
@@ -1210,7 +1206,7 @@ class ShelfItemRow(QFrame):
                 padding: 4px 10px;
             }
             QPushButton:hover {
-                background: rgba(14, 165, 233, 0.32);
+                background: rgba(14, 165, 233, 0.35);
                 color: #ffffff;
             }
         """)
@@ -1263,8 +1259,8 @@ class ShelfTabView(QWidget):
         self.empty_card = QFrame()
         self.empty_card.setStyleSheet("""
             QFrame {
-                background: rgba(255, 255, 255, 0.02);
-                border: 1px dashed rgba(255, 255, 255, 0.12);
+                background: rgba(255, 255, 255, 0.025);
+                border: none;
                 border-radius: 10px;
                 padding: 16px;
             }

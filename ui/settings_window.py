@@ -155,13 +155,13 @@ class SettingsWindow(QWidget):
             QCheckBox::indicator {
                 width: 14px;
                 height: 14px;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 3px;
-                background-color: rgba(255, 255, 255, 0.05);
+                border: none;
+                border-radius: 4px;
+                background-color: rgba(255, 255, 255, 0.10);
             }
             QCheckBox::indicator:checked {
                 background-color: #0a84ff;
-                border: 1px solid #38bdf8;
+                border: none;
             }
         """)
 
