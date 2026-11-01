@@ -51,6 +51,8 @@ def test_animated_tab_strip(qapp):
     tab_strip.set_current_index(2, animate=False)
     assert tab_strip._current_index == 2
     assert changed_indices == [1, 2]
+    tab_strip.deleteLater()
+    qapp.processEvents()
 
 
 def test_animated_stacked_widget(qapp):
@@ -65,6 +67,8 @@ def test_animated_stacked_widget(qapp):
     # Slide to index without crash
     stack.slide_to_index(1)
     assert stack.currentIndex() in (0, 1)
+    stack.deleteLater()
+    qapp.processEvents()
 
 
 def test_clipboard_history_manager(qapp, tmp_path):
@@ -123,6 +127,8 @@ def test_calendar_tab_view(qapp, tmp_path):
 
     view._prev_month()
     assert view.current_month == init_month
+    view.deleteLater()
+    qapp.processEvents()
 
 
 def test_docs_tab_view(qapp, tmp_path):
@@ -131,6 +137,8 @@ def test_docs_tab_view(qapp, tmp_path):
     assert hasattr(view, "_convert_to_pdf")
     assert hasattr(view, "_inspect_pdf")
     assert hasattr(view, "recent_container")
+    view.deleteLater()
+    qapp.processEvents()
 
 
 def test_launcher_tab_view(qapp):
@@ -144,3 +152,5 @@ def test_launcher_tab_view(qapp):
     view.input_search.setText("calc")
     assert len(view._filtered) >= 1
     assert any("calc" in item["name"].lower() for item in view._filtered)
+    view.deleteLater()
+    qapp.processEvents()

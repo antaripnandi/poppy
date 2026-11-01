@@ -6,6 +6,7 @@ Main application entry point and lifecycle manager.
 import sys
 import os
 import json
+import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -92,10 +93,27 @@ def main():
     act_settings.triggered.connect(notch.open_settings)
     tray_menu.addAction(act_settings)
 
+    def restart_app():
+        tray_icon.hide()
+        notch.close()
+        main_script = str(Path(__file__).resolve())
+        args = [sys.executable, main_script] + sys.argv[1:]
+        subprocess.Popen(args)
+        app.quit()
+
+    def exit_app():
+        tray_icon.hide()
+        notch.close()
+        app.quit()
+
     tray_menu.addSeparator()
 
+    act_restart = QAction("Restart Poppy", tray_menu)
+    act_restart.triggered.connect(restart_app)
+    tray_menu.addAction(act_restart)
+
     act_quit = QAction("Exit Poppy", tray_menu)
-    act_quit.triggered.connect(app.quit)
+    act_quit.triggered.connect(exit_app)
     tray_menu.addAction(act_quit)
 
     tray_icon.setContextMenu(tray_menu)
