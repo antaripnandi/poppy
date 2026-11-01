@@ -65,5 +65,8 @@ class Icons:
     # Weather
     WEATHER_MOON = "\uEC46" # Clear Night
     WEATHER_SUN = "\uE706"  # Sunny Day
-    WEATHER_CLOUD = "\uE753"# Cloudy
+    WEATHER_CLOUD = "\uE753"# Cloudy / Overcast
+    WEATHER_RAIN = "\uE774" # Rain / Showers
+    WEATHER_SNOW = "\uE775" # Snow
+    WEATHER_STORM = "\uEA39"# Thunderstorm
 

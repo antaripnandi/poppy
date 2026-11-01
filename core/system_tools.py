@@ -184,3 +184,4 @@ def launch_windows_search():
         subprocess.Popen(["cmd.exe", "/c", "start", "ms-search:"], shell=False)
     except Exception:
         pass
+

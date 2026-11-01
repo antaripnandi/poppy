@@ -35,6 +35,7 @@ class HomeTabView(QWidget):
     quick_search_requested = Signal()
     lock_workstation_requested = Signal()
     player_menu_requested = Signal()
+    weather_refresh_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,10 +73,13 @@ class HomeTabView(QWidget):
         # Weather / Status row
         weather_row = QHBoxLayout()
         weather_row.setSpacing(6)
-        self.lbl_weather_icon = QLabel(Icons.WEATHER_MOON)
+        self.lbl_weather_icon = QLabel(Icons.WEATHER_SUN)
         self.lbl_weather_icon.setStyleSheet("font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 13px; color: #94a3b8; background: transparent; border: none;")
-        self.lbl_weather_text = QLabel("12° Clear · H 23° L 9°")
+        self.lbl_weather_text = QLabel("Fetching live weather...")
         self.lbl_weather_text.setStyleSheet("font-size: 11px; color: #cbd5e1; background: transparent; border: none;")
+        self.lbl_weather_text.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lbl_weather_text.setToolTip("Click to Refresh Weather")
+        self.lbl_weather_text.mousePressEvent = lambda e: self.weather_refresh_requested.emit()
         weather_row.addWidget(self.lbl_weather_icon)
         weather_row.addWidget(self.lbl_weather_text)
         weather_row.addStretch()
@@ -510,6 +514,21 @@ class HomeTabView(QWidget):
         self.slider_bright.setValue(bright)
         self.slider_bright.blockSignals(False)
         self.lbl_bright_num.setText(str(bright))
+
+    def update_weather(self, data: dict):
+        """Updates the weather display with live meteorological data."""
+        icon = data.get("icon", Icons.WEATHER_SUN)
+        text = data.get("display_text", "")
+        city = data.get("city", "")
+        cond = data.get("condition", "")
+        temp = data.get("temp", 0)
+        h = data.get("high", 0)
+        l = data.get("low", 0)
+        hum = data.get("humidity", 0)
+
+        self.lbl_weather_icon.setText(icon)
+        self.lbl_weather_text.setText(text)
+        self.lbl_weather_text.setToolTip(f"{city}\n{temp}°C · {cond}\nHigh: {h}°C · Low: {l}°C\nHumidity: {hum}%\n(Click to Refresh)")
 
 
 class MusicTabView(QWidget):

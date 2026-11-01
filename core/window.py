@@ -42,6 +42,7 @@ from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
+from poppy.core.weather_manager import WeatherManager
 from poppy.core.system_tools import (
     CaffeineManager, ColorEyedropperOverlay,
     launch_screen_snip, lock_workstation, launch_windows_search
@@ -98,6 +99,7 @@ class DynamicNotchWindow(QWidget):
         self.bright_ctrl = SystemBrightnessController()
         self.caffeine = CaffeineManager()
         self._eyedropper_overlay = None
+        self.weather_manager = WeatherManager(parent=self)
 
         # Sizing and Themes
         self._load_appearance_config()
@@ -142,6 +144,7 @@ class DynamicNotchWindow(QWidget):
         self.media_manager.start()
         self.discord_rpc.start()
         self.screenshot_watcher.start()
+        self.weather_manager.start()
         self._sys_timer.start()
         self._clock_timer.start()
 
@@ -515,6 +518,8 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.quick_search_requested.connect(self._trigger_quick_search)
         self.tab_home.lock_workstation_requested.connect(self._lock_workstation)
         self.tab_home.player_menu_requested.connect(self._show_player_dropdown)
+        self.tab_home.weather_refresh_requested.connect(self.weather_manager.refresh)
+        self.weather_manager.weather_updated.connect(self._on_weather_updated)
         self.tab_stack.addWidget(self.tab_home)
 
         # 1: Music Tab
@@ -658,6 +663,9 @@ class DynamicNotchWindow(QWidget):
     def _on_brightness_cycle_clicked(self):
         next_val = self.bright_ctrl.cycle_brightness()
         self.tab_home.set_brightness_display(next_val)
+
+    def _on_weather_updated(self, data: dict):
+        self.tab_home.update_weather(data)
 
     def _toggle_caffeine(self):
         is_on = self.caffeine.toggle()
