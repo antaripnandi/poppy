@@ -164,9 +164,15 @@ class MediaManager(QObject):
                 try:
                     timeline = s.get_timeline_properties()
                     if timeline and timeline.end_time and timeline.end_time.total_seconds() > 0:
-                        pos_sec = max(0.0, timeline.position.total_seconds())
+                        raw_pos = max(0.0, timeline.position.total_seconds())
                         dur_sec = max(0.0, timeline.end_time.total_seconds())
                         last_up = timeline.last_updated_time.timestamp() if timeline.last_updated_time else time.time()
+                        # GSMTC positions are snapshots as of last_updated_time; extrapolate live time if playing
+                        if is_playing and last_up > 0:
+                            elapsed = max(0.0, time.time() - last_up)
+                            pos_sec = min(dur_sec, raw_pos + elapsed)
+                        else:
+                            pos_sec = raw_pos
                         can_seek = True
                 except Exception:
                     pass

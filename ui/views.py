@@ -595,7 +595,7 @@ class MusicTabView(QWidget):
         self._init_ui()
 
         self._playback_timer = QTimer(self)
-        self._playback_timer.setInterval(200)
+        self._playback_timer.setInterval(100)
         self._playback_timer.timeout.connect(self._on_local_playback_tick)
         self._playback_timer.start()
 

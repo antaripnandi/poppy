@@ -477,7 +477,7 @@ class ClickableSlider(QSlider):
 
 
 class LyricLineWidget(QPushButton):
-    """Clean, high-grade lyric row matching modern streaming music apps."""
+    """Clean, modern lyric row matching native Spotify desktop typography."""
     def __init__(self, time_sec: float, text: str, parent=None):
         super().__init__(text, parent)
         self.time_sec = time_sec
@@ -494,15 +494,14 @@ class LyricLineWidget(QPushButton):
         if self._is_active:
             self.setStyleSheet("""
                 QPushButton {
-                    background: rgba(255, 255, 255, 0.08);
+                    background: transparent;
                     border: none;
-                    border-radius: 6px;
                     color: #ffffff;
-                    font-family: 'Segoe UI Variable Text', -apple-system, sans-serif;
-                    font-size: 13.5px;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-size: 15px;
                     font-weight: 700;
                     text-align: left;
-                    padding: 6px 10px;
+                    padding: 6px 4px;
                     margin: 2px 0px;
                 }
             """)
@@ -511,18 +510,17 @@ class LyricLineWidget(QPushButton):
                 QPushButton {
                     background: transparent;
                     border: none;
-                    border-radius: 6px;
-                    color: rgba(255, 255, 255, 0.38);
-                    font-family: 'Segoe UI Variable Text', -apple-system, sans-serif;
-                    font-size: 13px;
+                    color: rgba(255, 255, 255, 0.35);
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-size: 13.5px;
                     font-weight: 500;
                     text-align: left;
-                    padding: 5px 10px;
+                    padding: 5px 4px;
                     margin: 1px 0px;
                 }
                 QPushButton:hover {
                     color: rgba(255, 255, 255, 0.85);
-                    background: rgba(255, 255, 255, 0.04);
+                    background: transparent;
                 }
             """)
 
@@ -541,28 +539,22 @@ class SpotifyLyricsWidget(QFrame):
         self.setObjectName("lyricsWidgetFrame")
         self.setStyleSheet("""
             QFrame#lyricsWidgetFrame {
-                background: rgba(255, 255, 255, 0.035);
-                border: 1px solid rgba(255, 255, 255, 0.07);
-                border-radius: 14px;
+                background: transparent;
+                border: none;
             }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(6, 2, 6, 6)
         layout.setSpacing(6)
 
         # Header bar
         hdr_row = QHBoxLayout()
-        hdr_row.setContentsMargins(2, 0, 2, 2)
-        lbl_hdr = QLabel("LYRICS")
-        lbl_hdr.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #64748b; letter-spacing: 0.8px; background: transparent; border: none; }")
-
-        self.badge_sync = QLabel("SYNCED")
-        self.badge_sync.setStyleSheet("QLabel { font-size: 9px; font-weight: 700; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border-radius: 4px; padding: 1px 6px; border: 1px solid rgba(56, 189, 248, 0.25); }")
-        self.badge_sync.setVisible(False)
+        hdr_row.setContentsMargins(4, 0, 4, 4)
+        lbl_hdr = QLabel("Lyrics")
+        lbl_hdr.setStyleSheet("QLabel { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 600; color: #94a3b8; background: transparent; border: none; }")
 
         hdr_row.addWidget(lbl_hdr)
-        hdr_row.addWidget(self.badge_sync)
         hdr_row.addStretch()
         layout.addLayout(hdr_row)
 
@@ -617,10 +609,10 @@ class SpotifyLyricsWidget(QFrame):
         p_layout.setContentsMargins(12, 24, 12, 24)
         p_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.lbl_status = QLabel("Play music to view synchronized lyrics", placeholder_wrap)
+        self.lbl_status = QLabel("Play music to view lyrics", placeholder_wrap)
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setWordWrap(True)
-        self.lbl_status.setStyleSheet("QLabel { font-size: 12px; font-weight: 500; color: #64748b; background: transparent; border: none; line-height: 1.5; }")
+        self.lbl_status.setStyleSheet("QLabel { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; font-weight: 400; color: #64748b; background: transparent; border: none; line-height: 1.5; }")
         p_layout.addWidget(self.lbl_status)
         self.content_stack.addWidget(placeholder_wrap)
 
@@ -668,7 +660,6 @@ class SpotifyLyricsWidget(QFrame):
 
     def set_loading(self, title: str, artist: str):
         self._clear_lines()
-        self.badge_sync.setVisible(False)
         disp = f'"{title}"' if title else "track"
         if artist:
             disp += f"\n{artist}"
@@ -677,7 +668,6 @@ class SpotifyLyricsWidget(QFrame):
 
     def set_not_found(self, title: str, artist: str):
         self._clear_lines()
-        self.badge_sync.setVisible(False)
         disp = f'"{title}"' if title else "track"
         if artist:
             disp += f"\n{artist}"
@@ -687,28 +677,26 @@ class SpotifyLyricsWidget(QFrame):
     def set_synced_lyrics(self, synced_lines: list[tuple[float, str]]):
         self._clear_lines()
         self.content_stack.setCurrentIndex(0)
-        self.badge_sync.setVisible(True)
         self._synced_lines = synced_lines
         self._current_line_idx = -1
 
-        self.lines_layout.addSpacing(12)
+        self.lines_layout.addSpacing(16)
         for time_sec, text in synced_lines:
             btn = LyricLineWidget(time_sec, text, self.lines_container)
             btn.clicked.connect(lambda checked=False, t=time_sec: self.seek_requested.emit(t))
             self.lines_layout.addWidget(btn)
             self._line_buttons.append(btn)
 
-        self.lines_layout.addSpacing(24)
+        self.lines_layout.addSpacing(28)
         self.lines_layout.addStretch()
 
     def set_plain_lyrics(self, plain_text: str):
         self._clear_lines()
         self.content_stack.setCurrentIndex(0)
-        self.badge_sync.setVisible(False)
         self._synced_lines = []
         self._current_line_idx = -1
 
-        self.lines_layout.addSpacing(12)
+        self.lines_layout.addSpacing(16)
         for line in plain_text.splitlines():
             clean = line.strip()
             if not clean:
@@ -716,29 +704,31 @@ class SpotifyLyricsWidget(QFrame):
             lbl = QLabel(clean, self.lines_container)
             lbl.setStyleSheet("""
                 QLabel {
-                    font-family: 'Segoe UI Variable Text', -apple-system, sans-serif;
-                    font-size: 13px;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-size: 13.5px;
                     font-weight: 500;
-                    color: rgba(255, 255, 255, 0.7);
+                    color: rgba(255, 255, 255, 0.65);
                     background: transparent;
                     border: none;
-                    padding: 4px 10px;
+                    padding: 5px 4px;
                 }
             """)
             lbl.setWordWrap(True)
             self.lines_layout.addWidget(lbl)
 
-        self.lines_layout.addSpacing(24)
+        self.lines_layout.addSpacing(28)
         self.lines_layout.addStretch()
 
     def update_playback_time(self, pos_sec: float):
         if not self._synced_lines or not self._line_buttons:
             return
 
-        # Find active line
+        # 0.25s vocal anticipation compensation so highlighting lands squarely on the opening syllable
+        sync_time = pos_sec + 0.25
+
         active_idx = -1
         for i, (t_sec, _) in enumerate(self._synced_lines):
-            if pos_sec >= (t_sec - 0.2):
+            if sync_time >= t_sec:
                 active_idx = i
             else:
                 break

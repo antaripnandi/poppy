@@ -14,6 +14,11 @@
     "long_break_duration": 900,
     "sound_enabled": true
   },
+  "notch": {
+    "auto_hover_peek": true,
+    "animation_duration_ms": 200,
+    "keep_in_tray": true
+  },
   "discord_rpc": {
     "enabled": false,
     "client_id": "120000000000000000",
@@ -58,10 +63,6 @@
         "small_text": "Playing"
       }
     }
-  },
-  "notch": {
-    "animation_duration_ms": 200,
-    "auto_hover_peek": true
   },
   "hardware_hud": {
     "monitor_gpu": true,

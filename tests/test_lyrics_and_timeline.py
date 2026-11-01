@@ -73,7 +73,7 @@ def test_spotify_lyrics_widget_sync_and_progress(qapp):
     ]
     widget.set_synced_lyrics(synced)
     assert len(widget._line_buttons) == 3
-    assert widget.badge_sync.isVisible()
+    assert widget.content_stack.currentIndex() == 0
 
     # Time before any lyrics
     widget.update_playback_time(2.0)
