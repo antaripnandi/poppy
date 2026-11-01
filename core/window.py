@@ -188,8 +188,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = app_cfg.get("open_width", 900)
-        self._open_h = app_cfg.get("open_height", 450)
+        self._open_w = max(app_cfg.get("open_width", 940), 940)
+        self._open_h = max(app_cfg.get("open_height", 460), 460)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
     def minimumSizeHint(self) -> QSize:
@@ -685,7 +685,8 @@ class DynamicNotchWindow(QWidget):
         time_short = now.strftime("%I:%M %p").lstrip("0")
         date_str = now.strftime("%A, %d %B")
         self.lbl_clock.setText(time_short)
-        self.lbl_hdr_clock.setText(f"{date_str}  {time_12}")
+        date_short = now.strftime("%a, %d %b")
+        self.lbl_hdr_clock.setText(f"{date_short}  {time_short}")
         self.tab_home.lbl_big_time.setText(time_12)
         self.tab_home.lbl_date.setText(date_str)
 
@@ -1410,8 +1411,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = app_cfg.get("open_width", 900)
-        self._open_h = app_cfg.get("open_height", 450)
+        self._open_w = max(app_cfg.get("open_width", 940), 940)
+        self._open_h = max(app_cfg.get("open_height", 460), 460)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
         accent = self._theme["accent"]
@@ -1670,8 +1671,8 @@ class DynamicNotchWindow(QWidget):
         elif state == NotchState.EXPANDED:
             min_w = self.view_expanded.minimumSizeHint().width()
             min_h = self.view_expanded.minimumSizeHint().height()
-            w = max(self._open_w, min_w)
-            h = max(self._open_h, min_h)
+            w = max(self._open_w, min_w, 940)
+            h = max(self._open_h, min_h, 460)
             self._target_size = (w, h)
 
         screen = self._get_current_screen_geometry()
