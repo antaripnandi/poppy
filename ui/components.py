@@ -132,7 +132,7 @@ class AnimatedTabStrip(QWidget):
                     font-family: '{fluent_font}', -apple-system, 'Segoe UI', Roboto, sans-serif;
                     font-size: 11px;
                     font-weight: {font_weight};
-                    padding: 3px 10px;
+                    padding: 3px 8px;
                 }}
                 QPushButton:hover {{
                     color: #ffffff;

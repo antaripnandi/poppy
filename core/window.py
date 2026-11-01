@@ -188,8 +188,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = app_cfg.get("open_width", 780)
-        self._open_h = app_cfg.get("open_height", 420)
+        self._open_w = app_cfg.get("open_width", 900)
+        self._open_h = app_cfg.get("open_height", 450)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
     def minimumSizeHint(self) -> QSize:
@@ -1410,8 +1410,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = app_cfg.get("open_width", 780)
-        self._open_h = app_cfg.get("open_height", 420)
+        self._open_w = app_cfg.get("open_width", 900)
+        self._open_h = app_cfg.get("open_height", 450)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
         accent = self._theme["accent"]
@@ -1450,9 +1450,12 @@ class DynamicNotchWindow(QWidget):
         self._leave_timer.stop()
         if self.state == NotchState.ISLAND:
             self._island_timer.stop()
+        if self.state in (NotchState.PEEK, NotchState.EXPANDED):
+            super().enterEvent(event)
+            return
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
         if self.state == NotchState.COLLAPSED and auto_peek:
-            self._hover_peek_timer.start(80)
+            self._hover_peek_timer.start(90)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
@@ -1461,8 +1464,9 @@ class DynamicNotchWindow(QWidget):
             super().leaveEvent(event)
             return
         from PySide6.QtGui import QCursor
-        # Crucial: if cursor is still geometrically within the window, ignore false leave events
-        if self.geometry().contains(QCursor.pos()):
+        # Safe hysteresis padding: if cursor is anywhere near the window, do not collapse
+        safe_rect = self.geometry().adjusted(-20, -10, 20, 25)
+        if safe_rect.contains(QCursor.pos()):
             return
         if self.state == NotchState.ISLAND:
             self._island_timer.start(1800)
@@ -1472,14 +1476,19 @@ class DynamicNotchWindow(QWidget):
 
     def _on_hover_peek_timeout(self):
         from PySide6.QtGui import QCursor
-        if self.state == NotchState.COLLAPSED and self.geometry().contains(QCursor.pos()):
+        if self.anim and self.anim.state() == QPropertyAnimation.State.Running:
+            return
+        safe_rect = self.geometry().adjusted(-10, -5, 10, 15)
+        if self.state == NotchState.COLLAPSED and safe_rect.contains(QCursor.pos()):
             self._transition_to(NotchState.PEEK)
 
     def _on_leave_timeout(self):
         from PySide6.QtGui import QCursor
         if self.state == NotchState.PEEK:
-            # Double check cursor is really outside before collapsing
-            if self.geometry().contains(QCursor.pos()):
+            safe_rect = self.geometry().adjusted(-20, -10, 20, 25)
+            if safe_rect.contains(QCursor.pos()):
+                return
+            if self.anim and self.anim.state() == QPropertyAnimation.State.Running:
                 return
             self._transition_to(NotchState.COLLAPSED)
 
@@ -1675,14 +1684,13 @@ class DynamicNotchWindow(QWidget):
             self.anim.stop()
             # Organic spring physics matching macOS Dynamic Island & NotchX
             if state == NotchState.COLLAPSED:
-                duration = 220
+                duration = 200
                 curve = QEasingCurve(QEasingCurve.Type.OutCubic)
             elif state in (NotchState.PEEK, NotchState.ISLAND):
-                duration = 270
-                curve = QEasingCurve(QEasingCurve.Type.OutBack)
-                curve.setOvershoot(1.15)
+                duration = 240
+                curve = QEasingCurve(QEasingCurve.Type.OutCubic)
             else:  # EXPANDED
-                duration = 300
+                duration = 280
                 curve = QEasingCurve(QEasingCurve.Type.OutCubic)
 
             self.anim.setDuration(duration)
