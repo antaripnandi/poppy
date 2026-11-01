@@ -37,7 +37,7 @@ from poppy.ui.views import (
 )
 from poppy.ui.extended_views import (
     CalendarTabView, ClipboardTabView, DocsTabView,
-    LauncherTabView, DesktopsTabView, ScreenAnnotationOverlay
+    DesktopsTabView, ScreenAnnotationOverlay
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
@@ -51,7 +51,7 @@ from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
 from poppy.core.system_features import (
     PrivacyMonitor, ScreenCaptureShield, BluetoothManager,
-    AppLauncherIndexer, ClipboardHistoryManager, AudioEndpointManager
+    ClipboardHistoryManager, AudioEndpointManager
 )
 from poppy.core.weather_manager import WeatherManager
 from poppy.core.system_tools import (
@@ -115,7 +115,6 @@ class DynamicNotchWindow(QWidget):
         self.privacy_monitor = PrivacyMonitor(parent=self)
         self.bt_manager = BluetoothManager(parent=self)
         self.clip_mgr = ClipboardHistoryManager(parent=self)
-        self.launcher_indexer = AppLauncherIndexer()
         self._is_pinned = False
         self._is_screen_shielded = False
         self._annotation_overlay = None
@@ -484,7 +483,6 @@ class DynamicNotchWindow(QWidget):
             ("Calendar", ""),
             ("Clipboard", ""),
             ("Docs", ""),
-            ("Launcher", ""),
             ("Desktops", ""),
             ("Timer", ""),
             ("Shelf", ""),
@@ -580,7 +578,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.focus_shield_requested.connect(self._toggle_focus_shield)
         self.tab_home.screen_snip_requested.connect(self._trigger_screen_snip)
         self.tab_home.eyedropper_requested.connect(self._trigger_color_eyedropper)
-        self.tab_home.quick_search_requested.connect(lambda: self._switch_tab(5))
+        self.tab_home.quick_search_requested.connect(self._trigger_quick_search)
         self.tab_home.lock_workstation_requested.connect(self._lock_workstation)
         self.tab_home.player_menu_requested.connect(self._show_player_dropdown)
         self.tab_home.weather_refresh_requested.connect(self.weather_manager.refresh)
@@ -612,15 +610,11 @@ class DynamicNotchWindow(QWidget):
         self.tab_docs = DocsTabView(self, accent=self._theme["accent"])
         self.tab_stack.addWidget(self.tab_docs)
 
-        # 5: Launcher Tab
-        self.tab_launcher = LauncherTabView(self.launcher_indexer, parent=self, accent=self._theme["accent"])
-        self.tab_stack.addWidget(self.tab_launcher)
-
-        # 6: Desktops Tab
+        # 5: Desktops Tab
         self.tab_desktops = DesktopsTabView(self, accent=self._theme["accent"])
         self.tab_stack.addWidget(self.tab_desktops)
 
-        # 7: Timer Tab
+        # 6: Timer Tab
         self.tab_timer = TimerTabView(self, accent=self._theme["accent"])
         self.tab_timer.btn_toggle.clicked.connect(self.pomodoro.toggle)
         self.tab_timer.btn_reset.clicked.connect(self.pomodoro.reset)
@@ -629,12 +623,12 @@ class DynamicNotchWindow(QWidget):
         self.tab_timer.btn_phase_short.clicked.connect(lambda: self.pomodoro.set_phase_break())
         self.tab_stack.addWidget(self.tab_timer)
 
-        # 8: Shelf Tab
+        # 7: Shelf Tab
         self.tab_shelf = ShelfTabView(self.drop_shelf, screenshot_watcher=self.screenshot_watcher, parent=self)
         self.tab_shelf.pin_requested.connect(self._pin_screenshot_to_screen)
         self.tab_stack.addWidget(self.tab_shelf)
 
-        # 9: Notes Tab
+        # 8: Notes Tab
         self.tab_notes = NotesTabView(self)
         self.tab_notes.tear_off_requested.connect(self._tear_off_sticky_note)
         self.tab_stack.addWidget(self.tab_notes)
@@ -1004,8 +998,11 @@ class DynamicNotchWindow(QWidget):
         devices = getattr(self.bt_manager, "devices", [])
         if devices:
             for d in devices:
-                status_icon = "🟢 " if d.get("status") == "Connected" else "⚪ "
-                menu.addAction(f"{status_icon}{d.get('name', 'Device')}  ({d.get('status', 'Paired')})")
+                is_conn = d.get("connected", False)
+                status_icon = "🟢 " if is_conn else "⚪ "
+                status_text = "Connected" if is_conn else "Paired"
+                act = menu.addAction(f"{status_icon}{d.get('name', 'Device')}  ({status_text})")
+                act.triggered.connect(lambda checked=False: os.startfile("ms-settings:bluetooth"))
         else:
             act = menu.addAction("No paired Bluetooth devices detected")
             act.setEnabled(False)
@@ -1095,7 +1092,7 @@ class DynamicNotchWindow(QWidget):
 
     def _pop_out_current_tab(self):
         idx = self.tab_stack.currentIndex()
-        names = ["Home", "Music", "Calendar", "Clipboard", "Docs", "Launcher", "Desktops", "Timer", "Shelf", "Notes"]
+        names = ["Home", "Music", "Calendar", "Clipboard", "Docs", "Desktops", "Timer", "Shelf", "Notes"]
         tab_name = names[idx] if idx < len(names) else f"Tab {idx}"
         from PySide6.QtWidgets import QDialog
         float_win = QDialog(None, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
@@ -1117,14 +1114,12 @@ class DynamicNotchWindow(QWidget):
         elif idx == 4:
             view = DocsTabView(float_win, accent=self._theme["accent"])
         elif idx == 5:
-            view = LauncherTabView(self.launcher_indexer, float_win, accent=self._theme["accent"])
-        elif idx == 6:
             view = DesktopsTabView(float_win, accent=self._theme["accent"])
-        elif idx == 7:
+        elif idx == 6:
             view = TimerTabView(float_win, accent=self._theme["accent"])
-        elif idx == 8:
+        elif idx == 7:
             view = ShelfTabView(self.drop_shelf, self.screenshot_watcher, float_win)
-        elif idx == 9:
+        elif idx == 8:
             view = NotesTabView(float_win)
         else:
             view = QLabel(f"Detached {tab_name}")
@@ -1352,7 +1347,7 @@ class DynamicNotchWindow(QWidget):
 
     def _open_shelf_from_island(self):
         self._island_timer.stop()
-        self._switch_tab(8)
+        self._switch_tab(7)
         self._transition_to(NotchState.EXPANDED)
 
     def _on_island_timeout(self):
@@ -1511,7 +1506,7 @@ class DynamicNotchWindow(QWidget):
                 self._collapse_to_pill()
                 event.accept()
                 return
-        # Ctrl + 1-9, 0 for Quick Tab Switching
+        # Ctrl + 1-9 for Quick Tab Switching
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             key_map = {
                 Qt.Key.Key_1: 0,
@@ -1523,7 +1518,6 @@ class DynamicNotchWindow(QWidget):
                 Qt.Key.Key_7: 6,
                 Qt.Key.Key_8: 7,
                 Qt.Key.Key_9: 8,
-                Qt.Key.Key_0: 9,
             }
             if event.key() in key_map:
                 self._switch_tab(key_map[event.key()])
@@ -1731,14 +1725,14 @@ class DynamicNotchWindow(QWidget):
             event.acceptProposedAction()
             if self.state != NotchState.EXPANDED:
                 self._transition_to(NotchState.EXPANDED)
-                self._switch_tab(8)  # Switch to Shelf
+                self._switch_tab(7)  # Switch to Shelf
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
             paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if paths:
                 self.drop_shelf.add_paths(paths)
-                self._switch_tab(8)  # Shelf tab
+                self._switch_tab(7)  # Shelf tab
                 event.acceptProposedAction()
                 return
         event.ignore()

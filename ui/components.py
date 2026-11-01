@@ -177,41 +177,18 @@ class AnimatedTabStrip(QWidget):
 
 class AnimatedStackedWidget(QStackedWidget):
     """
-    Subpixel smooth fading & micro-slide stacked container for tabs.
-    Lightweight, hardware-accelerated with zero CPU overhead.
+    Fluid, artifact-free stacked container for tabs.
+    Directly switches indices to prevent DWM alpha-channel punch-through glitches
+    where desktop / code behind the translucent window becomes visible during transitions.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._is_animating = False
 
     def slide_to_index(self, target_idx: int):
-        if target_idx == self.currentIndex() or not (0 <= target_idx < self.count()):
+        if not (0 <= target_idx < self.count()):
             return
-        next_widget = self.widget(target_idx)
-        current_widget = self.currentWidget()
-        if not current_widget or not self.isVisible():
+        if target_idx != self.currentIndex():
             self.setCurrentIndex(target_idx)
-            return
-
-        next_widget.setGeometry(0, 0, self.width(), self.height())
-        next_widget.show()
-        next_widget.raise_()
-
-        effect = QGraphicsOpacityEffect(next_widget)
-        next_widget.setGraphicsEffect(effect)
-
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(190)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        def on_finished():
-            self.setCurrentIndex(target_idx)
-            next_widget.setGraphicsEffect(None)
-
-        anim.finished.connect(on_finished)
-        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 class TabButton(QPushButton):

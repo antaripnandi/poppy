@@ -141,16 +141,21 @@ def test_docs_tab_view(qapp, tmp_path):
     qapp.processEvents()
 
 
-def test_launcher_tab_view(qapp):
-    indexer = AppLauncherIndexer()
-    view = LauncherTabView(indexer)
-    assert view is not None
-    assert hasattr(view, "input_search")
-    assert hasattr(view, "results_layout")
+def test_bluetooth_manager():
+    devices = BluetoothManager._get_devices()
+    assert isinstance(devices, list)
+    for d in devices:
+        assert "name" in d
+        assert "connected" in d
+        assert "status" in d
+        # Verify internal transport drivers are not leaked
+        assert "transport" not in d["name"].lower()
 
-    # Filter test
-    view.input_search.setText("calc")
-    assert len(view._filtered) >= 1
-    assert any("calc" in item["name"].lower() for item in view._filtered)
+
+def test_desktops_tab_view(qapp):
+    view = DesktopsTabView()
+    assert view is not None
+    assert hasattr(view, "_open_task_view")
+    assert hasattr(view, "_create_new_desktop")
     view.deleteLater()
     qapp.processEvents()
