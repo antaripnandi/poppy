@@ -6,8 +6,8 @@ pin-to-top toggle, multi-color themes (Charcoal, Pastel Yellow, Mint, Lavender, 
 and persistent on-screen presence across desktops.
 """
 
-from PySide6.QtCore import Qt, QPoint, Signal, QSize, QTimer
-from PySide6.QtGui import QColor, QFont, QPixmap
+from PySide6.QtCore import Qt, QPoint, Signal, QSize, QTimer, QRectF
+from PySide6.QtGui import QColor, QFont, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, QPushButton,
     QSizeGrip, QFrame, QApplication
@@ -286,10 +286,126 @@ class FloatingStickyNote(QWidget):
         super().closeEvent(event)
 
 
+class ImageCanvas(QWidget):
+    """
+    Subpixel smooth, zoomable and pannable image display canvas.
+    Supports mouse-wheel zooming, click-drag panning when zoomed, and double-click toggle.
+    """
+    zoom_changed = Signal(float)
+
+    def __init__(self, pixmap: QPixmap, parent=None):
+        super().__init__(parent)
+        self._pixmap = pixmap
+        self._zoom: float = 1.0
+        self._pan_x: float = 0.0
+        self._pan_y: float = 0.0
+        self._last_mouse_pos = None
+        self._is_panning = False
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def set_zoom(self, zoom: float):
+        self._zoom = max(0.1, min(10.0, zoom))
+        if self._zoom <= 1.02:
+            self._pan_x = 0.0
+            self._pan_y = 0.0
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.update()
+        self.zoom_changed.emit(self._zoom)
+
+    def zoom_in(self):
+        self.set_zoom(self._zoom * 1.2)
+
+    def zoom_out(self):
+        self.set_zoom(self._zoom / 1.2)
+
+    def reset_zoom(self):
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.set_zoom(1.0)
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.zoom_in()
+        elif delta < 0:
+            self.zoom_out()
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._zoom > 1.02:
+                self._is_panning = True
+                self._last_mouse_pos = event.position()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._is_panning and self._last_mouse_pos is not None:
+            delta = event.position() - self._last_mouse_pos
+            self._pan_x += delta.x()
+            self._pan_y += delta.y()
+            self._last_mouse_pos = event.position()
+            self.update()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._is_panning:
+            self._is_panning = False
+            self.setCursor(Qt.CursorShape.OpenHandCursor if self._zoom > 1.02 else Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if abs(self._zoom - 1.0) < 0.05:
+                self.set_zoom(2.0)
+            else:
+                self.reset_zoom()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        if not self._pixmap or self._pixmap.isNull():
+            return
+
+        vw = float(self.width())
+        vh = float(self.height())
+        pw = float(self._pixmap.width())
+        ph = float(self._pixmap.height())
+
+        fit_scale = min(vw / max(1.0, pw), vh / max(1.0, ph))
+        scale = fit_scale * self._zoom
+
+        draw_w = pw * scale
+        draw_h = ph * scale
+        draw_x = (vw - draw_w) / 2.0 + self._pan_x
+        draw_y = (vh - draw_h) / 2.0 + self._pan_y
+
+        painter.drawPixmap(
+            QRectF(draw_x, draw_y, draw_w, draw_h),
+            self._pixmap,
+            QRectF(0, 0, pw, ph)
+        )
+
+
 class FloatingStickyImage(QWidget):
     """
     Floating pinned screenshot / image on screen (like Snipaste / PureRef).
     Stays always on top, freely draggable with startSystemMove(), resizable with QSizeGrip.
+    Supports mouse-wheel zooming, interactive panning, and maximize/fullscreen toggle.
     """
     closed = Signal(object)
 
@@ -298,6 +414,8 @@ class FloatingStickyImage(QWidget):
         self.image_path = image_path
         self._pixmap = QPixmap(image_path)
         self.is_pinned = True
+        self._is_maximized = False
+        self._prev_geom = None
 
         self.setWindowFlags(
             Qt.WindowType.Window |
@@ -306,14 +424,15 @@ class FloatingStickyImage(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
-        # Scale initial size based on image
+        # Scale initial window to wrap screenshot aspect ratio cleanly without massive black borders
         if not self._pixmap.isNull():
             orig_w = self._pixmap.width()
             orig_h = self._pixmap.height()
-            w = max(240, min(480, orig_w))
             aspect = orig_h / max(1, orig_w)
-            h = int(w * aspect) + 38
-            h = max(180, min(520, h))
+            chrome_h = 30 + 20 + 8  # header (30px) + footer (20px) + margins (8px)
+            w = max(320, min(750, orig_w))
+            content_h = int(w * aspect)
+            h = max(70, min(650, content_h + chrome_h))
         else:
             w, h = 320, 240
         self.resize(w, h)
@@ -366,11 +485,26 @@ class FloatingStickyImage(QWidget):
         h_layout.setSpacing(4)
 
         self.header.mousePressEvent = self._start_drag
+        self.header.mouseDoubleClickEvent = lambda e: self.toggle_maximize()
+
         lbl = QLabel("Pinned Screenshot", self)
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #e2e8f0; background: transparent; border: none;")
         h_layout.addWidget(lbl)
         h_layout.addStretch()
+
+        # Zoom Controls
+        btn_zoom_out = IconButton(Icons.ZOOM_OUT, "Zoom Out (Wheel Down)", parent=self, size=20, font_size=10, is_fluent=True)
+        btn_zoom_out.clicked.connect(lambda: self.canvas.zoom_out())
+        h_layout.addWidget(btn_zoom_out)
+
+        btn_zoom_in = IconButton(Icons.ZOOM_IN, "Zoom In (Wheel Up)", parent=self, size=20, font_size=10, is_fluent=True)
+        btn_zoom_in.clicked.connect(lambda: self.canvas.zoom_in())
+        h_layout.addWidget(btn_zoom_in)
+
+        self.btn_maximize = IconButton(Icons.MAXIMIZE, "Maximize / Fullscreen", parent=self, size=20, font_size=10, is_fluent=True)
+        self.btn_maximize.clicked.connect(self.toggle_maximize)
+        h_layout.addWidget(self.btn_maximize)
 
         self.btn_img_pin = IconButton(Icons.PIN, "Always on Top (Toggle)", parent=self, size=20, font_size=10, is_fluent=True)
         self.btn_img_pin.clicked.connect(self.toggle_pin)
@@ -385,20 +519,18 @@ class FloatingStickyImage(QWidget):
         h_layout.addWidget(btn_close)
         c_layout.addWidget(self.header)
 
-        # Image display area
-        self.lbl_img = QLabel(self)
-        self.lbl_img.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_img.setStyleSheet("background: transparent; border: none; padding: 4px;")
-        c_layout.addWidget(self.lbl_img, stretch=1)
+        # Image Canvas (Zoomable, Pannable, Fill Viewport)
+        self.canvas = ImageCanvas(self._pixmap, parent=self)
+        self.canvas.zoom_changed.connect(self._on_zoom_changed)
+        c_layout.addWidget(self.canvas, stretch=1)
 
         # Bottom footer with size grip
         footer = QHBoxLayout()
         footer.setContentsMargins(10, 0, 4, 4)
-        dims = f"{self._pixmap.width()}×{self._pixmap.height()}" if not self._pixmap.isNull() else ""
-        lbl_info = QLabel(dims, self)
-        lbl_info.setStyleSheet("font-size: 9px; color: #64748b; background: transparent; border: none;")
-        footer.addWidget(lbl_info)
+        orig_dims = f"{self._pixmap.width()}×{self._pixmap.height()}" if not self._pixmap.isNull() else ""
+        self.lbl_info = QLabel(f"{orig_dims} · 100%", self)
+        self.lbl_info.setStyleSheet("font-size: 9px; color: #64748b; background: transparent; border: none;")
+        footer.addWidget(self.lbl_info)
         footer.addStretch()
 
         self.size_grip = QSizeGrip(self)
@@ -408,22 +540,11 @@ class FloatingStickyImage(QWidget):
         c_layout.addLayout(footer)
 
         layout.addWidget(self.container)
-        self._update_scaled_pixmap()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._update_scaled_pixmap()
-
-    def _update_scaled_pixmap(self):
-        if self._pixmap and not self._pixmap.isNull():
-            target_w = max(10, self.lbl_img.width() - 8)
-            target_h = max(10, self.lbl_img.height() - 8)
-            scaled = self._pixmap.scaled(
-                target_w, target_h,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.lbl_img.setPixmap(scaled)
+    def _on_zoom_changed(self, zoom: float):
+        orig_dims = f"{self._pixmap.width()}×{self._pixmap.height()}" if not self._pixmap.isNull() else ""
+        pct = int(zoom * 100)
+        self.lbl_info.setText(f"{orig_dims} · {pct}% (Wheel to zoom)")
 
     def _start_drag(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -437,6 +558,22 @@ class FloatingStickyImage(QWidget):
         self._start_drag(event)
         super().mousePressEvent(event)
 
+    def toggle_maximize(self):
+        if self._is_maximized:
+            if self._prev_geom:
+                self.setGeometry(self._prev_geom)
+            self._is_maximized = False
+            self.btn_maximize.setText(Icons.MAXIMIZE)
+            self.btn_maximize.setToolTip("Maximize / Fullscreen")
+        else:
+            self._prev_geom = self.geometry()
+            screen = QApplication.primaryScreen().availableGeometry()
+            self.setGeometry(screen)
+            self._is_maximized = True
+            self.btn_maximize.setText(Icons.RESTORE)
+            self.btn_maximize.setToolTip("Restore Window")
+        self.canvas.reset_zoom()
+
     def toggle_pin(self):
         self.is_pinned = not self.is_pinned
         self.btn_img_pin.setText(Icons.PIN if self.is_pinned else Icons.UNPIN)
@@ -444,7 +581,7 @@ class FloatingStickyImage(QWidget):
         self.show()
 
     def copy_image(self):
-        if self._pixmap:
+        if self._pixmap and not self._pixmap.isNull():
             cb = QApplication.clipboard()
             cb.setPixmap(self._pixmap)
 

@@ -166,54 +166,75 @@ class DynamicNotchWindow(QWidget):
 
         # =====================================================================
         # 1. Collapsed View: Minimalist Top Pill (pill-v2.png)
+        # Symmetrical 3-zone architecture: Left (Media icon) - Center (Time) - Right (Visualizer)
         # =====================================================================
         self.view_collapsed = QWidget(self)
         self.view_collapsed.setFixedHeight(self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
-        v_coll_layout.setContentsMargins(14, 0, 14, 0)
-        v_coll_layout.setSpacing(8)
+        v_coll_layout.setContentsMargins(12, 0, 12, 0)
+        v_coll_layout.setSpacing(0)
         v_coll_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Tiny Album Art thumbnail (20x20, rounded 5px) matching pill-v2.png
+        # Left Zone: Album Art thumbnail (20x20, rounded 5px)
+        left_box = QWidget(self)
+        l_layout = QHBoxLayout(left_box)
+        l_layout.setContentsMargins(0, 0, 0, 0)
+        l_layout.setSpacing(6)
+        l_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
         self.coll_thumb = QLabel()
         self.coll_thumb.setFixedSize(20, 20)
         self.coll_thumb.setStyleSheet("background-color: rgba(255,255,255,0.08); border-radius: 5px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 10px; color: #94a3b8;")
         self.coll_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.coll_thumb.setText(Icons.MUSIC)
-        v_coll_layout.addWidget(self.coll_thumb)
+        l_layout.addWidget(self.coll_thumb)
+        v_coll_layout.addWidget(left_box, 1)
 
-        # Equalizer bars
-        self.coll_visualizer = AudioVisualizerBars(self)
-        v_coll_layout.addWidget(self.coll_visualizer)
+        # Center Zone: Dead-center Clock & Pomodoro Badge
+        center_box = QWidget(self)
+        c_layout = QHBoxLayout(center_box)
+        c_layout.setContentsMargins(0, 0, 0, 0)
+        c_layout.setSpacing(6)
+        c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Digital Clock
         self.lbl_clock = QLabel("12:00")
         self.lbl_clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_clock.setStyleSheet("""
             color: #e2e8f0;
             font-size: 11px;
             font-weight: 600;
-            min-width: 44px;
+            background: transparent;
+            border: none;
         """)
-        v_coll_layout.addWidget(self.lbl_clock)
+        c_layout.addWidget(self.lbl_clock)
 
-        # Active Pomodoro Countdown (Shown only during active sprint/break)
         self.lbl_coll_pomo = QLabel("")
         self.lbl_coll_pomo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_coll_pomo.setStyleSheet(f"""
             color: {self._theme['accent']};
             font-size: 11px;
             font-weight: 600;
-            min-width: 44px;
+            background: transparent;
+            border: none;
         """)
         self.lbl_coll_pomo.setVisible(False)
-        v_coll_layout.addWidget(self.lbl_coll_pomo)
+        c_layout.addWidget(self.lbl_coll_pomo)
+        v_coll_layout.addWidget(center_box, 0)
 
-        v_coll_layout.addStretch()
+        # Right Zone: Equalizer bars and status dot (symmetrical to Left Zone)
+        right_box = QWidget(self)
+        r_layout = QHBoxLayout(right_box)
+        r_layout.setContentsMargins(0, 0, 0, 0)
+        r_layout.setSpacing(6)
+        r_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.coll_visualizer = AudioVisualizerBars(self)
+        r_layout.addWidget(self.coll_visualizer)
 
         self.coll_status_dot = QLabel("•")
-        self.coll_status_dot.setStyleSheet("color: rgba(255,255,255,0.25); font-size: 14px;")
-        v_coll_layout.addWidget(self.coll_status_dot)
+        self.coll_status_dot.setStyleSheet("color: rgba(255,255,255,0.25); font-size: 14px; background: transparent; border: none;")
+        r_layout.addWidget(self.coll_status_dot)
+        v_coll_layout.addWidget(right_box, 1)
 
         self.main_layout.addWidget(self.view_collapsed)
 
@@ -861,8 +882,8 @@ class DynamicNotchWindow(QWidget):
         img_note = FloatingStickyImage(file_path)
         screen = QApplication.primaryScreen().geometry()
         offset = (len(self._floating_notes) % 6) * 32
-        x = max(40, (screen.width() - img_note.width()) // 2 + offset)
-        y = max(60, 120 + offset)
+        x = max(40, screen.x() + (screen.width() - img_note.width()) // 2 + offset)
+        y = max(60, screen.y() + 120 + offset)
         img_note.move(x, y)
         img_note.show()
         img_note.raise_()
@@ -1028,6 +1049,15 @@ class DynamicNotchWindow(QWidget):
 
         self._apply_geometry_for_state(new_state, animate=True)
 
+    def _recenter_window(self):
+        """Ensure the window is mathematically centered on the active screen at all times."""
+        screen = QApplication.primaryScreen().geometry()
+        w = self.width()
+        expected_x = screen.x() + (screen.width() - w) // 2
+        expected_y = screen.y() if self._style == "Notch" else screen.y() + 8
+        if self.x() != expected_x or self.y() != expected_y:
+            self.move(expected_x, expected_y)
+
     def _apply_geometry_for_state(self, state: NotchState, animate: bool = True):
         if state == NotchState.COLLAPSED:
             self._target_size = (self._collapsed_w, self._collapsed_h)
@@ -1036,17 +1066,21 @@ class DynamicNotchWindow(QWidget):
         elif state == NotchState.ISLAND:
             self._target_size = (420, 64)
         elif state == NotchState.EXPANDED:
-            self._target_size = (self._open_w, self._open_h)
+            min_w = self.view_expanded.minimumSizeHint().width()
+            min_h = self.view_expanded.minimumSizeHint().height()
+            w = max(self._open_w, min_w)
+            h = max(self._open_h, min_h)
+            self._target_size = (w, h)
 
         screen = QApplication.primaryScreen().geometry()
         w, h = self._target_size
-        x = (screen.width() - w) // 2
-        y = 0 if self._style == "Notch" else 8
+        x = screen.x() + (screen.width() - w) // 2
+        y = screen.y() if self._style == "Notch" else screen.y() + 8
         target_rect = QRect(x, y, w, h)
 
         if animate:
             self.anim.stop()
-            # Fast 140ms snappy spring duration matching NotchX FastDuration (0.14s)
+            # Fast snappy spring duration matching NotchX FastDuration (0.14s)
             duration = 140 if state != NotchState.EXPANDED else 180
             self.anim.setDuration(duration)
             self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -1058,16 +1092,19 @@ class DynamicNotchWindow(QWidget):
         else:
             self.anim.stop()
             self.setGeometry(target_rect)
+            self._recenter_window()
             self._update_clickthrough_mask()
 
     def _on_animation_finished(self):
         self.resize(*self._target_size)
+        self._recenter_window()
         self._update_clickthrough_mask()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # NEVER call SetWindowRgn during a live animation frame
         if not (self.anim and self.anim.state() == QPropertyAnimation.State.Running):
+            self._recenter_window()
             self._update_clickthrough_mask()
 
     def _update_clickthrough_mask(self):

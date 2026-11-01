@@ -622,6 +622,7 @@ class MusicTabView(QWidget):
 
         # Right: Synced Lyrics / Scratchpad Card (now-playing-v2 right card)
         lyrics_card = CardFrame(self)
+        lyrics_card.setFixedWidth(200)
         l_lyr = QVBoxLayout(lyrics_card)
         l_lyr.setContentsMargins(12, 10, 12, 10)
         l_lyr.setSpacing(6)

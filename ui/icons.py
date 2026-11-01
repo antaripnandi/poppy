@@ -35,6 +35,10 @@ class Icons:
     # Actions & Chrome
     SETTINGS = "\uE713"     # Settings Gear
     CLOSE = "\uE711"        # Minimal × (ChromeClose)
+    MAXIMIZE = "\uE922"     # Chrome Maximize
+    RESTORE = "\uE923"      # Chrome Restore
+    ZOOM_IN = "\uE71E"      # Zoom In
+    ZOOM_OUT = "\uE71F"     # Zoom Out
     LOCK = "\uE72E"         # Lock
     UNLOCK = "\uE785"       # Unlock
     PIN = "\uE718"          # Pin to Screen
