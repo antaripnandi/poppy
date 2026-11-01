@@ -135,10 +135,10 @@ class DynamicNotchWindow(QWidget):
         self._floating_notes = []
         self._settings_window = None
 
-        # Smooth leave timer (400ms grace period)
+        # Smooth leave timer (350ms grace period)
         self._leave_timer = QTimer(self)
         self._leave_timer.setSingleShot(True)
-        self._leave_timer.setInterval(400)
+        self._leave_timer.setInterval(350)
         self._leave_timer.timeout.connect(self._on_leave_timeout)
 
         # Hover intent debounce timer (120ms hysteresis to avoid accidental Peek bloom)
@@ -1465,9 +1465,8 @@ class DynamicNotchWindow(QWidget):
             super().leaveEvent(event)
             return
         from PySide6.QtGui import QCursor
-        # Safe hysteresis padding: if cursor is anywhere near the window, do not collapse
-        safe_rect = self.geometry().adjusted(-20, -10, 20, 25)
-        if safe_rect.contains(QCursor.pos()):
+        # If cursor is STILL geometrically within the window, ignore child switch events
+        if self.geometry().contains(QCursor.pos()):
             return
         if self.state == NotchState.ISLAND:
             self._island_timer.start(1800)
@@ -1479,19 +1478,14 @@ class DynamicNotchWindow(QWidget):
         from PySide6.QtGui import QCursor
         if self.anim and self.anim.state() == QPropertyAnimation.State.Running:
             return
-        safe_rect = self.geometry().adjusted(-10, -5, 10, 15)
-        if self.state == NotchState.COLLAPSED and safe_rect.contains(QCursor.pos()):
+        if self.state == NotchState.COLLAPSED and self.geometry().contains(QCursor.pos()):
             self._transition_to(NotchState.PEEK)
 
     def _on_leave_timeout(self):
         from PySide6.QtGui import QCursor
         if self.state == NotchState.PEEK:
-            safe_rect = self.geometry().adjusted(-20, -10, 20, 25)
-            if safe_rect.contains(QCursor.pos()):
-                return
-            if self.anim and self.anim.state() == QPropertyAnimation.State.Running:
-                return
-            self._transition_to(NotchState.COLLAPSED)
+            if not self.geometry().contains(QCursor.pos()):
+                self._transition_to(NotchState.COLLAPSED)
 
     def mousePressEvent(self, event):
         pos = event.position().toPoint()
