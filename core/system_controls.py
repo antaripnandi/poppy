@@ -121,6 +121,65 @@ class SystemAudioController:
         self.set_mute(not curr)
         return not curr
 
+    def _get_mic_interface(self):
+        try:
+            pEnumerator = c_void_p()
+            hr = self._ole32.CoCreateInstance(byref(self._clsid_enum), None, 1, byref(self._iid_enum), byref(pEnumerator))
+            if hr != 0 or not pEnumerator.value:
+                return None
+
+            vtable_enum = ctypes.cast(pEnumerator, POINTER(POINTER(c_void_p))).contents
+            GetDefaultEndpoint = ctypes.WINFUNCTYPE(HRESULT, c_void_p, wintypes.DWORD, wintypes.DWORD, POINTER(c_void_p))(vtable_enum[4])
+
+            pDevice = c_void_p()
+            # eCapture = 1, eMultimedia = 1
+            hr = GetDefaultEndpoint(pEnumerator, 1, 1, byref(pDevice))
+            if hr != 0 or not pDevice.value:
+                return None
+
+            vtable_dev = ctypes.cast(pDevice, POINTER(POINTER(c_void_p))).contents
+            Activate = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(self._GUID), wintypes.DWORD, c_void_p, POINTER(c_void_p))(vtable_dev[3])
+
+            pVolume = c_void_p()
+            hr = Activate(pDevice, byref(self._iid_vol), 23, None, byref(pVolume))
+            if hr != 0 or not pVolume.value:
+                return None
+            return pVolume
+        except Exception:
+            return None
+
+    def get_mic_mute(self) -> bool:
+        """Returns True if the default microphone is muted."""
+        pVolume = self._get_mic_interface()
+        if not pVolume:
+            return False
+        try:
+            vtable_vol = ctypes.cast(pVolume, POINTER(POINTER(c_void_p))).contents
+            GetMute = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(wintypes.BOOL))(vtable_vol[15])
+            val = wintypes.BOOL()
+            GetMute(pVolume, byref(val))
+            return bool(val.value)
+        except Exception:
+            return False
+
+    def set_mic_mute(self, mute: bool):
+        """Mutes or unmutes the default microphone."""
+        pVolume = self._get_mic_interface()
+        if not pVolume:
+            return
+        try:
+            vtable_vol = ctypes.cast(pVolume, POINTER(POINTER(c_void_p))).contents
+            SetMute = ctypes.WINFUNCTYPE(HRESULT, c_void_p, wintypes.BOOL, c_void_p)(vtable_vol[14])
+            SetMute(pVolume, wintypes.BOOL(mute), None)
+        except Exception:
+            pass
+
+    def toggle_mic_mute(self) -> bool:
+        """Toggles microphone mute state and returns the new muted status."""
+        curr = self.get_mic_mute()
+        self.set_mic_mute(not curr)
+        return not curr
+
 
 class SystemBrightnessController:
     """

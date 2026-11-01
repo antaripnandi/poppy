@@ -57,6 +57,7 @@ class Icons:
     # Quick Tools Strip
     POWER = "\uE7E8"        # Keep Awake / Caffeine
     MIC = "\uE720"          # Microphone
+    MIC_MUTE = "\uEC54"     # Microphone Mute
     SHIELD = "\uEA18"       # Focus Shield
     SNIP = "\uE7C8"         # Screen Snip
     COLOR = "\uEF3C"        # Color Eyedropper

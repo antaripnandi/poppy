@@ -23,7 +23,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
-    QStackedWidget, QPushButton, QFrame, QGraphicsOpacityEffect
+    QStackedWidget, QPushButton, QFrame, QGraphicsOpacityEffect, QMenu
 )
 
 from poppy.ui.components import (
@@ -42,6 +42,10 @@ from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
+from poppy.core.system_tools import (
+    CaffeineManager, ColorEyedropperOverlay,
+    launch_screen_snip, lock_workstation, launch_windows_search
+)
 
 
 class NotchState(Enum):
@@ -92,6 +96,8 @@ class DynamicNotchWindow(QWidget):
         self.discord_rpc = DiscordRPCManager(config=rpc_cfg, parent=self)
         self.audio_ctrl = SystemAudioController()
         self.bright_ctrl = SystemBrightnessController()
+        self.caffeine = CaffeineManager()
+        self._eyedropper_overlay = None
 
         # Sizing and Themes
         self._load_appearance_config()
@@ -469,8 +475,9 @@ class DynamicNotchWindow(QWidget):
         self.lbl_hdr_bat.setStyleSheet("font-size: 10px; color: #94a3b8; border: none; background: transparent;")
         cap_layout.addWidget(self.lbl_hdr_bat)
 
-        btn_caffeine = IconButton(Icons.POWER, "Keep Awake", size=24, font_size=11, is_fluent=True)
-        cap_layout.addWidget(btn_caffeine)
+        self.btn_hdr_caffeine = IconButton(Icons.POWER, "Keep Awake: OFF", size=24, font_size=11, is_fluent=True)
+        self.btn_hdr_caffeine.clicked.connect(self._toggle_caffeine)
+        cap_layout.addWidget(self.btn_hdr_caffeine)
 
         btn_settings = IconButton(Icons.SETTINGS, "Settings", size=24, font_size=11, is_fluent=True)
         btn_settings.clicked.connect(self.open_settings)
@@ -500,6 +507,14 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.btn_vol_mute.clicked.connect(self._on_mute_clicked)
         self.tab_home.slider_bright.valueChanged.connect(self._on_brightness_slider_changed)
         self.tab_home.btn_bright_icon.clicked.connect(self._on_brightness_cycle_clicked)
+        self.tab_home.caffeine_toggle_requested.connect(self._toggle_caffeine)
+        self.tab_home.mic_mute_toggle_requested.connect(self._toggle_mic_mute)
+        self.tab_home.focus_shield_requested.connect(self._toggle_focus_shield)
+        self.tab_home.screen_snip_requested.connect(self._trigger_screen_snip)
+        self.tab_home.eyedropper_requested.connect(self._trigger_color_eyedropper)
+        self.tab_home.quick_search_requested.connect(self._trigger_quick_search)
+        self.tab_home.lock_workstation_requested.connect(self._lock_workstation)
+        self.tab_home.player_menu_requested.connect(self._show_player_dropdown)
         self.tab_stack.addWidget(self.tab_home)
 
         # 1: Music Tab
@@ -614,6 +629,10 @@ class DynamicNotchWindow(QWidget):
             if force or not self.tab_home.slider_bright.isSliderDown():
                 bright = self.bright_ctrl.get_brightness()
                 self.tab_home.set_brightness_display(bright)
+
+            # Mic mute sync
+            mic_muted = self.audio_ctrl.get_mic_mute()
+            self._update_mic_button_ui(mic_muted)
         except Exception:
             pass
 
@@ -639,6 +658,157 @@ class DynamicNotchWindow(QWidget):
     def _on_brightness_cycle_clicked(self):
         next_val = self.bright_ctrl.cycle_brightness()
         self.tab_home.set_brightness_display(next_val)
+
+    def _toggle_caffeine(self):
+        is_on = self.caffeine.toggle()
+        self._update_caffeine_ui(is_on)
+
+    def _update_caffeine_ui(self, is_on: bool):
+        if is_on:
+            tip = "Keep Awake: ON (Display & PC won't sleep)"
+            style = """
+                background: rgba(245, 158, 11, 0.18);
+                border: 1px solid rgba(245, 158, 11, 0.4);
+                border-radius: 6px;
+                color: #fbbf24;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """
+        else:
+            tip = "Keep Awake: OFF (Click to prevent sleep)"
+            style = """
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """
+        self.tab_home.btn_act_caffeine.setStyleSheet(style)
+        self.tab_home.btn_act_caffeine.setToolTip(tip)
+        if hasattr(self, 'btn_hdr_caffeine') and self.btn_hdr_caffeine:
+            self.btn_hdr_caffeine.setStyleSheet(style)
+            self.btn_hdr_caffeine.setToolTip(tip)
+
+    def _toggle_mic_mute(self):
+        new_state = self.audio_ctrl.toggle_mic_mute()
+        self._update_mic_button_ui(new_state)
+
+    def _update_mic_button_ui(self, is_muted: bool):
+        if is_muted:
+            self.tab_home.btn_act_mic.setText(Icons.MIC_MUTE)
+            self.tab_home.btn_act_mic.setToolTip("Microphone: MUTED (Click to Unmute)")
+            self.tab_home.btn_act_mic.setStyleSheet("""
+                background: rgba(239, 68, 68, 0.15);
+                border: 1px solid rgba(239, 68, 68, 0.35);
+                border-radius: 6px;
+                color: #f87171;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+        else:
+            self.tab_home.btn_act_mic.setText(Icons.MIC)
+            self.tab_home.btn_act_mic.setToolTip("Microphone: LIVE (Click to Mute)")
+            self.tab_home.btn_act_mic.setStyleSheet("""
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+
+    def _toggle_focus_shield(self):
+        if self.pomodoro.is_running:
+            self.pomodoro.pause()
+            self.tab_home.btn_act_shield.setStyleSheet("""
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+            self.tab_home.btn_act_shield.setToolTip("Focus Shield: OFF (Click to Start Focus Sprint)")
+        else:
+            self.pomodoro.start()
+            self.tab_home.btn_act_shield.setStyleSheet(f"""
+                background: rgba(99, 102, 241, 0.2);
+                border: 1px solid {self._theme['accent']};
+                border-radius: 6px;
+                color: #a5b4fc;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+            self.tab_home.btn_act_shield.setToolTip("Focus Shield: ACTIVE (Focus Sprint in progress)")
+            QTimer.singleShot(300, self._collapse_to_pill)
+
+    def _trigger_screen_snip(self):
+        self._collapse_to_pill()
+        QTimer.singleShot(250, launch_screen_snip)
+
+    def _trigger_color_eyedropper(self):
+        self._collapse_to_pill()
+        def _open_eyedropper():
+            self._eyedropper_overlay = ColorEyedropperOverlay()
+            self._eyedropper_overlay.color_picked.connect(self._on_color_picked)
+            self._eyedropper_overlay.show()
+        QTimer.singleShot(250, _open_eyedropper)
+
+    def _on_color_picked(self, hex_color: str):
+        self.tab_home.txt_notes.setPlaceholderText(f"Copied {hex_color} to clipboard!")
+        QTimer.singleShot(4000, lambda: self.tab_home.txt_notes.setPlaceholderText("Jot down quick thought..."))
+
+    def _trigger_quick_search(self):
+        if self.state != NotchState.EXPANDED:
+            self._transition_to(NotchState.EXPANDED)
+        self._switch_tab(0)
+        self.tab_home.input_calc.setFocus()
+        self.tab_home.input_calc.selectAll()
+
+    def _lock_workstation(self):
+        lock_workstation()
+
+    def _show_player_dropdown(self):
+        sessions = self.media_manager.get_sessions()
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #181d27;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                padding: 4px;
+                color: #f1f5f9;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 6px 18px 6px 10px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
+        """)
+        active_idx = self.media_manager.get_active_index()
+        for s in sessions:
+            idx = s["index"]
+            name = s["display_name"]
+            prefix = "✓  " if idx == active_idx else "    "
+            action = menu.addAction(f"{prefix}{name}")
+            action.triggered.connect(lambda checked=False, i=idx, n=name: self._on_player_session_selected(i, n))
+
+        if not sessions:
+            act = menu.addAction("No active media sessions")
+            act.setEnabled(False)
+
+        btn = self.tab_home.btn_player_drop
+        pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
+        menu.exec(pos)
+
+    def _on_player_session_selected(self, idx: int, name: str):
+        self.media_manager.select_session(idx)
+        self.tab_home.btn_player_drop.setText(f"Speakers ({name} ▾)")
 
     def _on_pomo_time_updated(self, rem_sec, total_sec, fmt_time, progress):
         self.tab_timer.lbl_time.setText(fmt_time)

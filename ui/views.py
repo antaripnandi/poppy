@@ -27,6 +27,14 @@ class HomeTabView(QWidget):
     tear_off_requested = Signal(str)
     session_select_requested = Signal(int)
     pin_requested = Signal(str)
+    caffeine_toggle_requested = Signal()
+    mic_mute_toggle_requested = Signal()
+    focus_shield_requested = Signal()
+    screen_snip_requested = Signal()
+    eyedropper_requested = Signal()
+    quick_search_requested = Signal()
+    lock_workstation_requested = Signal()
+    player_menu_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -184,6 +192,8 @@ class HomeTabView(QWidget):
             }
         """)
         self.btn_dev_lock = QPushButton("Lock")
+        self.btn_dev_lock.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_dev_lock.setToolTip("Lock Windows Workstation (Win + L)")
         self.btn_dev_lock.setStyleSheet("""
             QPushButton {
                 background: rgba(255, 255, 255, 0.05);
@@ -194,7 +204,13 @@ class HomeTabView(QWidget):
                 font-weight: 500;
                 padding: 3px 8px;
             }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
         """)
+        self.btn_dev_lock.clicked.connect(self.lock_workstation_requested.emit)
+        self.btn_player_drop.clicked.connect(self.player_menu_requested.emit)
 
         # Transport icons inside controls card
         self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous", size=22, font_size=10, is_fluent=True)
@@ -214,17 +230,31 @@ class HomeTabView(QWidget):
         # Quick Actions Row (home-v2.png bottom pill strip)
         row_actions = QHBoxLayout()
         row_actions.setSpacing(6)
-        action_icons = [
-            (Icons.POWER, "Keep Awake (Caffeine)"),
-            (Icons.MIC, "Mute Microphone"),
-            (Icons.SHIELD, "Focus Shield"),
-            (Icons.SNIP, "Screen Snip"),
-            (Icons.COLOR, "Color Eyedropper"),
-            (Icons.SEARCH, "Quick Search / Calc")
-        ]
-        for glyph, tip in action_icons:
-            btn_act = IconButton(glyph, tip, size=24, font_size=11, is_fluent=True)
-            row_actions.addWidget(btn_act)
+
+        self.btn_act_caffeine = IconButton(Icons.POWER, "Keep Awake (Caffeine: OFF)", size=24, font_size=11, is_fluent=True)
+        self.btn_act_caffeine.clicked.connect(self.caffeine_toggle_requested.emit)
+        row_actions.addWidget(self.btn_act_caffeine)
+
+        self.btn_act_mic = IconButton(Icons.MIC, "Microphone (Mute / Unmute)", size=24, font_size=11, is_fluent=True)
+        self.btn_act_mic.clicked.connect(self.mic_mute_toggle_requested.emit)
+        row_actions.addWidget(self.btn_act_mic)
+
+        self.btn_act_shield = IconButton(Icons.SHIELD, "Focus Shield (Toggle Pomodoro Focus Sprint)", size=24, font_size=11, is_fluent=True)
+        self.btn_act_shield.clicked.connect(self.focus_shield_requested.emit)
+        row_actions.addWidget(self.btn_act_shield)
+
+        self.btn_act_snip = IconButton(Icons.SNIP, "Screen Snip (Win + Shift + S)", size=24, font_size=11, is_fluent=True)
+        self.btn_act_snip.clicked.connect(self.screen_snip_requested.emit)
+        row_actions.addWidget(self.btn_act_snip)
+
+        self.btn_act_eyedropper = IconButton(Icons.COLOR, "Color Eyedropper (Pick Screen Color)", size=24, font_size=11, is_fluent=True)
+        self.btn_act_eyedropper.clicked.connect(self.eyedropper_requested.emit)
+        row_actions.addWidget(self.btn_act_eyedropper)
+
+        self.btn_act_search = IconButton(Icons.SEARCH, "Quick Search / Calculator", size=24, font_size=11, is_fluent=True)
+        self.btn_act_search.clicked.connect(self.quick_search_requested.emit)
+        row_actions.addWidget(self.btn_act_search)
+
         row_actions.addStretch()
         l_ctrl.addLayout(row_actions)
 
@@ -575,7 +605,10 @@ class MusicTabView(QWidget):
         transport_row.setSpacing(14)
         transport_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        self.btn_shuffle = IconButton(Icons.SHUFFLE, "Shuffle", size=26, font_size=11, is_fluent=True)
+        self.btn_shuffle = IconButton(Icons.SHUFFLE, "Shuffle: OFF", size=26, font_size=11, is_fluent=True)
+        self._is_shuffle = False
+        self.btn_shuffle.clicked.connect(self._toggle_shuffle)
+
         self.btn_prev = IconButton(Icons.PREV, "Previous Track", size=28, font_size=12, is_fluent=True)
         self.btn_play = QPushButton(Icons.PAUSE)
         self.btn_play.setFixedSize(38, 38)
@@ -595,7 +628,9 @@ class MusicTabView(QWidget):
         """)
 
         self.btn_next = IconButton(Icons.NEXT, "Next Track", size=28, font_size=12, is_fluent=True)
-        self.btn_repeat = IconButton(Icons.REPEAT, "Repeat", size=26, font_size=11, is_fluent=True)
+        self.btn_repeat = IconButton(Icons.REPEAT, "Repeat: OFF", size=26, font_size=11, is_fluent=True)
+        self._is_repeat = False
+        self.btn_repeat.clicked.connect(self._toggle_repeat)
 
         transport_row.addWidget(self.btn_shuffle)
         transport_row.addWidget(self.btn_prev)
@@ -678,6 +713,20 @@ class MusicTabView(QWidget):
                 opacity: 0.9;
             }}
         """)
+
+    def _toggle_shuffle(self):
+        self._is_shuffle = not self._is_shuffle
+        color = "#ffffff" if self._is_shuffle else "#94a3b8"
+        bg = "rgba(255, 255, 255, 0.12)" if self._is_shuffle else "transparent"
+        self.btn_shuffle.setStyleSheet(f"background: {bg}; border-radius: 6px; color: {color}; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 11px;")
+        self.btn_shuffle.setToolTip(f"Shuffle: {'ON' if self._is_shuffle else 'OFF'}")
+
+    def _toggle_repeat(self):
+        self._is_repeat = not self._is_repeat
+        color = "#ffffff" if self._is_repeat else "#94a3b8"
+        bg = "rgba(255, 255, 255, 0.12)" if self._is_repeat else "transparent"
+        self.btn_repeat.setStyleSheet(f"background: {bg}; border-radius: 6px; color: {color}; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 11px;")
+        self.btn_repeat.setToolTip(f"Repeat: {'ON' if self._is_repeat else 'OFF'}")
 
     def update_media(self, data: dict):
         title = data.get("title", "No Media Playing")

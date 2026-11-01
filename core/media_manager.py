@@ -220,6 +220,14 @@ class MediaManager(QObject):
             sessions_summary = [s.to_dict() for s in self.sessions]
             self.sessions_updated.emit(sessions_summary, self._selected_index)
 
+    def get_sessions(self) -> list[dict]:
+        """Returns list of currently active media sessions as dicts."""
+        return [s.to_dict() for s in self.sessions]
+
+    def get_active_index(self) -> int:
+        """Returns the current active session index."""
+        return self._selected_index
+
     def next_session(self):
         """Cycle to next active media session."""
         if self.sessions:
