@@ -2,11 +2,12 @@
 Poppy Windows GSMTC Media Manager
 Interacts with Windows 11/10 Global System Media Transport Controls
 for Spotify, YouTube, Chrome, Edge, Apple Music, etc.
-Supports multi-session tracking and switching between active media sources.
+Supports multi-session tracking, seeking, and live playback timeline telemetry.
 """
 
 import asyncio
 import threading
+import time
 from collections import OrderedDict
 from PySide6.QtCore import QObject, Signal
 
@@ -48,7 +49,12 @@ def format_source_name(app_id: str, title: str = "") -> str:
 
 
 class SessionData:
-    def __init__(self, index: int, session_obj, app_id: str, title: str, artist: str, album: str, is_playing: bool, thumbnail_bytes: bytes = None):
+    def __init__(
+        self, index: int, session_obj, app_id: str, title: str,
+        artist: str, album: str, is_playing: bool, thumbnail_bytes: bytes = None,
+        position_sec: float = 0.0, duration_sec: float = 0.0,
+        last_updated_ts: float = 0.0, can_seek: bool = False
+    ):
         self.index = index
         self.session_obj = session_obj
         self.app_id = app_id
@@ -58,6 +64,10 @@ class SessionData:
         self.album = album or ""
         self.is_playing = is_playing
         self.thumbnail_bytes = thumbnail_bytes
+        self.position_sec = position_sec
+        self.duration_sec = duration_sec
+        self.last_updated_ts = last_updated_ts
+        self.can_seek = can_seek
 
     def to_dict(self) -> dict:
         return {
@@ -68,14 +78,19 @@ class SessionData:
             "artist": self.artist,
             "album": self.album,
             "is_playing": self.is_playing,
-            "thumbnail_bytes": self.thumbnail_bytes
+            "thumbnail_bytes": self.thumbnail_bytes,
+            "position_sec": self.position_sec,
+            "duration_sec": self.duration_sec,
+            "last_updated_ts": self.last_updated_ts,
+            "can_seek": self.can_seek
         }
 
 
 class MediaManager(QObject):
     media_changed = Signal(dict)
     playback_changed = Signal(bool)
-    sessions_updated = Signal(list, int)  # (list of session dicts, active_index)
+    sessions_updated = Signal(list, int)           # (list of session dicts, active_index)
+    timeline_changed = Signal(float, float, bool)   # position_sec, duration_sec, is_playing
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -121,7 +136,7 @@ class MediaManager(QObject):
                 await self._refresh_all_sessions()
             except Exception:
                 pass
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.75)
 
     async def _refresh_all_sessions(self):
         if not self._session_manager:
@@ -141,6 +156,21 @@ class MediaManager(QObject):
                 artist = props.artist if props and props.artist else ""
                 album = props.album_title if props and props.album_title else ""
 
+                # Query timeline properties (position, duration, seeking)
+                pos_sec = 0.0
+                dur_sec = 0.0
+                last_up = 0.0
+                can_seek = False
+                try:
+                    timeline = s.get_timeline_properties()
+                    if timeline and timeline.end_time and timeline.end_time.total_seconds() > 0:
+                        pos_sec = max(0.0, timeline.position.total_seconds())
+                        dur_sec = max(0.0, timeline.end_time.total_seconds())
+                        last_up = timeline.last_updated_time.timestamp() if timeline.last_updated_time else time.time()
+                        can_seek = True
+                except Exception:
+                    pass
+
                 # Cache and load thumbnail with bounded LRU eviction
                 cache_key = (app_id, title)
                 thumb_bytes = self._thumb_cache.get(cache_key)
@@ -159,7 +189,11 @@ class MediaManager(QObject):
                     artist=artist,
                     album=album,
                     is_playing=is_playing,
-                    thumbnail_bytes=thumb_bytes
+                    thumbnail_bytes=thumb_bytes,
+                    position_sec=pos_sec,
+                    duration_sec=dur_sec,
+                    last_updated_ts=last_up,
+                    can_seek=can_seek
                 )
                 new_sessions.append(data)
             except Exception:
@@ -179,11 +213,16 @@ class MediaManager(QObject):
                         "artist": "System Audio",
                         "album": "",
                         "is_playing": False,
-                        "thumbnail_bytes": None
+                        "thumbnail_bytes": None,
+                        "position_sec": 0.0,
+                        "duration_sec": 0.0,
+                        "last_updated_ts": 0.0,
+                        "can_seek": False
                     }
                     self.media_changed.emit(empty_data)
                     self.playback_changed.emit(False)
                     self.sessions_updated.emit([], 0)
+                    self.timeline_changed.emit(0.0, 0.0, False)
                     self._last_state_hash = "empty"
                 return
 
@@ -194,7 +233,7 @@ class MediaManager(QObject):
             self.sessions = new_sessions
             curr = self.sessions[self._selected_index]
 
-            # Compute fingerprint to eliminate duplicate 1Hz signal emissions
+            # Compute fingerprint for track/session changes
             state_fingerprint = (
                 len(self.sessions),
                 self._selected_index,
@@ -210,6 +249,9 @@ class MediaManager(QObject):
                 self.sessions_updated.emit(sessions_summary, self._selected_index)
                 self.media_changed.emit(curr.to_dict())
                 self.playback_changed.emit(curr.is_playing)
+
+            # Always emit fresh timeline progress
+            self.timeline_changed.emit(curr.position_sec, curr.duration_sec, curr.is_playing)
 
     async def _read_stream(self, stream_ref) -> bytes:
         try:
@@ -235,6 +277,7 @@ class MediaManager(QObject):
                 self._last_state_hash = None  # Force immediate refresh
                 self.media_changed.emit(curr.to_dict())
                 self.playback_changed.emit(curr.is_playing)
+                self.timeline_changed.emit(curr.position_sec, curr.duration_sec, curr.is_playing)
                 sessions_summary = [s.to_dict() for s in self.sessions]
                 self.sessions_updated.emit(sessions_summary, self._selected_index)
 
@@ -247,6 +290,40 @@ class MediaManager(QObject):
         """Returns the current active session index."""
         with self._lock:
             return self._selected_index
+
+    def get_timeline(self) -> tuple[float, float, bool]:
+        """Returns (current_position_seconds, total_duration_seconds, is_playing)."""
+        with self._lock:
+            if not self.sessions or self._selected_index >= len(self.sessions):
+                return (0.0, 0.0, False)
+            s = self.sessions[self._selected_index]
+            pos = s.position_sec
+            dur = s.duration_sec
+            is_playing = s.is_playing
+            if is_playing and s.last_updated_ts > 0 and dur > 0:
+                elapsed = max(0.0, time.time() - s.last_updated_ts)
+                pos = min(dur, pos + elapsed)
+            return (pos, dur, is_playing)
+
+    def seek(self, position_seconds: float):
+        """Seek active media session to position in seconds."""
+        with self._lock:
+            if not self._loop or not self.sessions or self._selected_index >= len(self.sessions):
+                return
+            target_session = self.sessions[self._selected_index].session_obj
+            curr = self.sessions[self._selected_index]
+            curr.position_sec = position_seconds
+            curr.last_updated_ts = time.time()
+
+        async def _do_seek():
+            try:
+                ticks = int(position_seconds * 10_000_000)
+                await target_session.try_change_playback_position_async(ticks)
+            except Exception as e:
+                print(f"[Poppy Media] Seek error: {e}")
+
+        asyncio.run_coroutine_threadsafe(_do_seek(), self._loop)
+        self.timeline_changed.emit(position_seconds, curr.duration_sec, curr.is_playing)
 
     def next_session(self):
         """Cycle to next active media session."""

@@ -7,6 +7,7 @@ import os
 import ast
 import operator as op
 import re
+import time
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer
 from PySide6.QtGui import QPixmap, QImage
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.components import (
     IconButton, CircularProgressRing, AudioVisualizerBars, MetricLabel,
-    CardFrame, SourcePill, DraggableThumbnail
+    CardFrame, SourcePill, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget
 )
 from poppy.ui.icons import Icons
 
@@ -577,14 +578,26 @@ class HomeTabView(QWidget):
 
 
 class MusicTabView(QWidget):
-    """Full dedicated Now Playing view matching now-playing-v2.png."""
+    """Full dedicated Now Playing view matching now-playing-v2.png with Spotify-grade animated lyrics."""
     session_select_requested = Signal(int)
+    seek_requested = Signal(float)
 
     def __init__(self, parent=None, accent="#6e9bff"):
         super().__init__(parent)
         self._accent = accent
         self._source_pills = []
+        self._pos_sec = 0.0
+        self._dur_sec = 0.0
+        self._is_playing = False
+        self._last_tick_ts = time.time()
+        self._is_user_scrubbing = False
+
         self._init_ui()
+
+        self._playback_timer = QTimer(self)
+        self._playback_timer.setInterval(200)
+        self._playback_timer.timeout.connect(self._on_local_playback_tick)
+        self._playback_timer.start()
 
     def _init_ui(self):
         v_main = QVBoxLayout(self)
@@ -609,11 +622,11 @@ class MusicTabView(QWidget):
         session_row.addStretch()
         v_main.addLayout(session_row)
 
-        # Center Content (Left: Album Art, Middle: Controls, Right: Lyrics/Notes)
+        # Center Content (Left: Album Art, Middle: Controls, Right: Spotify Animated Lyrics)
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(18)
+        main_layout.setSpacing(16)
 
-        # Left: Album Art Card (140x140)
+        # Left: Album Art Card (144x144)
         self.art_container = CardFrame(self)
         self.art_container.setFixedSize(144, 144)
         art_layout = QVBoxLayout(self.art_container)
@@ -625,18 +638,18 @@ class MusicTabView(QWidget):
         art_layout.addWidget(self.lbl_large_art)
         main_layout.addWidget(self.art_container)
 
-        # Center: Track Metadata, Scrubber, Transport Controls (now-playing-v2)
+        # Center: Track Metadata, Scrubber, Transport Controls
         info_col = QVBoxLayout()
         info_col.setContentsMargins(0, 4, 0, 4)
         info_col.setSpacing(5)
 
-        self.lbl_title = QLabel("7 Years")
+        self.lbl_title = QLabel("No Media Playing")
         self.lbl_title.setStyleSheet("QLabel { font-size: 17px; font-weight: 700; color: #f8fafc; background: transparent; border: none; }")
-        self.lbl_artist = QLabel("Lukas Graham")
+        self.lbl_artist = QLabel("Desktop Audio")
         self.lbl_artist.setStyleSheet("QLabel { font-size: 12px; color: #94a3b8; background: transparent; border: none; }")
 
         source_row = QHBoxLayout()
-        self.lbl_source = QLabel("Chrome")
+        self.lbl_source = QLabel("Desktop Audio")
         self.lbl_source.setStyleSheet("QLabel { font-size: 10px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; background: transparent; border: none; }")
         self.bars = AudioVisualizerBars(self)
         source_row.addWidget(self.lbl_source)
@@ -647,16 +660,20 @@ class MusicTabView(QWidget):
         info_col.addWidget(self.lbl_artist)
         info_col.addLayout(source_row)
 
-        # Scrubber Progress Slider with white thumb
-        self.scrubber = QSlider(Qt.Orientation.Horizontal)
+        # Scrubber Progress Slider with interactive click & seek
+        self.scrubber = ClickableSlider(Qt.Orientation.Horizontal)
         self.scrubber.setRange(0, 100)
-        self.scrubber.setValue(45)
+        self.scrubber.setValue(0)
+        self.scrubber.seek_clicked.connect(self._on_scrubber_clicked)
+        self.scrubber.sliderPressed.connect(self._on_scrubber_pressed)
+        self.scrubber.sliderMoved.connect(self._on_scrubber_moved)
+        self.scrubber.sliderReleased.connect(self._on_scrubber_released)
 
         time_row = QHBoxLayout()
-        self.lbl_elapsed = QLabel("01:46")
-        self.lbl_elapsed.setStyleSheet("QLabel { font-size: 10px; color: #64748b; background: transparent; border: none; }")
-        self.lbl_remaining = QLabel("-02:10")
-        self.lbl_remaining.setStyleSheet("QLabel { font-size: 10px; color: #64748b; background: transparent; border: none; }")
+        self.lbl_elapsed = QLabel("00:00")
+        self.lbl_elapsed.setStyleSheet("QLabel { font-size: 10px; color: #94a3b8; background: transparent; border: none; }")
+        self.lbl_remaining = QLabel("-00:00")
+        self.lbl_remaining.setStyleSheet("QLabel { font-size: 10px; color: #94a3b8; background: transparent; border: none; }")
         time_row.addWidget(self.lbl_elapsed)
         time_row.addStretch()
         time_row.addWidget(self.lbl_remaining)
@@ -719,30 +736,99 @@ class MusicTabView(QWidget):
         info_col.addLayout(transport_row)
         main_layout.addLayout(info_col, stretch=1)
 
-        # Right: Active Media Details & Telemetry Card
-        lyrics_card = CardFrame(self)
-        lyrics_card.setFixedWidth(200)
-        l_lyr = QVBoxLayout(lyrics_card)
-        l_lyr.setContentsMargins(12, 10, 12, 10)
-        l_lyr.setSpacing(6)
+        # Right: Spotify Animated Lyrics View (280px width)
+        self.lyrics_widget = SpotifyLyricsWidget(self)
+        self.lyrics_widget.setFixedWidth(280)
+        self.lyrics_widget.seek_requested.connect(self.seek_requested.emit)
+        main_layout.addWidget(self.lyrics_widget)
 
-        lbl_lyr_hdr = QLabel("MEDIA DETAILS")
-        lbl_lyr_hdr.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; background: transparent; border: none; }")
-        l_lyr.addWidget(lbl_lyr_hdr)
+        # Backwards compatibility dummy labels
+        self.txt_lyrics = QLabel(self)
+        self.txt_lyrics.setVisible(False)
+        self.lbl_album_info = QLabel(self)
+        self.lbl_album_info.setVisible(False)
 
-        self.txt_lyrics = QLabel("No track currently playing.\nOpen Spotify, YouTube, or Edge to play media.")
-        self.txt_lyrics.setStyleSheet("QLabel { font-size: 11px; line-height: 1.4; color: #94a3b8; background: transparent; border: none; }")
-        self.txt_lyrics.setWordWrap(True)
-        l_lyr.addWidget(self.txt_lyrics)
-
-        self.lbl_album_info = QLabel("")
-        self.lbl_album_info.setStyleSheet("QLabel { font-size: 10px; color: #64748b; background: transparent; border: none; }")
-        self.lbl_album_info.setWordWrap(True)
-        l_lyr.addWidget(self.lbl_album_info)
-        l_lyr.addStretch()
-
-        main_layout.addWidget(lyrics_card, stretch=1)
         v_main.addLayout(main_layout)
+
+    def _on_scrubber_clicked(self, val: int):
+        self._pos_sec = float(val)
+        self._update_time_labels()
+        self.seek_requested.emit(float(val))
+
+    def _on_scrubber_pressed(self):
+        self._is_user_scrubbing = True
+
+    def _on_scrubber_moved(self, val: int):
+        self._pos_sec = float(val)
+        self._update_time_labels()
+
+    def _on_scrubber_released(self):
+        self._is_user_scrubbing = False
+        val = self.scrubber.value()
+        self._pos_sec = float(val)
+        self._update_time_labels()
+        self.seek_requested.emit(float(val))
+
+    def _format_time(self, seconds: float) -> str:
+        s = int(round(max(0.0, seconds)))
+        mins = s // 60
+        secs = s % 60
+        return f"{mins:02d}:{secs:02d}"
+
+    def _update_time_labels(self):
+        self.lbl_elapsed.setText(self._format_time(self._pos_sec))
+        rem = max(0.0, self._dur_sec - self._pos_sec)
+        self.lbl_remaining.setText(f"-{self._format_time(rem)}")
+
+    def update_timeline(self, pos_sec: float, dur_sec: float, is_playing: bool):
+        self._is_playing = is_playing
+        self._last_tick_ts = time.time()
+        if not self._is_user_scrubbing:
+            self._pos_sec = pos_sec
+            self._dur_sec = dur_sec
+            if dur_sec > 0:
+                self.scrubber.setEnabled(True)
+                self.scrubber.blockSignals(True)
+                self.scrubber.setRange(0, int(dur_sec))
+                self.scrubber.setValue(int(pos_sec))
+                self.scrubber.blockSignals(False)
+                self._update_time_labels()
+            else:
+                self.scrubber.setEnabled(False)
+                self.lbl_elapsed.setText("00:00")
+                self.lbl_remaining.setText("--:--")
+            self.lyrics_widget.update_playback_time(self._pos_sec)
+
+    def _on_local_playback_tick(self):
+        if self._is_playing and self._dur_sec > 0 and not self._is_user_scrubbing:
+            now = time.time()
+            delta = now - self._last_tick_ts
+            self._last_tick_ts = now
+            self._pos_sec = min(self._dur_sec, self._pos_sec + delta)
+            self.scrubber.blockSignals(True)
+            self.scrubber.setValue(int(self._pos_sec))
+            self.scrubber.blockSignals(False)
+            self._update_time_labels()
+            self.lyrics_widget.update_playback_time(self._pos_sec)
+
+    def set_playback_state(self, is_playing: bool):
+        self._is_playing = is_playing
+        self._last_tick_ts = time.time()
+        self.lyrics_widget.set_playback_state(is_playing)
+
+    def set_lyrics(self, track_key: str, plain_lyrics: str, synced_lines: list):
+        if synced_lines:
+            self.lyrics_widget.set_synced_lyrics(synced_lines)
+        elif plain_lyrics:
+            self.lyrics_widget.set_plain_lyrics(plain_lyrics)
+        else:
+            self.lyrics_widget.set_not_found(self.lbl_title.text(), self.lbl_artist.text())
+
+    def set_lyrics_loading(self, title: str, artist: str):
+        self.lyrics_widget.set_loading(title, artist)
+
+    def set_lyrics_not_found(self, track_key: str):
+        self.lyrics_widget.set_not_found(self.lbl_title.text(), self.lbl_artist.text())
 
     def update_sessions_list(self, sessions: list, active_index: int, accent: str = "#6e9bff"):
         while self.pills_layout.count() > 0:
@@ -801,17 +887,14 @@ class MusicTabView(QWidget):
         title = data.get("title", "No Media Playing")
         artist = data.get("artist", "Desktop Audio")
         source = data.get("display_name") or data.get("source_app", "SYSTEM")
-        album = data.get("album", "")
         self.lbl_title.setText(title)
         self.lbl_artist.setText(artist)
         self.lbl_source.setText(source)
 
-        if title and title != "No Media Playing":
-            self.txt_lyrics.setText(f"{title}\nby {artist}")
-            self.lbl_album_info.setText(f"Album: {album}\nSource: {source}" if album else f"Source: {source}")
-        else:
-            self.txt_lyrics.setText("No track currently playing.\nOpen Spotify, YouTube, or Edge to play media.")
-            self.lbl_album_info.setText("")
+        pos_sec = data.get("position_sec", 0.0)
+        dur_sec = data.get("duration_sec", 0.0)
+        is_playing = data.get("is_playing", False)
+        self.update_timeline(pos_sec, dur_sec, is_playing)
 
         thumb_bytes = data.get("thumbnail_bytes")
         if thumb_bytes:

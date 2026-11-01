@@ -11,12 +11,13 @@ States:
 """
 
 import os
+import ctypes
 import psutil
 from enum import Enum
 from datetime import datetime
 
 from PySide6.QtCore import (
-    Qt, QRect, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer
+    Qt, QRect, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer, QEvent
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor
@@ -38,6 +39,7 @@ from poppy.ui.settings_window import SettingsWindow
 from poppy.ui.styles import DEFAULT_THEME, get_theme
 from poppy.core.pomodoro import PomodoroManager
 from poppy.core.media_manager import MediaManager
+from poppy.core.lyrics_manager import LyricsManager
 from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
@@ -100,6 +102,7 @@ class DynamicNotchWindow(QWidget):
         self.caffeine = CaffeineManager()
         self._eyedropper_overlay = None
         self.weather_manager = WeatherManager(parent=self)
+        self.lyrics_manager = LyricsManager(parent=self)
 
         # Sizing and Themes
         self._load_appearance_config()
@@ -133,6 +136,11 @@ class DynamicNotchWindow(QWidget):
         self._island_timer.setSingleShot(True)
         self._island_timer.setInterval(4500)
         self._island_timer.timeout.connect(self._on_island_timeout)
+
+        # Click outside detector for auto-dismissing expanded drawer
+        self._click_outside_timer = QTimer(self)
+        self._click_outside_timer.setInterval(35)
+        self._click_outside_timer.timeout.connect(self._check_click_outside)
 
         # Periodic Timers
         self._sys_timer = QTimer(self)
@@ -492,10 +500,6 @@ class DynamicNotchWindow(QWidget):
         btn_settings.clicked.connect(self.open_settings)
         cap_layout.addWidget(btn_settings)
 
-        btn_close = IconButton(Icons.CLOSE, "Close (Esc)", size=24, font_size=10, is_fluent=True)
-        btn_close.clicked.connect(self._collapse_to_pill)
-        cap_layout.addWidget(btn_close)
-
         header_bar.addWidget(capsule)
         v_exp_layout.addLayout(header_bar)
 
@@ -538,6 +542,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_music.btn_next_session.clicked.connect(self.media_manager.next_session)
         self.tab_music.vol_slider.valueChanged.connect(self._on_volume_slider_changed)
         self.tab_music.btn_vol_music.clicked.connect(self._on_mute_clicked)
+        self.tab_music.seek_requested.connect(self.media_manager.seek)
         self.tab_stack.addWidget(self.tab_music)
 
         # 2: Timer Tab
@@ -580,6 +585,11 @@ class DynamicNotchWindow(QWidget):
         self.media_manager.media_changed.connect(self._on_media_changed)
         self.media_manager.playback_changed.connect(self._on_playback_changed)
         self.media_manager.sessions_updated.connect(self._on_sessions_updated)
+        self.media_manager.timeline_changed.connect(self.tab_music.update_timeline)
+
+        # Lyrics
+        self.lyrics_manager.lyrics_loaded.connect(self.tab_music.set_lyrics)
+        self.lyrics_manager.lyrics_not_found.connect(self.tab_music.set_lyrics_not_found)
 
         # Shelf & Screenshot
         self.drop_shelf.shelf_updated.connect(self._on_shelf_updated)
@@ -878,6 +888,13 @@ class DynamicNotchWindow(QWidget):
         # Music Tab update
         self.tab_music.update_media(data)
 
+        # Synchronized & Plain Lyrics (LRCLIB asynchronous fetch)
+        if title and title not in ("No Media Playing", "Unknown Title", ""):
+            self.tab_music.set_lyrics_loading(title, artist)
+            self.lyrics_manager.request_lyrics(title, artist, data.get("album", ""))
+        else:
+            self.tab_music.set_lyrics_not_found(title)
+
         # Thumbnails
         thumb_bytes = data.get("thumbnail_bytes")
         if thumb_bytes:
@@ -902,6 +919,8 @@ class DynamicNotchWindow(QWidget):
         self.coll_visualizer.set_playing(is_playing)
         self.tab_home.music_bars.set_playing(is_playing)
         self.tab_music.bars.set_playing(is_playing)
+        if hasattr(self.tab_music, "set_playback_state"):
+            self.tab_music.set_playback_state(is_playing)
 
         play_symbol = Icons.PAUSE if is_playing else Icons.PLAY
         self.btn_peek_play.setText(play_symbol)
@@ -1206,7 +1225,64 @@ class DynamicNotchWindow(QWidget):
     def _collapse_to_pill(self):
         self._leave_timer.stop()
         self._island_timer.stop()
+        self._click_outside_timer.stop()
         self._transition_to(NotchState.COLLAPSED)
+
+    def _start_click_outside_timer(self):
+        if self.state == NotchState.EXPANDED:
+            self._click_outside_timer.start()
+
+    def _check_click_outside(self):
+        if self.state != NotchState.EXPANDED:
+            self._click_outside_timer.stop()
+            return
+
+        try:
+            # 0x01 = VK_LBUTTON, 0x02 = VK_RBUTTON
+            left_down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+            right_down = bool(ctypes.windll.user32.GetAsyncKeyState(0x02) & 0x8000)
+        except Exception:
+            return
+
+        if not (left_down or right_down):
+            return
+
+        cursor_pos = QCursor.pos()
+        if self.geometry().contains(cursor_pos):
+            return
+
+        # Don't collapse if user is actively dragging a slider
+        if (hasattr(self.tab_home, "slider_vol") and self.tab_home.slider_vol.isSliderDown()) or \
+           (hasattr(self.tab_home, "slider_bright") and self.tab_home.slider_bright.isSliderDown()) or \
+           (hasattr(self.tab_music, "scrubber") and self.tab_music.scrubber.isSliderDown()) or \
+           (hasattr(self.tab_music, "vol_slider") and self.tab_music.vol_slider.isSliderDown()):
+            return
+
+        # Don't collapse if clicking inside child dialogs or popups
+        if self._settings_window and self._settings_window.isVisible() and self._settings_window.geometry().contains(cursor_pos):
+            return
+        for note in getattr(self, "_sticky_notes", []):
+            if note.isVisible() and note.geometry().contains(cursor_pos):
+                return
+        if QApplication.activePopupWidget():
+            return
+
+        self._click_outside_timer.stop()
+        self._collapse_to_pill()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            if not self.isActiveWindow() and self.state == NotchState.EXPANDED:
+                if self._settings_window and self._settings_window.isActiveWindow():
+                    pass
+                elif any(getattr(note, "isActiveWindow", lambda: False)() for note in getattr(self, "_sticky_notes", [])):
+                    pass
+                elif QApplication.activePopupWidget():
+                    pass
+                else:
+                    self._click_outside_timer.stop()
+                    self._collapse_to_pill()
+        super().changeEvent(event)
 
     def _transition_to(self, new_state: NotchState):
         self.state = new_state
@@ -1217,18 +1293,21 @@ class DynamicNotchWindow(QWidget):
             self.view_peek.setVisible(False)
             self.view_island.setVisible(False)
             self.view_expanded.setVisible(False)
+            self._click_outside_timer.stop()
         elif new_state == NotchState.PEEK:
             self._target_size = (380, 68)
             self.view_collapsed.setVisible(False)
             self.view_peek.setVisible(True)
             self.view_island.setVisible(False)
             self.view_expanded.setVisible(False)
+            self._click_outside_timer.stop()
         elif new_state == NotchState.ISLAND:
             self._target_size = (420, 64)
             self.view_collapsed.setVisible(False)
             self.view_peek.setVisible(False)
             self.view_island.setVisible(True)
             self.view_expanded.setVisible(False)
+            self._click_outside_timer.stop()
         elif new_state == NotchState.EXPANDED:
             self._target_size = (self._open_w, self._open_h)
             self.view_collapsed.setVisible(False)
@@ -1236,6 +1315,10 @@ class DynamicNotchWindow(QWidget):
             self.view_island.setVisible(False)
             self.view_expanded.setVisible(True)
             self._sync_system_controls(force=True)
+            self.raise_()
+            self.activateWindow()
+            self._click_outside_timer.stop()
+            QTimer.singleShot(220, self._start_click_outside_timer)
 
         self._apply_geometry_for_state(new_state, animate=True)
 

@@ -110,3 +110,4 @@ def test_audio_controller_initialization():
     audio = SystemAudioController()
     vol = audio.get_volume()
     assert 0 <= vol <= 100
+
