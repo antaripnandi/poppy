@@ -37,6 +37,8 @@ class HomeTabView(QWidget):
     quick_search_requested = Signal()
     lock_workstation_requested = Signal()
     player_menu_requested = Signal()
+    audio_device_menu_requested = Signal()
+    bluetooth_menu_requested = Signal()
     weather_refresh_requested = Signal()
 
     def __init__(self, parent=None):
@@ -179,14 +181,14 @@ class HomeTabView(QWidget):
         row_bright.addWidget(self.lbl_bright_num)
         l_ctrl.addLayout(row_bright)
 
-        # Media Player Selector Pill + Controls row
+        # Audio Output & Media Player Selector Pills + Controls row
         row_dev = QHBoxLayout()
         row_dev.setSpacing(6)
-        self.btn_player_drop = QPushButton("Speakers (Spotify ▾)")
-        self.btn_player_drop.setStyleSheet("""
+        self.btn_audio_drop = QPushButton("Speakers ▾")
+        self.btn_audio_drop.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.09);
+                background: rgba(255, 255, 255, 0.06);
+                border: none;
                 border-radius: 12px;
                 color: #e2e8f0;
                 font-size: 11px;
@@ -194,7 +196,24 @@ class HomeTabView(QWidget):
                 padding: 3px 10px;
             }
             QPushButton:hover {
-                background: rgba(255, 255, 255, 0.1);
+                background: rgba(255, 255, 255, 0.12);
+            }
+        """)
+        self.btn_audio_drop.clicked.connect(self.audio_device_menu_requested.emit)
+
+        self.btn_player_drop = QPushButton("Spotify ▾")
+        self.btn_player_drop.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.06);
+                border: none;
+                border-radius: 12px;
+                color: #e2e8f0;
+                font-size: 11px;
+                font-weight: 500;
+                padding: 3px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
             }
         """)
         self.btn_dev_lock = QPushButton("Lock")
@@ -202,8 +221,8 @@ class HomeTabView(QWidget):
         self.btn_dev_lock.setToolTip("Lock Windows Workstation (Win + L)")
         self.btn_dev_lock.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.09);
+                background: rgba(255, 255, 255, 0.06);
+                border: none;
                 border-radius: 12px;
                 color: #94a3b8;
                 font-size: 11px;
@@ -211,7 +230,7 @@ class HomeTabView(QWidget):
                 padding: 3px 8px;
             }
             QPushButton:hover {
-                background: rgba(255, 255, 255, 0.1);
+                background: rgba(255, 255, 255, 0.12);
                 color: #ffffff;
             }
         """)
@@ -224,6 +243,7 @@ class HomeTabView(QWidget):
         self.btn_ctrl_next = IconButton(Icons.NEXT, "Next", size=22, font_size=10, is_fluent=True)
         self.music_bars = AudioVisualizerBars(self)
 
+        row_dev.addWidget(self.btn_audio_drop)
         row_dev.addWidget(self.btn_player_drop)
         row_dev.addWidget(self.btn_dev_lock)
         row_dev.addStretch()
@@ -268,6 +288,10 @@ class HomeTabView(QWidget):
         self.btn_act_search = IconButton(Icons.SEARCH, "Quick Search / Calculator", size=24, font_size=11, is_fluent=True)
         self.btn_act_search.clicked.connect(self.quick_search_requested.emit)
         row_actions.addWidget(self.btn_act_search)
+
+        self.btn_act_bt = IconButton(Icons.BLUETOOTH, "Bluetooth Devices", size=24, font_size=11, is_fluent=True)
+        self.btn_act_bt.clicked.connect(self.bluetooth_menu_requested.emit)
+        row_actions.addWidget(self.btn_act_bt)
 
         row_actions.addStretch()
         l_ctrl.addLayout(row_actions)

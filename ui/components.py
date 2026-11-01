@@ -15,10 +15,10 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QStackedWidget
+    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect
 )
 
-from poppy.ui.icons import Icons
+from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.core.system_controls import AudioPeakMeter
 
 
@@ -62,6 +62,156 @@ class IconButton(QPushButton):
                 color: #ffffff;
             }}
         """)
+
+
+class AnimatedTabStrip(QWidget):
+    """
+    Fluid segmented tab bar with a gliding active indicator pill.
+    Smoothly animates its geometry between tab buttons with cubic spring physics.
+    Zero AI borders, pure solid/translucent modern glass styling.
+    """
+    tab_changed = Signal(int)
+
+    def __init__(self, tab_items: list[tuple[str, str]], accent="#6e9bff", parent=None):
+        super().__init__(parent)
+        self._accent = accent
+        self._current_index = 0
+        self.buttons: list[QPushButton] = []
+
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(2)
+        self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        # Sliding indicator pill behind buttons
+        self.indicator = QWidget(self)
+        self.indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._update_indicator_style()
+
+        self._anim = QPropertyAnimation(self.indicator, b"geometry", self)
+        self._anim.setDuration(220)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        fluent_font = get_fluent_font_family()
+        for idx, (name, icon) in enumerate(tab_items):
+            label = f"{icon}  {name}" if icon else name
+            btn = QPushButton(label, self)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(28)
+            btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i, animate=True))
+            self.buttons.append(btn)
+            self._layout.addWidget(btn)
+
+        self._update_buttons_style()
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self._update_indicator_style()
+        self._update_buttons_style()
+
+    def _update_indicator_style(self):
+        bg = _accent_to_rgba(self._accent, 0.22)
+        self.indicator.setStyleSheet(f"""
+            background-color: {bg};
+            border: none;
+            border-radius: 12px;
+        """)
+
+    def _update_buttons_style(self):
+        fluent_font = get_fluent_font_family()
+        for i, btn in enumerate(self.buttons):
+            is_active = (i == self._current_index)
+            color = self._accent if is_active else "#94a3b8"
+            font_weight = "600" if is_active else "500"
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    border: none;
+                    border-radius: 12px;
+                    color: {color};
+                    font-family: '{fluent_font}', -apple-system, 'Segoe UI', Roboto, sans-serif;
+                    font-size: 11px;
+                    font-weight: {font_weight};
+                    padding: 3px 10px;
+                }}
+                QPushButton:hover {{
+                    color: #ffffff;
+                }}
+            """)
+
+    def set_current_index(self, index: int, animate: bool = True, emit_signal: bool = True):
+        if not (0 <= index < len(self.buttons)):
+            return
+        old_idx = self._current_index
+        self._current_index = index
+        self._update_buttons_style()
+
+        target_btn = self.buttons[index]
+        target_geom = target_btn.geometry()
+
+        if animate and old_idx != index and self.isVisible():
+            self._anim.stop()
+            self._anim.setStartValue(self.indicator.geometry())
+            self._anim.setEndValue(target_geom)
+            self._anim.start()
+        else:
+            self.indicator.setGeometry(target_geom)
+
+        if emit_signal:
+            self.tab_changed.emit(index)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if 0 <= self._current_index < len(self.buttons):
+            self.indicator.setGeometry(self.buttons[self._current_index].geometry())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(20, self._sync_indicator)
+
+    def _sync_indicator(self):
+        if 0 <= self._current_index < len(self.buttons):
+            self.indicator.setGeometry(self.buttons[self._current_index].geometry())
+            self.indicator.lower()
+
+
+class AnimatedStackedWidget(QStackedWidget):
+    """
+    Subpixel smooth fading & micro-slide stacked container for tabs.
+    Lightweight, hardware-accelerated with zero CPU overhead.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._is_animating = False
+
+    def slide_to_index(self, target_idx: int):
+        if target_idx == self.currentIndex() or not (0 <= target_idx < self.count()):
+            return
+        next_widget = self.widget(target_idx)
+        current_widget = self.currentWidget()
+        if not current_widget or not self.isVisible():
+            self.setCurrentIndex(target_idx)
+            return
+
+        next_widget.setGeometry(0, 0, self.width(), self.height())
+        next_widget.show()
+        next_widget.raise_()
+
+        effect = QGraphicsOpacityEffect(next_widget)
+        next_widget.setGraphicsEffect(effect)
+
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(190)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def on_finished():
+            self.setCurrentIndex(target_idx)
+            next_widget.setGraphicsEffect(None)
+
+        anim.finished.connect(on_finished)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 class TabButton(QPushButton):

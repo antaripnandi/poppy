@@ -32,6 +32,18 @@ class Icons:
     SPEAKER = "\uE7F5"      # Speaker device
     MUSIC = "\uE8D6"        # Musical note
 
+    # Navigation & Tabs
+    HOME = "\uE80F"         # Home
+    CALENDAR = "\uE787"     # Calendar
+    CLIPBOARD = "\uE77F"    # Clipboard
+    DOCS = "\uE8A5"         # Documents
+    LAUNCHER = "\uE71D"     # All Apps / Launcher
+    DESKTOPS = "\uE7C4"     # Task View / Desktops
+    BLUETOOTH = "\uE702"    # Bluetooth
+    PENCIL = "\uED63"       # Pen / Draw / Annotate
+    REFRESH = "\uE72C"      # Refresh
+    CAMERA = "\uE722"       # Camera
+
     # Actions & Chrome
     SETTINGS = "\uE713"     # Settings Gear
     CLOSE = "\uE711"        # Minimal × (ChromeClose)

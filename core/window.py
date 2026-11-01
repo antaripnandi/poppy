@@ -28,11 +28,16 @@ from PySide6.QtWidgets import (
 )
 
 from poppy.ui.components import (
-    IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail
+    IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail,
+    AnimatedTabStrip, AnimatedStackedWidget
 )
 from poppy.ui.icons import Icons
 from poppy.ui.views import (
     HomeTabView, MusicTabView, TimerTabView, ShelfTabView, NotesTabView
+)
+from poppy.ui.extended_views import (
+    CalendarTabView, ClipboardTabView, DocsTabView,
+    LauncherTabView, DesktopsTabView, ScreenAnnotationOverlay
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
@@ -44,6 +49,10 @@ from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
+from poppy.core.system_features import (
+    PrivacyMonitor, ScreenCaptureShield, BluetoothManager,
+    AppLauncherIndexer, ClipboardHistoryManager, AudioEndpointManager
+)
 from poppy.core.weather_manager import WeatherManager
 from poppy.core.system_tools import (
     CaffeineManager, ColorEyedropperOverlay,
@@ -103,6 +112,14 @@ class DynamicNotchWindow(QWidget):
         self._eyedropper_overlay = None
         self.weather_manager = WeatherManager(parent=self)
         self.lyrics_manager = LyricsManager(parent=self)
+        self.privacy_monitor = PrivacyMonitor(parent=self)
+        self.bt_manager = BluetoothManager(parent=self)
+        self.clip_mgr = ClipboardHistoryManager(parent=self)
+        self.launcher_indexer = AppLauncherIndexer()
+        self._is_pinned = False
+        self._is_screen_shielded = False
+        self._annotation_overlay = None
+        self._floating_windows = []
 
         # Sizing and Themes
         self._load_appearance_config()
@@ -172,8 +189,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = app_cfg.get("open_width", 660)
-        self._open_h = app_cfg.get("open_height", 340)
+        self._open_w = app_cfg.get("open_width", 780)
+        self._open_h = app_cfg.get("open_height", 420)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
     def minimumSizeHint(self) -> QSize:
@@ -460,18 +477,26 @@ class DynamicNotchWindow(QWidget):
         header_bar.setSpacing(6)
         header_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Clean Typographic Tab Pills matching NotchX
-        self.tab_buttons = []
-        tabs = ["Home", "Music", "Timer", "Shelf", "Notes"]
-        for idx, name in enumerate(tabs):
-            t_btn = TabButton(name, idx, parent=self, accent=self._theme["accent"])
-            t_btn.clicked.connect(lambda checked=False, i=idx: self._switch_tab(i))
-            self.tab_buttons.append(t_btn)
-            header_bar.addWidget(t_btn)
+        # Smooth Segmented Tab Strip with sliding indicator pill
+        tab_items = [
+            ("Home", ""),
+            ("Music", ""),
+            ("Calendar", ""),
+            ("Clipboard", ""),
+            ("Docs", ""),
+            ("Launcher", ""),
+            ("Desktops", ""),
+            ("Timer", ""),
+            ("Shelf", ""),
+            ("Notes", "")
+        ]
+        self.tab_strip = AnimatedTabStrip(tab_items, accent=self._theme["accent"], parent=self)
+        self.tab_strip.tab_changed.connect(self._switch_tab)
+        header_bar.addWidget(self.tab_strip)
 
         header_bar.addStretch()
 
-        # Right Capsule: Tabular Time, Battery, Settings Button, Close Button (home-v2.png)
+        # Right Capsule: Privacy Dots, Tabular Time, Battery, Tools Capsule (home-v2.png)
         capsule = QFrame()
         capsule.setStyleSheet("""
             QFrame {
@@ -481,8 +506,21 @@ class DynamicNotchWindow(QWidget):
             }
         """)
         cap_layout = QHBoxLayout(capsule)
-        cap_layout.setContentsMargins(10, 2, 8, 2)
-        cap_layout.setSpacing(8)
+        cap_layout.setContentsMargins(8, 2, 8, 2)
+        cap_layout.setSpacing(6)
+
+        # Hardware Privacy In-Use Indicators (Apple-style green & orange dots)
+        self.lbl_cam_dot = QLabel("●")
+        self.lbl_cam_dot.setToolTip("Webcam is actively streaming / recording")
+        self.lbl_cam_dot.setStyleSheet("color: #22c55e; font-size: 11px; background: transparent; border: none;")
+        self.lbl_cam_dot.setVisible(False)
+        cap_layout.addWidget(self.lbl_cam_dot)
+
+        self.lbl_mic_dot = QLabel("●")
+        self.lbl_mic_dot.setToolTip("Microphone is actively recording / in use")
+        self.lbl_mic_dot.setStyleSheet("color: #f97316; font-size: 11px; background: transparent; border: none;")
+        self.lbl_mic_dot.setVisible(False)
+        cap_layout.addWidget(self.lbl_mic_dot)
 
         self.lbl_hdr_clock = QLabel("12:11:28 AM")
         self.lbl_hdr_clock.setStyleSheet("font-size: 11px; font-weight: 600; color: #f1f5f9; border: none; background: transparent;")
@@ -491,6 +529,23 @@ class DynamicNotchWindow(QWidget):
         self.lbl_hdr_bat = QLabel("BAT --%")
         self.lbl_hdr_bat.setStyleSheet("font-size: 10px; color: #94a3b8; border: none; background: transparent;")
         cap_layout.addWidget(self.lbl_hdr_bat)
+
+        # Header Tools
+        self.btn_hdr_shield = IconButton(Icons.SHIELD, "Screen Capture Shield: OFF (Click to hide from screen share)", size=24, font_size=11, is_fluent=True)
+        self.btn_hdr_shield.clicked.connect(self._toggle_screen_shield)
+        cap_layout.addWidget(self.btn_hdr_shield)
+
+        self.btn_hdr_pencil = IconButton(Icons.PENCIL, "Screen Annotation & Markup (Draw on screen)", size=24, font_size=11, is_fluent=True)
+        self.btn_hdr_pencil.clicked.connect(self._toggle_annotation)
+        cap_layout.addWidget(self.btn_hdr_pencil)
+
+        self.btn_hdr_popout = IconButton(Icons.TEAR_OFF, "Pop-Out Tab (Detach active tab into floating window)", size=24, font_size=11, is_fluent=True)
+        self.btn_hdr_popout.clicked.connect(self._pop_out_current_tab)
+        cap_layout.addWidget(self.btn_hdr_popout)
+
+        self.btn_hdr_pin = IconButton(Icons.PIN, "Pin Notch (Keep open and disable auto-collapse)", size=24, font_size=11, is_fluent=True)
+        self.btn_hdr_pin.clicked.connect(self._toggle_pin)
+        cap_layout.addWidget(self.btn_hdr_pin)
 
         self.btn_hdr_caffeine = IconButton(Icons.POWER, "Keep Awake: OFF", size=24, font_size=11, is_fluent=True)
         self.btn_hdr_caffeine.clicked.connect(self._toggle_caffeine)
@@ -503,8 +558,8 @@ class DynamicNotchWindow(QWidget):
         header_bar.addWidget(capsule)
         v_exp_layout.addLayout(header_bar)
 
-        # Stacked Widget for Tab Views
-        self.tab_stack = QStackedWidget(self)
+        # Stacked Widget for Tab Views with smooth cross-fade animation
+        self.tab_stack = AnimatedStackedWidget(self)
 
         # 0: Home Tab
         self.tab_home = HomeTabView(self)
@@ -525,7 +580,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.focus_shield_requested.connect(self._toggle_focus_shield)
         self.tab_home.screen_snip_requested.connect(self._trigger_screen_snip)
         self.tab_home.eyedropper_requested.connect(self._trigger_color_eyedropper)
-        self.tab_home.quick_search_requested.connect(self._trigger_quick_search)
+        self.tab_home.quick_search_requested.connect(lambda: self._switch_tab(5))
         self.tab_home.lock_workstation_requested.connect(self._lock_workstation)
         self.tab_home.player_menu_requested.connect(self._show_player_dropdown)
         self.tab_home.weather_refresh_requested.connect(self.weather_manager.refresh)
@@ -545,7 +600,27 @@ class DynamicNotchWindow(QWidget):
         self.tab_music.seek_requested.connect(self.media_manager.seek)
         self.tab_stack.addWidget(self.tab_music)
 
-        # 2: Timer Tab
+        # 2: Calendar Tab
+        self.tab_calendar = CalendarTabView(self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_calendar)
+
+        # 3: Clipboard Tab
+        self.tab_clipboard = ClipboardTabView(self.clip_mgr, parent=self)
+        self.tab_stack.addWidget(self.tab_clipboard)
+
+        # 4: Docs Tab
+        self.tab_docs = DocsTabView(self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_docs)
+
+        # 5: Launcher Tab
+        self.tab_launcher = LauncherTabView(self.launcher_indexer, parent=self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_launcher)
+
+        # 6: Desktops Tab
+        self.tab_desktops = DesktopsTabView(self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_desktops)
+
+        # 7: Timer Tab
         self.tab_timer = TimerTabView(self, accent=self._theme["accent"])
         self.tab_timer.btn_toggle.clicked.connect(self.pomodoro.toggle)
         self.tab_timer.btn_reset.clicked.connect(self.pomodoro.reset)
@@ -554,12 +629,12 @@ class DynamicNotchWindow(QWidget):
         self.tab_timer.btn_phase_short.clicked.connect(lambda: self.pomodoro.set_phase_break())
         self.tab_stack.addWidget(self.tab_timer)
 
-        # 3: Shelf Tab
+        # 8: Shelf Tab
         self.tab_shelf = ShelfTabView(self.drop_shelf, screenshot_watcher=self.screenshot_watcher, parent=self)
         self.tab_shelf.pin_requested.connect(self._pin_screenshot_to_screen)
         self.tab_stack.addWidget(self.tab_shelf)
 
-        # 4: Notes Tab
+        # 9: Notes Tab
         self.tab_notes = NotesTabView(self)
         self.tab_notes.tear_off_requested.connect(self._tear_off_sticky_note)
         self.tab_stack.addWidget(self.tab_notes)
@@ -572,9 +647,9 @@ class DynamicNotchWindow(QWidget):
         self._switch_tab(0)
 
     def _switch_tab(self, index: int):
-        self.tab_stack.setCurrentIndex(index)
-        for i, btn in enumerate(self.tab_buttons):
-            btn.set_active(i == index, accent=self._theme["accent"])
+        self.tab_stack.slide_to_index(index)
+        if hasattr(self, 'tab_strip'):
+            self.tab_strip.set_current_index(index, animate=True, emit_signal=False)
 
     def _connect_signals(self):
         # Pomodoro
@@ -594,6 +669,19 @@ class DynamicNotchWindow(QWidget):
         # Shelf & Screenshot
         self.drop_shelf.shelf_updated.connect(self._on_shelf_updated)
         self.screenshot_watcher.screenshot_captured.connect(self._on_screenshot_captured)
+
+        # Hardware Privacy Indicators
+        self.privacy_monitor.camera_status_changed.connect(self._on_camera_status_changed)
+        self.privacy_monitor.mic_status_changed.connect(self._on_mic_status_changed)
+
+        # Clipboard Auto-Capture
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.dataChanged.connect(self._on_clipboard_data_changed)
+
+        # Home Audio & Bluetooth Menus
+        self.tab_home.audio_device_menu_requested.connect(self._show_audio_device_dropdown)
+        self.tab_home.bluetooth_menu_requested.connect(self._show_bluetooth_dropdown)
 
     def _update_clock(self):
         now = datetime.now()
@@ -832,7 +920,221 @@ class DynamicNotchWindow(QWidget):
 
     def _on_player_session_selected(self, idx: int, name: str):
         self.media_manager.select_session(idx)
-        self.tab_home.btn_player_drop.setText(f"Speakers ({name} ▾)")
+        self.tab_home.btn_player_drop.setText(f"{name} ▾")
+
+    def _show_audio_device_dropdown(self):
+        endpoints = AudioEndpointManager.get_output_endpoints()
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #181d27;
+                border: none;
+                border-radius: 8px;
+                padding: 4px;
+                color: #f1f5f9;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 6px 18px 6px 10px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: rgba(255, 255, 255, 0.08);
+                margin: 4px 6px;
+            }
+        """)
+        current_name = self.tab_home.btn_audio_drop.text().replace(" ▾", "")
+        for ep in endpoints:
+            name = ep["name"]
+            is_active = (name in current_name) or ("Speaker" in name and "Speakers" in current_name)
+            prefix = "✓  " if is_active else "    "
+            action = menu.addAction(f"{prefix}{name}")
+            action.triggered.connect(lambda checked=False, n=name: self._on_audio_endpoint_selected(n))
+
+        if not endpoints:
+            act = menu.addAction("No active audio endpoints")
+            act.setEnabled(False)
+
+        menu.addSeparator()
+        act_settings = menu.addAction("Sound Settings...")
+        act_settings.triggered.connect(lambda: os.startfile("ms-settings:sound"))
+
+        btn = self.tab_home.btn_audio_drop
+        pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
+        menu.exec(pos)
+
+    def _on_audio_endpoint_selected(self, name: str):
+        short = name.split("(")[0].strip() if "(" in name else name[:16]
+        self.tab_home.btn_audio_drop.setText(f"{short} ▾")
+        try:
+            os.startfile("ms-settings:sound")
+        except Exception:
+            pass
+
+    def _show_bluetooth_dropdown(self):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #181d27;
+                border: none;
+                border-radius: 8px;
+                padding: 4px;
+                color: #f1f5f9;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 6px 18px 6px 10px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: rgba(255, 255, 255, 0.08);
+                margin: 4px 6px;
+            }
+        """)
+        devices = getattr(self.bt_manager, "devices", [])
+        if devices:
+            for d in devices:
+                status_icon = "🟢 " if d.get("status") == "Connected" else "⚪ "
+                menu.addAction(f"{status_icon}{d.get('name', 'Device')}  ({d.get('status', 'Paired')})")
+        else:
+            act = menu.addAction("No paired Bluetooth devices detected")
+            act.setEnabled(False)
+
+        menu.addSeparator()
+        act_bt = menu.addAction("Bluetooth & Devices Settings...")
+        act_bt.triggered.connect(lambda: os.startfile("ms-settings:bluetooth"))
+
+        btn = self.tab_home.btn_act_bt
+        pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
+        menu.exec(pos)
+
+    def _on_camera_status_changed(self, active: bool):
+        if hasattr(self, 'lbl_cam_dot'):
+            self.lbl_cam_dot.setVisible(active)
+
+    def _on_mic_status_changed(self, active: bool):
+        if hasattr(self, 'lbl_mic_dot'):
+            self.lbl_mic_dot.setVisible(active)
+
+    def _on_clipboard_data_changed(self):
+        try:
+            clip = QApplication.clipboard()
+            if clip:
+                text = clip.text()
+                if text:
+                    self.clip_mgr.add_clip(text)
+        except Exception:
+            pass
+
+    def _toggle_pin(self):
+        self._is_pinned = not self._is_pinned
+        accent = self._theme["accent"]
+        if self._is_pinned:
+            self.btn_hdr_pin.setStyleSheet(f"""
+                background: rgba(110, 155, 255, 0.25);
+                border: none;
+                border-radius: 6px;
+                color: {accent};
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+            self.btn_hdr_pin.setToolTip("Notch PINNED (Will not auto-collapse on desktop click)")
+        else:
+            self.btn_hdr_pin.setStyleSheet("""
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+            self.btn_hdr_pin.setToolTip("Pin Notch (Keep open and disable auto-collapse)")
+
+    def _toggle_screen_shield(self):
+        self._is_screen_shielded = not self._is_screen_shielded
+        ok = ScreenCaptureShield.set_shield(int(self.winId()), self._is_screen_shielded)
+        if self._is_screen_shielded and ok:
+            self.btn_hdr_shield.setStyleSheet("""
+                background: rgba(34, 197, 94, 0.25);
+                border: none;
+                border-radius: 6px;
+                color: #4ade80;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+            self.btn_hdr_shield.setToolTip("Screen Capture Shield: ACTIVE (Hidden from OBS, Discord, Zoom & Screenshots)")
+        else:
+            self._is_screen_shielded = False
+            self.btn_hdr_shield.setStyleSheet("""
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 11px;
+            """)
+            self.btn_hdr_shield.setToolTip("Screen Capture Shield: OFF (Click to hide Poppy from screen share)")
+
+    def _toggle_annotation(self):
+        if self._annotation_overlay and self._annotation_overlay.isVisible():
+            self._annotation_overlay.close()
+            self._annotation_overlay = None
+        else:
+            self._annotation_overlay = ScreenAnnotationOverlay()
+            self._annotation_overlay.show()
+
+    def _pop_out_current_tab(self):
+        idx = self.tab_stack.currentIndex()
+        names = ["Home", "Music", "Calendar", "Clipboard", "Docs", "Launcher", "Desktops", "Timer", "Shelf", "Notes"]
+        tab_name = names[idx] if idx < len(names) else f"Tab {idx}"
+        from PySide6.QtWidgets import QDialog
+        float_win = QDialog(None, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+        float_win.setWindowTitle(f"Poppy — {tab_name}")
+        float_win.resize(620, 380)
+        float_win.setStyleSheet(f"QDialog {{ background-color: {self._theme['bg']}; color: #f1f5f9; }}")
+        f_layout = QVBoxLayout(float_win)
+        f_layout.setContentsMargins(12, 12, 12, 12)
+
+        if idx == 0:
+            view = HomeTabView(float_win)
+        elif idx == 1:
+            view = MusicTabView(float_win, accent=self._theme["accent"])
+            view.update_media(self.media_manager.current_media)
+        elif idx == 2:
+            view = CalendarTabView(float_win, accent=self._theme["accent"])
+        elif idx == 3:
+            view = ClipboardTabView(self.clip_mgr, float_win)
+        elif idx == 4:
+            view = DocsTabView(float_win, accent=self._theme["accent"])
+        elif idx == 5:
+            view = LauncherTabView(self.launcher_indexer, float_win, accent=self._theme["accent"])
+        elif idx == 6:
+            view = DesktopsTabView(float_win, accent=self._theme["accent"])
+        elif idx == 7:
+            view = TimerTabView(float_win, accent=self._theme["accent"])
+        elif idx == 8:
+            view = ShelfTabView(self.drop_shelf, self.screenshot_watcher, float_win)
+        elif idx == 9:
+            view = NotesTabView(float_win)
+        else:
+            view = QLabel(f"Detached {tab_name}")
+
+        f_layout.addWidget(view)
+        float_win.show()
+        float_win.raise_()
+        float_win.activateWindow()
+        self._floating_windows.append(float_win)
+        float_win.finished.connect(lambda r: self._floating_windows.remove(float_win) if float_win in self._floating_windows else None)
 
     def _on_pomo_time_updated(self, rem_sec, total_sec, fmt_time, progress):
         self.tab_timer.lbl_time.setText(fmt_time)
@@ -883,7 +1185,7 @@ class DynamicNotchWindow(QWidget):
         if hasattr(self.tab_home, "lbl_music_source"):
             self.tab_home.lbl_music_source.setText(source.upper() if source else "")
         if hasattr(self.tab_home, "btn_player_drop") and source:
-            self.tab_home.btn_player_drop.setText(f"Speakers ({source} ▾)")
+            self.tab_home.btn_player_drop.setText(f"{source} ▾")
 
         # Music Tab update
         self.tab_music.update_media(data)
@@ -1050,7 +1352,7 @@ class DynamicNotchWindow(QWidget):
 
     def _open_shelf_from_island(self):
         self._island_timer.stop()
-        self._switch_tab(3)
+        self._switch_tab(8)
         self._transition_to(NotchState.EXPANDED)
 
     def _on_island_timeout(self):
@@ -1111,15 +1413,14 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = app_cfg.get("open_width", 660)
-        self._open_h = app_cfg.get("open_height", 340)
+        self._open_w = app_cfg.get("open_width", 780)
+        self._open_h = app_cfg.get("open_height", 420)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
         accent = self._theme["accent"]
         self.lbl_coll_pomo.setStyleSheet(f"color: {accent}; font-size: 11px; font-weight: 600; min-width: 44px;")
-        for i, btn in enumerate(self.tab_buttons):
-            btn.set_accent(accent)
-            btn.set_active(i == self.tab_stack.currentIndex(), accent=accent)
+        if hasattr(self, 'tab_strip'):
+            self.tab_strip.set_accent(accent)
         self.tab_music.set_accent(accent)
         self.tab_timer.set_accent(accent)
 
@@ -1158,6 +1459,9 @@ class DynamicNotchWindow(QWidget):
 
     def leaveEvent(self, event):
         self._hover_peek_timer.stop()
+        if self._is_pinned and self.state == NotchState.EXPANDED:
+            super().leaveEvent(event)
+            return
         from PySide6.QtGui import QCursor
         # Crucial: if cursor is still geometrically within the window, ignore false leave events
         if self.geometry().contains(QCursor.pos()):
@@ -1207,14 +1511,19 @@ class DynamicNotchWindow(QWidget):
                 self._collapse_to_pill()
                 event.accept()
                 return
-        # Ctrl + 1-5 for Quick Tab Switching (NotchX feature)
+        # Ctrl + 1-9, 0 for Quick Tab Switching
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             key_map = {
                 Qt.Key.Key_1: 0,
                 Qt.Key.Key_2: 1,
                 Qt.Key.Key_3: 2,
                 Qt.Key.Key_4: 3,
-                Qt.Key.Key_5: 4
+                Qt.Key.Key_5: 4,
+                Qt.Key.Key_6: 5,
+                Qt.Key.Key_7: 6,
+                Qt.Key.Key_8: 7,
+                Qt.Key.Key_9: 8,
+                Qt.Key.Key_0: 9,
             }
             if event.key() in key_map:
                 self._switch_tab(key_map[event.key()])
@@ -1233,6 +1542,8 @@ class DynamicNotchWindow(QWidget):
             self._click_outside_timer.start()
 
     def _check_click_outside(self):
+        if self._is_pinned:
+            return
         if self.state != NotchState.EXPANDED:
             self._click_outside_timer.stop()
             return
@@ -1272,6 +1583,9 @@ class DynamicNotchWindow(QWidget):
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.ActivationChange:
+            if self._is_pinned:
+                super().changeEvent(event)
+                return
             if not self.isActiveWindow() and self.state == NotchState.EXPANDED:
                 if self._settings_window and self._settings_window.isActiveWindow():
                     pass
@@ -1417,16 +1731,14 @@ class DynamicNotchWindow(QWidget):
             event.acceptProposedAction()
             if self.state != NotchState.EXPANDED:
                 self._transition_to(NotchState.EXPANDED)
-                self._switch_tab(3)  # Switch to Shelf
-        else:
-            event.ignore()
+                self._switch_tab(8)  # Switch to Shelf
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
             paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if paths:
                 self.drop_shelf.add_paths(paths)
-                self._switch_tab(3)  # Shelf tab
+                self._switch_tab(8)  # Shelf tab
                 event.acceptProposedAction()
                 return
         event.ignore()
@@ -1470,6 +1782,13 @@ class DynamicNotchWindow(QWidget):
         self.screenshot_watcher.stop()
         for note in self._floating_notes:
             note.close()
+        for win in getattr(self, "_floating_windows", []):
+            try:
+                win.close()
+            except Exception:
+                pass
+        if self._annotation_overlay:
+            self._annotation_overlay.close()
         if self._settings_window:
             self._settings_window.close()
         super().closeEvent(event)
