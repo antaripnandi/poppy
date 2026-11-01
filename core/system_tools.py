@@ -62,8 +62,11 @@ class ColorEyedropperOverlay(QWidget):
 
     def mouseMoveEvent(self, event):
         self._pos = event.position().toPoint()
-        x = max(0, min(self._image.width() - 1, self._pos.x()))
-        y = max(0, min(self._image.height() - 1, self._pos.y()))
+        dpr = self.devicePixelRatio()
+        px = int(round(self._pos.x() * dpr))
+        py = int(round(self._pos.y() * dpr))
+        x = max(0, min(self._image.width() - 1, px))
+        y = max(0, min(self._image.height() - 1, py))
         self._current_color = self._image.pixelColor(x, y)
         self.update()
 
@@ -114,10 +117,14 @@ class ColorEyedropperOverlay(QWidget):
         cell_size = (loupe_radius * 2.0) / grid_cells
         half_grid = grid_cells // 2
 
+        dpr = self.devicePixelRatio()
+        px = int(round(cx * dpr))
+        py = int(round(cy * dpr))
+
         for row in range(grid_cells):
             for col in range(grid_cells):
-                src_x = cx - half_grid + col
-                src_y = cy - half_grid + row
+                src_x = px - half_grid + col
+                src_y = py - half_grid + row
                 if 0 <= src_x < self._image.width() and 0 <= src_y < self._image.height():
                     c = self._image.pixelColor(src_x, src_y)
                 else:

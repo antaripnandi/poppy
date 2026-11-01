@@ -4,7 +4,7 @@ Native Windows Segoe Fluent Icons and Segoe MDL2 Assets.
 Zero third-party bloat, zero AI emojis, pure native OS minimalism.
 """
 
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFontDatabase
 
 
 def get_fluent_font_family() -> str:

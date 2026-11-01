@@ -154,7 +154,6 @@ QSlider::handle:horizontal {{
 
 QSlider::handle:horizontal:hover {{
     background: #ffffff;
-    transform: scale(1.1);
 }}
 
 QScrollBar:vertical {{

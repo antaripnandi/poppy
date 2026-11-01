@@ -8,19 +8,18 @@ Faithfully recreating NotchX's Appearance & Configuration studio:
 - Hardware HUD telemetry options
 """
 
-import os
 import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QIcon, QFont, QColor, QPainter, QBrush, QPen
+from PySide6.QtGui import QFont, QColor, QPainter, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QSpinBox, QCheckBox, QPushButton, QStackedWidget, QListWidget,
-    QFrame, QComboBox, QSlider, QScrollArea, QMessageBox
+    QFrame, QComboBox, QSlider, QScrollArea
 )
 
-from poppy.ui.styles import THEME_PRESETS, DEFAULT_THEME, get_stylesheet
+from poppy.ui.styles import THEME_PRESETS, DEFAULT_THEME
 
 
 class ThemeCard(QFrame):

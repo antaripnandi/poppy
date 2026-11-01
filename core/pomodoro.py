@@ -5,7 +5,9 @@ Manages focus sessions, breaks, cycles, and completion chimes.
 
 import time
 import winsound
+import threading
 from enum import Enum
+from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, Signal
 
 
@@ -33,6 +35,7 @@ class PomodoroManager(QObject):
         self.total_seconds = self.work_duration
         self.completed_cycles = 0
         self.is_running = False
+        self.sound_enabled = True
 
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
@@ -144,29 +147,28 @@ class PomodoroManager(QObject):
         return "Pomodoro Idle"
 
     def _emit_update(self):
-        mins = self.remaining_seconds // 60
-        secs = self.remaining_seconds % 60
+        mins = max(0, self.remaining_seconds) // 60
+        secs = max(0, self.remaining_seconds) % 60
         formatted = f"{mins:02d}:{secs:02d}"
-        progress = 1.0 - (self.remaining_seconds / max(1, self.total_seconds))
+        progress = 1.0 - (max(0, self.remaining_seconds) / max(1, self.total_seconds))
         self.time_updated.emit(self.remaining_seconds, self.total_seconds, formatted, progress)
 
     def _play_chime(self):
-        """Soft harmonic chime on Windows without third-party audio libs."""
-        try:
-            import os
-            from pathlib import Path
-            sound_path = Path(__file__).resolve().parent.parent / "assets" / "sounds" / "chime.wav"
-            if sound_path.exists():
-                winsound.PlaySound(str(sound_path), winsound.SND_ASYNC | winsound.SND_FILENAME)
-                return
-            # Ascending 2-tone pleasant alert fallback
-            winsound.Beep(587, 180)  # D5
-            winsound.Beep(880, 260)  # A5
-        except Exception:
+        """Soft harmonic chime on Windows without blocking Qt event loop."""
+        if not self.sound_enabled:
+            return
+
+        def _sound_worker():
             try:
+                sound_path = Path(__file__).resolve().parent.parent / "assets" / "sounds" / "chime.wav"
+                if sound_path.exists():
+                    winsound.PlaySound(str(sound_path), winsound.SND_ASYNC | winsound.SND_FILENAME)
+                    return
                 winsound.MessageBeep(winsound.MB_ICONASTERISK)
             except Exception:
                 pass
+
+        threading.Thread(target=_sound_worker, daemon=True).start()
 
     def get_discord_status(self):
         """Returns details suitable for Discord RPC."""

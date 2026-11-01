@@ -4,14 +4,16 @@ Faithfully inspired by NotchX's official interface (home-v2.png, now-playing-v2.
 """
 
 import os
+import ast
+import operator as op
 import re
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal, QRectF, QSize, QUrl, QMimeData, QTimer
-from PySide6.QtGui import QPixmap, QDrag, QFont, QColor, QImage
+from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer
+from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QLineEdit, QTextEdit, QPushButton, QSlider, QListWidget,
-    QListWidgetItem, QFrame, QSizePolicy, QScrollArea, QApplication
+    QLineEdit, QTextEdit, QPushButton, QSlider,
+    QFrame, QScrollArea, QApplication
 )
 
 from poppy.ui.components import (
@@ -19,7 +21,6 @@ from poppy.ui.components import (
     CardFrame, SourcePill, DraggableThumbnail
 )
 from poppy.ui.icons import Icons
-from poppy.ui.styles import get_theme
 
 
 class HomeTabView(QWidget):
@@ -231,6 +232,14 @@ class HomeTabView(QWidget):
         row_dev.addWidget(self.music_bars)
         l_ctrl.addLayout(row_dev)
 
+        # Track metadata labels referenced by window updates
+        self.lbl_music_title = QLabel("", self)
+        self.lbl_music_title.setVisible(False)
+        self.lbl_music_artist = QLabel("", self)
+        self.lbl_music_artist.setVisible(False)
+        self.lbl_music_source = QLabel("", self)
+        self.lbl_music_source.setVisible(False)
+
         # Quick Actions Row (home-v2.png bottom pill strip)
         row_actions = QHBoxLayout()
         row_actions.setSpacing(6)
@@ -314,6 +323,17 @@ class HomeTabView(QWidget):
                 border: 1px solid rgba(110, 155, 255, 0.6);
             }
         """)
+        self._notes_file = Path(os.path.expanduser("~/.poppy/home_notes.txt"))
+        if self._notes_file.exists():
+            try:
+                self.txt_notes.setText(self._notes_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        self._notes_timer = QTimer(self)
+        self._notes_timer.setSingleShot(True)
+        self._notes_timer.setInterval(600)
+        self._notes_timer.timeout.connect(self._save_notes)
+        self.txt_notes.textChanged.connect(self._notes_timer.start)
         l_notes.addWidget(self.txt_notes)
         grid.addWidget(card_notes, 1, 0)
 
@@ -467,27 +487,52 @@ class HomeTabView(QWidget):
             self.shelf_preview_frame.setVisible(False)
             self.lbl_shelf_empty.setVisible(True)
 
+    def _save_notes(self):
+        try:
+            self._notes_file.parent.mkdir(parents=True, exist_ok=True)
+            self._notes_file.write_text(self.txt_notes.toPlainText(), encoding="utf-8")
+        except Exception:
+            pass
+
     def _eval_calc(self, text: str):
         text = text.strip()
         if not text:
             self.lbl_calc_res.setText("")
             return
-        if re.match(r'^[\d\s\+\-\*\/\%\(\)\.\^]+$', text):
-            try:
-                expr = text.replace('^', '**')
-                val = eval(expr, {"__builtins__": None}, {})
-                if isinstance(val, (int, float)):
-                    res_str = f"= {val:,.4g}" if isinstance(val, float) else f"= {val:,}"
-                    self.lbl_calc_res.setText(res_str)
-                    return
-            except Exception:
-                pass
+        operators = {
+            ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul,
+            ast.Div: op.truediv, ast.FloorDiv: op.floordiv,
+            ast.Mod: op.mod, ast.Pow: op.pow, ast.USub: op.neg
+        }
+        def _eval_node(node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return node.value
+            elif isinstance(node, ast.BinOp) and type(node.op) in operators:
+                left = _eval_node(node.left)
+                right = _eval_node(node.right)
+                if isinstance(node.op, ast.Pow) and (abs(right) > 100 or abs(left) > 10000):
+                    raise OverflowError("Exponent too large")
+                return operators[type(node.op)](left, right)
+            elif isinstance(node, ast.UnaryOp) and type(node.op) in operators:
+                return operators[type(node.op)](_eval_node(node.operand))
+            raise ValueError("Unsupported expression")
+
+        try:
+            parsed = ast.parse(text.replace('^', '**'), mode='eval')
+            val = _eval_node(parsed.body)
+            if isinstance(val, (int, float)):
+                res_str = f"= {val:,.4g}" if isinstance(val, float) else f"= {val:,}"
+                self.lbl_calc_res.setText(res_str)
+                return
+        except Exception:
+            pass
         self.lbl_calc_res.setText("")
 
     def _on_tear_off(self):
         text = self.txt_notes.toPlainText().strip()
         self.tear_off_requested.emit(text)
         self.txt_notes.clear()
+        self._save_notes()
 
     def set_volume_display(self, vol: int, is_muted: bool = False):
         self.slider_vol.blockSignals(True)
@@ -674,21 +719,26 @@ class MusicTabView(QWidget):
         info_col.addLayout(transport_row)
         main_layout.addLayout(info_col, stretch=1)
 
-        # Right: Synced Lyrics / Scratchpad Card (now-playing-v2 right card)
+        # Right: Active Media Details & Telemetry Card
         lyrics_card = CardFrame(self)
         lyrics_card.setFixedWidth(200)
         l_lyr = QVBoxLayout(lyrics_card)
         l_lyr.setContentsMargins(12, 10, 12, 10)
         l_lyr.setSpacing(6)
 
-        lbl_lyr_hdr = QLabel("LYRICS & NOTES")
-        lbl_lyr_hdr.setStyleSheet("QLabel { font-size: 9.5px; font-weight: 700; color: #64748b; letter-spacing: 0.8px; background: transparent; border: none; }")
+        lbl_lyr_hdr = QLabel("MEDIA DETAILS")
+        lbl_lyr_hdr.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; background: transparent; border: none; }")
         l_lyr.addWidget(lbl_lyr_hdr)
 
-        self.txt_lyrics = QLabel("Once, I was seven years old, my mama told me\n\"Go make yourself some friends, or you'll be lonely\"\nOnce, I was seven years old\n\nIt was a big, big world, but we thought we were bigger\nPushing each other to the limits...")
+        self.txt_lyrics = QLabel("No track currently playing.\nOpen Spotify, YouTube, or Edge to play media.")
         self.txt_lyrics.setStyleSheet("QLabel { font-size: 11px; line-height: 1.4; color: #94a3b8; background: transparent; border: none; }")
         self.txt_lyrics.setWordWrap(True)
         l_lyr.addWidget(self.txt_lyrics)
+
+        self.lbl_album_info = QLabel("")
+        self.lbl_album_info.setStyleSheet("QLabel { font-size: 10px; color: #64748b; background: transparent; border: none; }")
+        self.lbl_album_info.setWordWrap(True)
+        l_lyr.addWidget(self.lbl_album_info)
         l_lyr.addStretch()
 
         main_layout.addWidget(lyrics_card, stretch=1)
@@ -751,9 +801,17 @@ class MusicTabView(QWidget):
         title = data.get("title", "No Media Playing")
         artist = data.get("artist", "Desktop Audio")
         source = data.get("display_name") or data.get("source_app", "SYSTEM")
+        album = data.get("album", "")
         self.lbl_title.setText(title)
         self.lbl_artist.setText(artist)
         self.lbl_source.setText(source)
+
+        if title and title != "No Media Playing":
+            self.txt_lyrics.setText(f"{title}\nby {artist}")
+            self.lbl_album_info.setText(f"Album: {album}\nSource: {source}" if album else f"Source: {source}")
+        else:
+            self.txt_lyrics.setText("No track currently playing.\nOpen Spotify, YouTube, or Edge to play media.")
+            self.lbl_album_info.setText("")
 
         thumb_bytes = data.get("thumbnail_bytes")
         if thumb_bytes:
@@ -1170,11 +1228,12 @@ class ShelfTabView(QWidget):
 
 
 class NotesTabView(QWidget):
-    """Full scratchpad view with instant tear-off sticky note spawning."""
+    """Full scratchpad view with instant tear-off sticky note spawning and persistence."""
     tear_off_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._scratch_file = Path(os.path.expanduser("~/.poppy/scratchpad.txt"))
         self._init_ui()
 
     def _init_ui(self):
@@ -1185,7 +1244,7 @@ class NotesTabView(QWidget):
         # Header
         hdr = QHBoxLayout()
         lbl_title = QLabel("SCRATCHPAD & NOTES")
-        lbl_title.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #64748b; letter-spacing: 0.5px; background: transparent; border: none; }")
+        lbl_title.setStyleSheet("QLabel { font-size: 10.5px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px; background: transparent; border: none; }")
         self.btn_tear = QPushButton("Tear Off Floating Note")
         self.btn_tear.setStyleSheet("font-size: 10px; padding: 3px 10px; border-radius: 4px; background: rgba(255,255,255,0.06);")
         self.btn_tear.clicked.connect(self._tear_off)
@@ -1197,28 +1256,51 @@ class NotesTabView(QWidget):
         # Multiline Note Editor
         self.editor = QTextEdit()
         self.editor.setPlaceholderText("Write notes, snippets, or tasks here...")
+        if self._scratch_file.exists():
+            try:
+                self.editor.setText(self._scratch_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(600)
+        self._save_timer.timeout.connect(self._save_scratch)
         self.editor.textChanged.connect(self._on_text_changed)
         layout.addWidget(self.editor)
 
         # Footer
         ftr = QHBoxLayout()
         self.lbl_word_count = QLabel("0 words · 0 characters")
-        self.lbl_word_count.setStyleSheet("QLabel { font-size: 10px; color: #64748b; background: transparent; border: none; }")
+        self.lbl_word_count.setStyleSheet("QLabel { font-size: 10px; color: #94a3b8; background: transparent; border: none; }")
         btn_clear = QPushButton("Clear")
         btn_clear.setStyleSheet("font-size: 9px; padding: 2px 6px; border: none;")
-        btn_clear.clicked.connect(self.editor.clear)
+        btn_clear.clicked.connect(self._clear_notes)
         ftr.addWidget(self.lbl_word_count)
         ftr.addStretch()
         ftr.addWidget(btn_clear)
         layout.addLayout(ftr)
+        self._on_text_changed()
+
+    def _save_scratch(self):
+        try:
+            self._scratch_file.parent.mkdir(parents=True, exist_ok=True)
+            self._scratch_file.write_text(self.editor.toPlainText(), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _clear_notes(self):
+        self.editor.clear()
+        self._save_scratch()
 
     def _on_text_changed(self):
         text = self.editor.toPlainText()
         words = len(text.split()) if text.strip() else 0
         chars = len(text)
         self.lbl_word_count.setText(f"{words} words · {chars} characters")
+        self._save_timer.start()
 
     def _tear_off(self):
         text = self.editor.toPlainText().strip()
         self.tear_off_requested.emit(text)
         self.editor.clear()
+        self._save_scratch()

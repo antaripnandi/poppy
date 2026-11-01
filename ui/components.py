@@ -5,11 +5,22 @@ Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 """
 
 import os
-from PySide6.QtCore import Qt, Signal, QRectF, QTimer, QSize, QPoint, QUrl, QMimeData
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QDrag, QPixmap
-from PySide6.QtWidgets import QWidget, QPushButton, QLabel, QHBoxLayout, QFrame, QApplication
+from PySide6.QtCore import Qt, QRectF, QTimer, QPoint, QUrl, QMimeData
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap
+from PySide6.QtWidgets import QWidget, QPushButton, QLabel, QFrame, QApplication
 
 from poppy.ui.icons import Icons
+
+
+def _accent_to_rgba(hex_color: str, alpha: float) -> str:
+    """Helper to convert hex accent to rgba string with custom alpha."""
+    c = (hex_color or "#6e9bff").lstrip('#')
+    if len(c) == 6:
+        r = int(c[0:2], 16)
+        g = int(c[2:4], 16)
+        b = int(c[4:6], 16)
+        return f"rgba({r}, {g}, {b}, {alpha})"
+    return hex_color
 
 
 class IconButton(QPushButton):
@@ -68,10 +79,12 @@ class TabButton(QPushButton):
 
     def update_style(self):
         if self._is_active:
+            bg_color = _accent_to_rgba(self._accent, 0.22)
+            border_color = _accent_to_rgba(self._accent, 0.55)
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: rgba(30, 48, 80, 0.95);
-                    border: 1px solid rgba(79, 124, 247, 0.5);
+                    background-color: {bg_color};
+                    border: 1px solid {border_color};
                     border-radius: 12px;
                     color: {self._accent};
                     font-size: 11px;
@@ -116,9 +129,10 @@ class SourcePill(QPushButton):
 
     def update_style(self):
         if self._is_active:
+            bg_color = _accent_to_rgba(self._accent, 0.22)
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: rgba(30, 48, 80, 0.95);
+                    background-color: {bg_color};
                     border: 1px solid {self._accent};
                     border-radius: 11px;
                     color: {self._accent};

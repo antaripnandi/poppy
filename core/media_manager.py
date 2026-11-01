@@ -7,8 +7,8 @@ Supports multi-session tracking and switching between active media sources.
 
 import asyncio
 import threading
-from PySide6.QtCore import QObject, Signal, QByteArray
-from PySide6.QtGui import QPixmap, QImage
+from collections import OrderedDict
+from PySide6.QtCore import QObject, Signal
 
 
 def format_source_name(app_id: str, title: str = "") -> str:
@@ -23,7 +23,7 @@ def format_source_name(app_id: str, title: str = "") -> str:
     elif "brave" in app_lower:
         if "music" in title_lower or "music.youtube" in title_lower:
             return "YouTube Music"
-        elif "youtube" in title_lower or "circle of curvature" in title_lower or "part" in title_lower:
+        elif "youtube" in title_lower:
             return "YouTube"
         return "Brave"
     elif "chrome" in app_lower:
@@ -81,11 +81,14 @@ class MediaManager(QObject):
         super().__init__(parent)
         self.sessions: list[SessionData] = []
         self._selected_index = 0
+        self._lock = threading.Lock()
         self._loop = None
         self._thread = None
         self._running = False
         self._session_manager = None
-        self._thumb_cache = {}  # (app_id, title) -> bytes
+        self._thumb_cache: OrderedDict = OrderedDict()  # (app_id, title) -> bytes
+        self._max_cache_size = 30
+        self._last_state_hash = None
 
     def start(self):
         """Start media monitoring background event loop."""
@@ -116,8 +119,7 @@ class MediaManager(QObject):
         while self._running:
             try:
                 await self._refresh_all_sessions()
-            except Exception as e:
-                # Silently catch transient session errors
+            except Exception:
                 pass
             await asyncio.sleep(1.0)
 
@@ -139,12 +141,14 @@ class MediaManager(QObject):
                 artist = props.artist if props and props.artist else ""
                 album = props.album_title if props and props.album_title else ""
 
-                # Cache and load thumbnail
+                # Cache and load thumbnail with bounded LRU eviction
                 cache_key = (app_id, title)
                 thumb_bytes = self._thumb_cache.get(cache_key)
                 if thumb_bytes is None and props and props.thumbnail:
                     thumb_bytes = await self._read_stream(props.thumbnail)
                     if thumb_bytes:
+                        if len(self._thumb_cache) >= self._max_cache_size:
+                            self._thumb_cache.popitem(last=False)
                         self._thumb_cache[cache_key] = thumb_bytes
 
                 data = SessionData(
@@ -161,39 +165,51 @@ class MediaManager(QObject):
             except Exception:
                 continue
 
-        # Clamp selected index
-        if not new_sessions:
-            self.sessions = []
-            self._selected_index = 0
-            empty_data = {
-                "index": 0,
-                "source_app": "",
-                "display_name": "Desktop Audio",
-                "title": "No Media Playing",
-                "artist": "System Audio",
-                "album": "",
-                "is_playing": False,
-                "thumbnail_bytes": None
-            }
-            self.media_changed.emit(empty_data)
-            self.playback_changed.emit(False)
-            self.sessions_updated.emit([], 0)
-            return
+        with self._lock:
+            # Handle empty session list
+            if not new_sessions:
+                if self._last_state_hash != "empty":
+                    self.sessions = []
+                    self._selected_index = 0
+                    empty_data = {
+                        "index": 0,
+                        "source_app": "",
+                        "display_name": "Desktop Audio",
+                        "title": "No Media Playing",
+                        "artist": "System Audio",
+                        "album": "",
+                        "is_playing": False,
+                        "thumbnail_bytes": None
+                    }
+                    self.media_changed.emit(empty_data)
+                    self.playback_changed.emit(False)
+                    self.sessions_updated.emit([], 0)
+                    self._last_state_hash = "empty"
+                return
 
-        # Auto-prioritize actively playing session if the user hasn't explicitly locked one
-        if self._selected_index >= len(new_sessions):
-            self._selected_index = 0
+            # Clamp selected index
+            if self._selected_index >= len(new_sessions):
+                self._selected_index = 0
 
-        self.sessions = new_sessions
+            self.sessions = new_sessions
+            curr = self.sessions[self._selected_index]
 
-        # Emit sessions list
-        sessions_summary = [s.to_dict() for s in self.sessions]
-        self.sessions_updated.emit(sessions_summary, self._selected_index)
+            # Compute fingerprint to eliminate duplicate 1Hz signal emissions
+            state_fingerprint = (
+                len(self.sessions),
+                self._selected_index,
+                curr.app_id,
+                curr.title,
+                curr.artist,
+                curr.is_playing
+            )
 
-        # Emit current selected session details
-        curr = self.sessions[self._selected_index]
-        self.media_changed.emit(curr.to_dict())
-        self.playback_changed.emit(curr.is_playing)
+            if state_fingerprint != self._last_state_hash:
+                self._last_state_hash = state_fingerprint
+                sessions_summary = [s.to_dict() for s in self.sessions]
+                self.sessions_updated.emit(sessions_summary, self._selected_index)
+                self.media_changed.emit(curr.to_dict())
+                self.playback_changed.emit(curr.is_playing)
 
     async def _read_stream(self, stream_ref) -> bytes:
         try:
@@ -212,33 +228,39 @@ class MediaManager(QObject):
 
     def select_session(self, index: int):
         """Switch active media session by index."""
-        if 0 <= index < len(self.sessions):
-            self._selected_index = index
-            curr = self.sessions[index]
-            self.media_changed.emit(curr.to_dict())
-            self.playback_changed.emit(curr.is_playing)
-            sessions_summary = [s.to_dict() for s in self.sessions]
-            self.sessions_updated.emit(sessions_summary, self._selected_index)
+        with self._lock:
+            if 0 <= index < len(self.sessions):
+                self._selected_index = index
+                curr = self.sessions[index]
+                self._last_state_hash = None  # Force immediate refresh
+                self.media_changed.emit(curr.to_dict())
+                self.playback_changed.emit(curr.is_playing)
+                sessions_summary = [s.to_dict() for s in self.sessions]
+                self.sessions_updated.emit(sessions_summary, self._selected_index)
 
     def get_sessions(self) -> list[dict]:
         """Returns list of currently active media sessions as dicts."""
-        return [s.to_dict() for s in self.sessions]
+        with self._lock:
+            return [s.to_dict() for s in self.sessions]
 
     def get_active_index(self) -> int:
         """Returns the current active session index."""
-        return self._selected_index
+        with self._lock:
+            return self._selected_index
 
     def next_session(self):
         """Cycle to next active media session."""
-        if self.sessions:
-            next_idx = (self._selected_index + 1) % len(self.sessions)
-            self.select_session(next_idx)
+        with self._lock:
+            if self.sessions:
+                next_idx = (self._selected_index + 1) % len(self.sessions)
+                self.select_session(next_idx)
 
     def previous_session(self):
         """Cycle to previous active media session."""
-        if self.sessions:
-            prev_idx = (self._selected_index - 1) % len(self.sessions)
-            self.select_session(prev_idx)
+        with self._lock:
+            if self.sessions:
+                prev_idx = (self._selected_index - 1) % len(self.sessions)
+                self.select_session(prev_idx)
 
     def toggle_play_pause(self):
         self._dispatch_command("toggle")
@@ -262,16 +284,17 @@ class MediaManager(QObject):
             except Exception as ex:
                 print(f"[Poppy Media] Keybd fallback error: {ex}")
 
-        if not self._loop or not self.sessions or self._selected_index >= len(self.sessions):
-            if cmd == "toggle":
-                _fallback_key(VK_MEDIA_PLAY_PAUSE)
-            elif cmd == "next":
-                _fallback_key(VK_MEDIA_NEXT_TRACK)
-            elif cmd == "previous":
-                _fallback_key(VK_MEDIA_PREV_TRACK)
-            return
+        with self._lock:
+            if not self._loop or not self.sessions or self._selected_index >= len(self.sessions):
+                if cmd == "toggle":
+                    _fallback_key(VK_MEDIA_PLAY_PAUSE)
+                elif cmd == "next":
+                    _fallback_key(VK_MEDIA_NEXT_TRACK)
+                elif cmd == "previous":
+                    _fallback_key(VK_MEDIA_PREV_TRACK)
+                return
 
-        target_session = self.sessions[self._selected_index].session_obj
+            target_session = self.sessions[self._selected_index].session_obj
 
         async def _exec():
             try:

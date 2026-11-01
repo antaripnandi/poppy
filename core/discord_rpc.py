@@ -2,6 +2,7 @@
 Poppy Discord Rich Presence Integration
 Fully customizable Discord Rich Presence via pypresence.
 Supports custom images, tooltips, buttons, states, details, and dynamic variables.
+Throttled to Discord's 15s rate-limit via a dedicated worker thread.
 """
 
 import time
@@ -23,8 +24,14 @@ class DiscordRPCManager(QObject):
 
         self._rpc = None
         self._connected = False
+        self._running = True
         self._lock = threading.Lock()
-        self._last_state = {}
+        self._pending_payload = None
+        self._wake_event = threading.Event()
+        self._last_update_time = 0.0
+
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker_thread.start()
 
     def start(self):
         """Asynchronously connect to Discord in background thread."""
@@ -62,7 +69,6 @@ class DiscordRPCManager(QObject):
                 self._connected = True
             self.connection_status.emit(True)
 
-            # If in custom mode, immediately apply the custom presence
             if self.mode == "custom":
                 self.apply_custom_presence()
         except Exception:
@@ -70,6 +76,38 @@ class DiscordRPCManager(QObject):
                 self._connected = False
                 self._rpc = None
             self.connection_status.emit(False)
+
+    def _worker_loop(self):
+        while self._running:
+            self._wake_event.wait(timeout=1.0)
+            self._wake_event.clear()
+            if not self._running:
+                break
+
+            with self._lock:
+                payload = self._pending_payload
+                self._pending_payload = None
+                connected = self._connected
+                rpc = self._rpc
+
+            if not payload or not connected or not rpc:
+                continue
+
+            # Respect Discord 15-second client IPC rate limit
+            now = time.monotonic()
+            elapsed = now - self._last_update_time
+            if elapsed < 15.0:
+                time.sleep(15.0 - elapsed)
+
+            with self._lock:
+                if not self._connected or not self._rpc:
+                    continue
+                try:
+                    self._rpc.update(**payload)
+                    self._last_update_time = time.monotonic()
+                except Exception as e:
+                    print(f"[Poppy Discord] Presence update error: {e}")
+                    self._connected = False
 
     def set_presence(
         self,
@@ -83,50 +121,41 @@ class DiscordRPCManager(QObject):
         start: int = None,
         end: int = None
     ):
-        """Directly publish a custom presence to Discord with any image/buttons."""
+        """Directly queue a custom presence update with 15s rate-limiting."""
         if not self._connected or not self.enabled:
             return
 
-        def _do_update():
-            with self._lock:
-                if not self._rpc:
-                    return
-                try:
-                    payload = {}
-                    if details:
-                        payload["details"] = details[:128]
-                    if state:
-                        payload["state"] = state[:128]
-                    if large_image:
-                        payload["large_image"] = large_image
-                    if large_text:
-                        payload["large_text"] = large_text[:128]
-                    if small_image:
-                        payload["small_image"] = small_image
-                    if small_text:
-                        payload["small_text"] = small_text[:128]
-                    if start:
-                        payload["start"] = int(start)
-                    if end:
-                        payload["end"] = int(end)
+        payload = {}
+        if details:
+            payload["details"] = details[:128]
+        if state:
+            payload["state"] = state[:128]
+        if large_image:
+            payload["large_image"] = large_image
+        if large_text:
+            payload["large_text"] = large_text[:128]
+        if small_image:
+            payload["small_image"] = small_image
+        if small_text:
+            payload["small_text"] = small_text[:128]
+        if start:
+            payload["start"] = int(start)
+        if end:
+            payload["end"] = int(end)
 
-                    # Validate buttons (Discord limits to 2 buttons with valid URLs)
-                    if buttons and isinstance(buttons, list):
-                        valid_buttons = []
-                        for b in buttons[:2]:
-                            lbl = b.get("label", "")[:32]
-                            url = b.get("url", "")
-                            if lbl and url.startswith(("http://", "https://")):
-                                valid_buttons.append({"label": lbl, "url": url})
-                        if valid_buttons:
-                            payload["buttons"] = valid_buttons
+        if buttons and isinstance(buttons, list):
+            valid_buttons = []
+            for b in buttons[:2]:
+                lbl = b.get("label", "")[:32]
+                url = b.get("url", "")
+                if lbl and url.startswith(("http://", "https://")):
+                    valid_buttons.append({"label": lbl, "url": url})
+            if valid_buttons:
+                payload["buttons"] = valid_buttons
 
-                    self._rpc.update(**payload)
-                except Exception as e:
-                    print(f"[Poppy Discord] Presence update error: {e}")
-                    self._connected = False
-
-        threading.Thread(target=_do_update, daemon=True).start()
+        with self._lock:
+            self._pending_payload = payload
+        self._wake_event.set()
 
     def apply_custom_presence(self):
         """Apply current custom presence configuration."""
@@ -230,6 +259,8 @@ class DiscordRPCManager(QObject):
 
     def close(self):
         with self._lock:
+            self._running = False
+            self._wake_event.set()
             if self._rpc:
                 try:
                     self._rpc.close()

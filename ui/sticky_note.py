@@ -7,7 +7,7 @@ and persistent on-screen presence across desktops.
 """
 
 from PySide6.QtCore import Qt, QPoint, Signal, QSize, QTimer, QRectF
-from PySide6.QtGui import QColor, QFont, QPixmap, QPainter
+from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, QPushButton,
     QSizeGrip, QFrame, QApplication
@@ -252,15 +252,21 @@ class FloatingStickyNote(QWidget):
 
     def toggle_always_on_top(self):
         self.is_pinned = not self.is_pinned
-        if self.is_pinned:
-            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            self.title_bar.btn_pin.setText(Icons.PIN)
-            self.title_bar.btn_pin.setToolTip("Always on Top: ON (Click to unpin)")
-        else:
-            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
-            self.title_bar.btn_pin.setText(Icons.UNPIN)
-            self.title_bar.btn_pin.setToolTip("Always on Top: OFF (Click to pin)")
-        self.show()
+        self.title_bar.btn_pin.setText(Icons.PIN if self.is_pinned else Icons.UNPIN)
+        self.title_bar.btn_pin.setToolTip("Always on Top: ON (Click to unpin)" if self.is_pinned else "Always on Top: OFF (Click to pin)")
+        try:
+            import ctypes
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOACTIVATE = 0x0010
+            hwnd = int(self.winId())
+            target = HWND_TOPMOST if self.is_pinned else HWND_NOTOPMOST
+            ctypes.windll.user32.SetWindowPos(hwnd, target, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.is_pinned)
+            self.show()
 
     def copy_text(self):
         text = self.editor.toPlainText()
@@ -567,7 +573,8 @@ class FloatingStickyImage(QWidget):
             self.btn_maximize.setToolTip("Maximize / Fullscreen")
         else:
             self._prev_geom = self.geometry()
-            screen = QApplication.primaryScreen().availableGeometry()
+            cur_screen = QGuiApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+            screen = cur_screen.availableGeometry() if cur_screen else self.geometry()
             self.setGeometry(screen)
             self._is_maximized = True
             self.btn_maximize.setText(Icons.RESTORE)
@@ -577,8 +584,19 @@ class FloatingStickyImage(QWidget):
     def toggle_pin(self):
         self.is_pinned = not self.is_pinned
         self.btn_img_pin.setText(Icons.PIN if self.is_pinned else Icons.UNPIN)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.is_pinned)
-        self.show()
+        try:
+            import ctypes
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOACTIVATE = 0x0010
+            hwnd = int(self.winId())
+            target = HWND_TOPMOST if self.is_pinned else HWND_NOTOPMOST
+            ctypes.windll.user32.SetWindowPos(hwnd, target, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.is_pinned)
+            self.show()
 
     def copy_image(self):
         if self._pixmap and not self._pixmap.isNull():

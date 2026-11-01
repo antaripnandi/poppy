@@ -16,10 +16,10 @@ from enum import Enum
 from datetime import datetime
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer
+    Qt, QRect, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient
+    QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
@@ -35,7 +35,7 @@ from poppy.ui.views import (
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
-from poppy.ui.styles import THEME_PRESETS, DEFAULT_THEME, get_theme, get_stylesheet
+from poppy.ui.styles import DEFAULT_THEME, get_theme
 from poppy.core.pomodoro import PomodoroManager
 from poppy.core.media_manager import MediaManager
 from poppy.core.drop_shelf import DropShelfManager
@@ -45,7 +45,7 @@ from poppy.core.system_controls import SystemAudioController, SystemBrightnessCo
 from poppy.core.weather_manager import WeatherManager
 from poppy.core.system_tools import (
     CaffeineManager, ColorEyedropperOverlay,
-    launch_screen_snip, lock_workstation, launch_windows_search
+    launch_screen_snip, lock_workstation
 )
 
 
@@ -121,6 +121,12 @@ class DynamicNotchWindow(QWidget):
         self._leave_timer.setSingleShot(True)
         self._leave_timer.setInterval(400)
         self._leave_timer.timeout.connect(self._on_leave_timeout)
+
+        # Hover intent debounce timer (120ms hysteresis to avoid accidental Peek bloom)
+        self._hover_peek_timer = QTimer(self)
+        self._hover_peek_timer.setSingleShot(True)
+        self._hover_peek_timer.setInterval(120)
+        self._hover_peek_timer.timeout.connect(self._on_hover_peek_timeout)
 
         # Island auto-dismiss timer (4.5s)
         self._island_timer = QTimer(self)
@@ -1038,14 +1044,14 @@ class DynamicNotchWindow(QWidget):
 
     def _tear_off_sticky_note(self, text: str):
         note = FloatingStickyNote(initial_text=text)
-        screen = QApplication.primaryScreen().geometry()
+        screen = self._get_current_screen_geometry()
         offset = (len(self._floating_notes) % 8) * 28
         x = max(20, self.x() + 40 + offset)
         y = max(40, self.y() + self.height() + 16 + offset)
-        if x + 280 > screen.width():
-            x = screen.width() - 300
-        if y + 250 > screen.height():
-            y = screen.height() - 270
+        if x + 280 > screen.x() + screen.width():
+            x = screen.x() + screen.width() - 300
+        if y + 250 > screen.y() + screen.height():
+            y = screen.y() + screen.height() - 270
         note.move(x, y)
         note.show()
         note.raise_()
@@ -1058,7 +1064,7 @@ class DynamicNotchWindow(QWidget):
         if not file_path or not os.path.exists(file_path):
             return
         img_note = FloatingStickyImage(file_path)
-        screen = QApplication.primaryScreen().geometry()
+        screen = self._get_current_screen_geometry()
         offset = (len(self._floating_notes) % 6) * 32
         x = max(40, screen.x() + (screen.width() - img_note.width()) // 2 + offset)
         y = max(60, screen.y() + 120 + offset)
@@ -1128,10 +1134,11 @@ class DynamicNotchWindow(QWidget):
             self._island_timer.stop()
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
         if self.state == NotchState.COLLAPSED and auto_peek:
-            self._transition_to(NotchState.PEEK)
+            self._hover_peek_timer.start(120)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        self._hover_peek_timer.stop()
         from PySide6.QtGui import QCursor
         # Crucial: if cursor is still geometrically within the window, ignore false leave events
         if self.geometry().contains(QCursor.pos()):
@@ -1141,6 +1148,11 @@ class DynamicNotchWindow(QWidget):
         elif self.state == NotchState.PEEK:
             self._leave_timer.start()
         super().leaveEvent(event)
+
+    def _on_hover_peek_timeout(self):
+        from PySide6.QtGui import QCursor
+        if self.state == NotchState.COLLAPSED and self.geometry().contains(QCursor.pos()):
+            self._transition_to(NotchState.PEEK)
 
     def _on_leave_timeout(self):
         from PySide6.QtGui import QCursor
@@ -1227,9 +1239,18 @@ class DynamicNotchWindow(QWidget):
 
         self._apply_geometry_for_state(new_state, animate=True)
 
+    def _get_current_screen_geometry(self) -> QRect:
+        """Multi-monitor aware screen lookup using window center and cursor fallback."""
+        screen = QGuiApplication.screenAt(self.geometry().center())
+        if not screen:
+            screen = QGuiApplication.screenAt(QCursor.pos())
+        if not screen:
+            screen = QApplication.primaryScreen()
+        return screen.geometry() if screen else QRect(0, 0, 1920, 1080)
+
     def _recenter_window(self):
         """Ensure the window is mathematically centered on the active screen at all times."""
-        screen = QApplication.primaryScreen().geometry()
+        screen = self._get_current_screen_geometry()
         w = self.width()
         expected_x = screen.x() + (screen.width() - w) // 2
         expected_y = screen.y() if self._style == "Notch" else screen.y() + 8
@@ -1250,7 +1271,7 @@ class DynamicNotchWindow(QWidget):
             h = max(self._open_h, min_h)
             self._target_size = (w, h)
 
-        screen = QApplication.primaryScreen().geometry()
+        screen = self._get_current_screen_geometry()
         w, h = self._target_size
         x = screen.x() + (screen.width() - w) // 2
         y = screen.y() if self._style == "Notch" else screen.y() + 8

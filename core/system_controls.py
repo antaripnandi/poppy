@@ -14,6 +14,7 @@ class SystemAudioController:
     """
     Direct Windows Core Audio master volume and mute controller.
     Uses pure ctypes and COM to interact with IAudioEndpointVolume at sub-millisecond latency.
+    Strictly releases all COM interface pointers (IUnknown::Release) to eliminate handle leaks.
     """
     def __init__(self):
         self._ole32 = ctypes.oledll.ole32
@@ -36,6 +37,16 @@ class SystemAudioController:
         self._ole32.CLSIDFromString('{A95664D2-9614-4F35-A746-DE8DB63617E6}', byref(self._iid_enum))
         self._ole32.CLSIDFromString('{5CDF2C82-841E-4546-9722-0CF74078229A}', byref(self._iid_vol))
 
+    def _release(self, ptr):
+        """Release COM interface pointer to prevent handle leakage."""
+        if ptr and ptr.value:
+            try:
+                vtable = ctypes.cast(ptr, POINTER(POINTER(c_void_p))).contents
+                Release = ctypes.WINFUNCTYPE(wintypes.ULONG, c_void_p)(vtable[2])
+                Release(ptr)
+            except Exception:
+                pass
+
     def _get_volume_interface(self):
         try:
             pEnumerator = c_void_p()
@@ -48,6 +59,7 @@ class SystemAudioController:
 
             pDevice = c_void_p()
             hr = GetDefaultEndpoint(pEnumerator, 0, 1, byref(pDevice))  # eRender=0, eMultimedia=1
+            self._release(pEnumerator)
             if hr != 0 or not pDevice.value:
                 return None
 
@@ -56,6 +68,7 @@ class SystemAudioController:
 
             pVolume = c_void_p()
             hr = Activate(pDevice, byref(self._iid_vol), 23, None, byref(pVolume))
+            self._release(pDevice)
             if hr != 0 or not pVolume.value:
                 return None
             return pVolume
@@ -75,6 +88,8 @@ class SystemAudioController:
             return int(round(val.value * 100))
         except Exception:
             return 50
+        finally:
+            self._release(pVolume)
 
     def set_volume(self, level: int):
         """Sets the system master volume (0-100)."""
@@ -88,6 +103,8 @@ class SystemAudioController:
             SetVol(pVolume, float(level) / 100.0, None)
         except Exception:
             pass
+        finally:
+            self._release(pVolume)
 
     def get_mute(self) -> bool:
         """Returns True if the system audio is muted."""
@@ -102,6 +119,8 @@ class SystemAudioController:
             return bool(val.value)
         except Exception:
             return False
+        finally:
+            self._release(pVolume)
 
     def set_mute(self, mute: bool):
         """Mutes or unmutes the system audio."""
@@ -114,6 +133,8 @@ class SystemAudioController:
             SetMute(pVolume, wintypes.BOOL(mute), None)
         except Exception:
             pass
+        finally:
+            self._release(pVolume)
 
     def toggle_mute(self) -> bool:
         """Toggles audio mute state and returns the new muted status."""
@@ -134,6 +155,7 @@ class SystemAudioController:
             pDevice = c_void_p()
             # eCapture = 1, eMultimedia = 1
             hr = GetDefaultEndpoint(pEnumerator, 1, 1, byref(pDevice))
+            self._release(pEnumerator)
             if hr != 0 or not pDevice.value:
                 return None
 
@@ -142,6 +164,7 @@ class SystemAudioController:
 
             pVolume = c_void_p()
             hr = Activate(pDevice, byref(self._iid_vol), 23, None, byref(pVolume))
+            self._release(pDevice)
             if hr != 0 or not pVolume.value:
                 return None
             return pVolume
@@ -161,6 +184,8 @@ class SystemAudioController:
             return bool(val.value)
         except Exception:
             return False
+        finally:
+            self._release(pVolume)
 
     def set_mic_mute(self, mute: bool):
         """Mutes or unmutes the default microphone."""
@@ -173,6 +198,8 @@ class SystemAudioController:
             SetMute(pVolume, wintypes.BOOL(mute), None)
         except Exception:
             pass
+        finally:
+            self._release(pVolume)
 
     def toggle_mic_mute(self) -> bool:
         """Toggles microphone mute state and returns the new muted status."""
@@ -258,4 +285,3 @@ class SystemBrightnessController:
                 break
         self.set_brightness(next_val)
         return next_val
-

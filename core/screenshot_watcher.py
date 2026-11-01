@@ -23,6 +23,7 @@ class ScreenshotWatcher(QObject):
         )
         os.makedirs(self.shelf_dir, exist_ok=True)
 
+        self.enabled: bool = True  # User opt-in flag for automated clipboard / snip capture
         self._last_image_hash: str | None = None
         self._ignore_clipboard: bool = False
         self._last_capture_time: float = 0.0
@@ -58,14 +59,35 @@ class ScreenshotWatcher(QObject):
         except Exception:
             pass
 
+    def _clean_shelf_cap(self, max_items: int = 50):
+        """Keep shelf storage bounded to prevent disk bloat."""
+        try:
+            if not os.path.exists(self.shelf_dir):
+                return
+            files = [
+                os.path.join(self.shelf_dir, f)
+                for f in os.listdir(self.shelf_dir)
+                if os.path.isfile(os.path.join(self.shelf_dir, f))
+            ]
+            if len(files) > max_items:
+                files.sort(key=os.path.getmtime)
+                to_delete = files[:len(files) - max_items]
+                for f in to_delete:
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def _on_clipboard_data_changed(self):
-        if self._ignore_clipboard:
+        if not self.enabled or self._ignore_clipboard:
             return
         # Debounce to allow clipboard writer to finish
         self._debounce_timer.start()
 
     def _process_clipboard(self):
-        if self._ignore_clipboard:
+        if not self.enabled or self._ignore_clipboard:
             return
 
         cb = QApplication.clipboard()
@@ -94,12 +116,15 @@ class ScreenshotWatcher(QObject):
 
             saved = img.save(file_path, "PNG")
             if saved:
+                self._clean_shelf_cap()
                 self.screenshot_captured.emit(file_path, img)
         except Exception as e:
             print(f"[Poppy ScreenshotWatcher] Error reading clipboard image: {e}")
 
     def _on_screenshots_dir_changed(self, dir_path: str):
         """Handle new files written directly to Pictures/Screenshots (e.g. Win+PrtScn)."""
+        if not self.enabled:
+            return
         try:
             if not os.path.exists(dir_path):
                 return
@@ -124,6 +149,7 @@ class ScreenshotWatcher(QObject):
                         file_name = f"Screenshot_{stamp}.png"
                         file_path = os.path.join(self.shelf_dir, file_name)
                         img.save(file_path, "PNG")
+                        self._clean_shelf_cap()
                         self.screenshot_captured.emit(file_path, img)
         except Exception as e:
             print(f"[Poppy ScreenshotWatcher] Dir watcher error: {e}")
@@ -157,4 +183,3 @@ class ScreenshotWatcher(QObject):
 
     def _reset_ignore_flag(self):
         self._ignore_clipboard = False
-
