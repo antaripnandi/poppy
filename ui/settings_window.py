@@ -24,7 +24,7 @@ from PySide6.QtGui import QFont, QColor, QPainter, QBrush, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QSpinBox, QCheckBox, QPushButton, QStackedWidget, QListWidget,
-    QFrame, QComboBox, QSlider, QScrollArea
+    QFrame, QComboBox, QSlider, QScrollArea, QProgressBar
 )
 
 from poppy.ui.styles import THEME_PRESETS, DEFAULT_THEME
@@ -105,6 +105,7 @@ class ThemeCard(QFrame):
 class SettingsWindow(QWidget):
     settings_saved = Signal(dict)
     appearance_live_updated = Signal(dict)
+    screentime_reset_requested = Signal()
 
     def __init__(self, config: dict = None, parent=None):
         super().__init__(parent)
@@ -199,6 +200,7 @@ class SettingsWindow(QWidget):
         self.nav_list.addItem("Tabs Manager")
         self.nav_list.addItem("Behavior & Gestures")
         self.nav_list.addItem("Notifications")
+        self.nav_list.addItem("Screen Time")
         self.nav_list.addItem("Media & Lyrics")
         self.nav_list.addItem("Weather & Location")
         self.nav_list.addItem("Pomodoro")
@@ -435,7 +437,171 @@ class SettingsWindow(QWidget):
         self.stack.addWidget(page_notif)
 
         # =====================================================================
-        # 4. Media & Lyrics Page (NEW)
+        # 4. Screen Time Page (Digital Wellbeing)
+        # =====================================================================
+        page_st = QWidget()
+        l_st = QVBoxLayout(page_st)
+        l_st.setSpacing(12)
+
+        lbl_st_hdr = QLabel("Screen Time & Digital Wellbeing")
+        lbl_st_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
+        lbl_st_sub = QLabel("Monitor daily active usage, track top applications, enforce daily goals, and schedule rest breaks.")
+        lbl_st_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        l_st.addWidget(lbl_st_hdr)
+        l_st.addWidget(lbl_st_sub)
+
+        # Live Today Summary Card
+        card_st_summary = QFrame()
+        card_st_summary.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+            }
+        """)
+        l_card_summary = QVBoxLayout(card_st_summary)
+        l_card_summary.setContentsMargins(12, 10, 12, 10)
+        l_card_summary.setSpacing(6)
+
+        row_st_stats = QHBoxLayout()
+        self.lbl_st_today_time = QLabel("Today: 0m")
+        self.lbl_st_today_time.setStyleSheet("font-size: 15px; font-weight: 700; color: #0a84ff; background: transparent; border: none;")
+        self.lbl_st_goal_pct = QLabel("Goal: 0%")
+        self.lbl_st_goal_pct.setStyleSheet("font-size: 12px; font-weight: 600; color: #94a3b8; background: transparent; border: none;")
+        self.lbl_st_streak = QLabel("Active Streak: 0m")
+        self.lbl_st_streak.setStyleSheet("font-size: 11px; color: #64748b; background: transparent; border: none;")
+        row_st_stats.addWidget(self.lbl_st_today_time)
+        row_st_stats.addWidget(self.lbl_st_goal_pct)
+        row_st_stats.addStretch()
+        row_st_stats.addWidget(self.lbl_st_streak)
+        l_card_summary.addLayout(row_st_stats)
+
+        # Micro progress bar
+        self.bar_st_goal = QProgressBar()
+        self.bar_st_goal.setFixedHeight(6)
+        self.bar_st_goal.setTextVisible(False)
+        self.bar_st_goal.setStyleSheet("""
+            QProgressBar {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: none;
+                border-radius: 3px;
+            }
+            QProgressBar::chunk {
+                background-color: #0a84ff;
+                border-radius: 3px;
+            }
+        """)
+        self.bar_st_goal.setRange(0, 100)
+        self.bar_st_goal.setValue(0)
+        l_card_summary.addWidget(self.bar_st_goal)
+
+        # Top Apps Breakdown row
+        self.lbl_st_top_apps = QLabel("Top apps will appear as you work...")
+        self.lbl_st_top_apps.setStyleSheet("font-size: 11px; color: #cbd5e1; background: transparent; border: none;")
+        l_card_summary.addWidget(self.lbl_st_top_apps)
+
+        l_st.addWidget(card_st_summary)
+
+        # Controls
+        self.chk_st_enabled = QCheckBox("Enable Screen Time & Active Usage Tracking")
+        l_st.addWidget(self.chk_st_enabled)
+
+        self.chk_st_show_main_menu = QCheckBox("Show Screen Time pill in Main Menu (Home Tab)")
+        l_st.addWidget(self.chk_st_show_main_menu)
+
+        self.chk_st_track_apps = QCheckBox("Track per-application time breakdown (Code, Brave, Spotify, etc.)")
+        l_st.addWidget(self.chk_st_track_apps)
+
+        # AFK / Idle Detection Row
+        row_afk = QHBoxLayout()
+        lbl_afk = QLabel("AFK / Away Detection (Pause timer when inactive):")
+        lbl_afk.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        self.combo_st_afk = QComboBox()
+        self.combo_st_afk.addItem("1 minute", 60)
+        self.combo_st_afk.addItem("2 minutes (Recommended)", 120)
+        self.combo_st_afk.addItem("5 minutes", 300)
+        self.combo_st_afk.addItem("10 minutes", 600)
+        row_afk.addWidget(lbl_afk)
+        row_afk.addStretch()
+        row_afk.addWidget(self.combo_st_afk)
+        l_st.addLayout(row_afk)
+
+        # Daily Goal Slider
+        row_goal = QHBoxLayout()
+        lbl_goal = QLabel("Daily Target / Goal:")
+        lbl_goal.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        self.lbl_goal_val = QLabel("6 hrs")
+        self.lbl_goal_val.setStyleSheet("font-size: 11px; font-weight: 600; color: #0a84ff; min-width: 45px;")
+        self.slider_st_goal = QSlider(Qt.Orientation.Horizontal)
+        self.slider_st_goal.setRange(1, 16)
+        self.slider_st_goal.setValue(6)
+        self.slider_st_goal.valueChanged.connect(lambda v: self.lbl_goal_val.setText(f"{v} hrs"))
+        row_goal.addWidget(lbl_goal)
+        row_goal.addWidget(self.slider_st_goal, 1)
+        row_goal.addWidget(self.lbl_goal_val)
+        l_st.addLayout(row_goal)
+
+        self.chk_st_goal_alert = QCheckBox("Notify when daily target is reached")
+        l_st.addWidget(self.chk_st_goal_alert)
+
+        # Break Reminders
+        self.chk_st_break_reminder = QCheckBox("Remind me to take a rest break during continuous work")
+        l_st.addWidget(self.chk_st_break_reminder)
+
+        row_break = QHBoxLayout()
+        lbl_break_int = QLabel("Break Reminder Interval:")
+        lbl_break_int.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        self.combo_st_break_interval = QComboBox()
+        self.combo_st_break_interval.addItem("Every 30 minutes", 30)
+        self.combo_st_break_interval.addItem("Every 45 minutes", 45)
+        self.combo_st_break_interval.addItem("Every 60 minutes (Recommended)", 60)
+        self.combo_st_break_interval.addItem("Every 90 minutes", 90)
+        self.combo_st_break_interval.addItem("Every 120 minutes", 120)
+        row_break.addWidget(lbl_break_int)
+        row_break.addStretch()
+        row_break.addWidget(self.combo_st_break_interval)
+        l_st.addLayout(row_break)
+
+        # Excluded Apps
+        row_excl = QVBoxLayout()
+        row_excl.setSpacing(4)
+        lbl_excl = QLabel("Excluded Apps (Privacy Filter, comma-separated):")
+        lbl_excl.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        self.txt_st_excluded = QLineEdit()
+        self.txt_st_excluded.setPlaceholderText("e.g. keepass, 1password, bitwarden")
+        row_excl.addWidget(lbl_excl)
+        row_excl.addWidget(self.txt_st_excluded)
+        l_st.addLayout(row_excl)
+
+        # Reset button
+        row_reset = QHBoxLayout()
+        self.btn_st_reset = QPushButton("Reset Today's Screen Time")
+        self.btn_st_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_st_reset.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(239, 68, 68, 0.15);
+                border: 1px solid rgba(239, 68, 68, 0.35);
+                border-radius: 6px;
+                color: #fca5a5;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 6px 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(239, 68, 68, 0.28);
+                color: #ffffff;
+            }
+        """)
+        self.btn_st_reset.clicked.connect(self._on_screentime_reset_clicked)
+        row_reset.addWidget(self.btn_st_reset)
+        row_reset.addStretch()
+        l_st.addLayout(row_reset)
+
+        l_st.addStretch()
+        self.stack.addWidget(page_st)
+
+        # =====================================================================
+        # 5. Media & Lyrics Page
         # =====================================================================
         page_media = QWidget()
         l_media = QVBoxLayout(page_media)
@@ -813,6 +979,34 @@ class SettingsWindow(QWidget):
         self.chk_notif_sound.setChecked(notif_cfg.get("sound", True))
         self.chk_notif_preview.setChecked(notif_cfg.get("preview_text", True))
 
+        # 4. Screen Time
+        st_cfg = self.config.get("screentime", {})
+        self.chk_st_enabled.setChecked(st_cfg.get("enabled", True))
+        self.chk_st_show_main_menu.setChecked(st_cfg.get("show_in_main_menu", True))
+        self.chk_st_track_apps.setChecked(st_cfg.get("track_apps", True))
+
+        afk_sec = st_cfg.get("idle_threshold_seconds", 120)
+        for i in range(self.combo_st_afk.count()):
+            if self.combo_st_afk.itemData(i) == afk_sec:
+                self.combo_st_afk.setCurrentIndex(i)
+                break
+
+        goal_h = int(st_cfg.get("daily_goal_hours", 6))
+        self.slider_st_goal.setValue(goal_h)
+        self.lbl_goal_val.setText(f"{goal_h} hrs")
+
+        self.chk_st_goal_alert.setChecked(st_cfg.get("goal_alert_enabled", True))
+        self.chk_st_break_reminder.setChecked(st_cfg.get("break_reminders_enabled", True))
+
+        break_int = st_cfg.get("break_interval_minutes", 60)
+        for i in range(self.combo_st_break_interval.count()):
+            if self.combo_st_break_interval.itemData(i) == break_int:
+                self.combo_st_break_interval.setCurrentIndex(i)
+                break
+
+        excl_list = st_cfg.get("excluded_apps", [])
+        self.txt_st_excluded.setText(", ".join(excl_list))
+
         # 4. Media & Lyrics
         media_cfg = self.config.get("media", {})
         self.txt_sp_dc.setText(media_cfg.get("spotify_sp_dc", ""))
@@ -883,6 +1077,17 @@ class SettingsWindow(QWidget):
                 "sound": self.chk_notif_sound.isChecked(),
                 "preview_text": self.chk_notif_preview.isChecked(),
             },
+            "screentime": {
+                "enabled": self.chk_st_enabled.isChecked(),
+                "show_in_main_menu": self.chk_st_show_main_menu.isChecked(),
+                "track_apps": self.chk_st_track_apps.isChecked(),
+                "idle_threshold_seconds": self.combo_st_afk.currentData() or 120,
+                "daily_goal_hours": self.slider_st_goal.value(),
+                "goal_alert_enabled": self.chk_st_goal_alert.isChecked(),
+                "break_reminders_enabled": self.chk_st_break_reminder.isChecked(),
+                "break_interval_minutes": self.combo_st_break_interval.currentData() or 60,
+                "excluded_apps": [x.strip() for x in self.txt_st_excluded.text().split(",") if x.strip()]
+            },
             "media": {
                 "spotify_sp_dc": self.txt_sp_dc.text().strip(),
                 "auto_scroll_lyrics": self.chk_lyrics_auto_scroll.isChecked()
@@ -929,3 +1134,36 @@ class SettingsWindow(QWidget):
         self.config = new_config
         self.settings_saved.emit(new_config)
         self.close()
+
+    def _on_screentime_reset_clicked(self):
+        self.screentime_reset_requested.emit()
+        self.lbl_st_today_time.setText("Today: 0m")
+        self.lbl_st_goal_pct.setText("Goal: 0%")
+        self.bar_st_goal.setValue(0)
+        self.lbl_st_streak.setText("Active Streak: 0m")
+        self.lbl_st_top_apps.setText("Reset complete.")
+
+    def update_screentime_display(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str, goal_hours: float):
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        time_str = f"{h}h {m:02d}m" if h > 0 else f"{m}m"
+        self.lbl_st_today_time.setText(f"Today: {time_str}")
+
+        goal_sec = max(1.0, goal_hours * 3600.0)
+        pct = min(100, int((total_sec / goal_sec) * 100))
+        self.lbl_st_goal_pct.setText(f"Goal: {pct}% of {int(goal_hours)}h")
+        self.bar_st_goal.setValue(pct)
+
+        self.lbl_st_streak.setText(f"Active Streak: {streak_sec // 60}m")
+
+        if top_apps:
+            app_text = "Top Apps: " + "  •  ".join(f"{name}: {fmt}" for name, sec, fmt in top_apps[:3])
+            self.lbl_st_top_apps.setText(app_text)
+        else:
+            self.lbl_st_top_apps.setText(f"Active now: {active_app}")
+
+    def select_page(self, page_name: str):
+        for idx in range(self.nav_list.count()):
+            if self.nav_list.item(idx).text().strip().lower() == page_name.strip().lower():
+                self.nav_list.setCurrentRow(idx)
+                break

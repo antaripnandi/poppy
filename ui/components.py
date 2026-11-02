@@ -509,6 +509,103 @@ class MetricLabel(QLabel):
         self.setText(f"{self.tag} {val_str}")
 
 
+class ScreenTimeHomeWidget(QFrame):
+    """
+    Minimalist interactive Screen Time pill for the Home dashboard.
+    Displays today's active screen duration, percentage of daily goal,
+    and active foreground application with an organic micro-progress bar.
+    """
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(24)
+        self._progress = 0.0
+        self._accent = "#6e9bff"
+
+        self.setStyleSheet("""
+            QFrame#screenTimeWidget {
+                background: rgba(255, 255, 255, 0.05);
+                border: none;
+                border-radius: 6px;
+            }
+            QFrame#screenTimeWidget:hover {
+                background: rgba(255, 255, 255, 0.09);
+            }
+        """)
+        self.setObjectName("screenTimeWidget")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(6)
+
+        self.lbl_icon = QLabel(Icons.TIMER)
+        self.lbl_icon.setStyleSheet("font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 11px; color: #94a3b8; background: transparent; border: none;")
+        layout.addWidget(self.lbl_icon)
+
+        self.lbl_time = QLabel("0m")
+        self.lbl_time.setStyleSheet("font-size: 11px; font-weight: 600; color: #f1f5f9; background: transparent; border: none;")
+        layout.addWidget(self.lbl_time)
+
+        self.lbl_sub = QLabel("• Screen Time")
+        self.lbl_sub.setStyleSheet("font-size: 10px; color: #94a3b8; background: transparent; border: none;")
+        layout.addWidget(self.lbl_sub)
+
+        layout.addStretch()
+
+        self.lbl_arrow = QLabel("›")
+        self.lbl_arrow.setStyleSheet("font-size: 12px; color: #64748b; background: transparent; border: none;")
+        layout.addWidget(self.lbl_arrow)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def update_stats(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str, goal_hours: float = 6.0):
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        time_str = f"{h}h {m:02d}m" if h > 0 else f"{m}m"
+        self.lbl_time.setText(time_str)
+
+        goal_sec = max(1.0, goal_hours * 3600.0)
+        self._progress = min(1.0, max(0.0, total_sec / goal_sec))
+        pct = int(self._progress * 100)
+
+        if active_app and active_app not in ("System", "Desktop"):
+            self.lbl_sub.setText(f"• {active_app}")
+        else:
+            self.lbl_sub.setText(f"• {pct}% of {int(goal_hours)}h")
+
+        lines = [
+            f"Screen Time Today: {time_str}",
+            f"Daily Goal: {int(goal_hours)}h ({pct}%)",
+            f"Current Active Streak: {streak_sec // 60}m"
+        ]
+        if top_apps:
+            lines.append("\nTop Applications:")
+            for name, sec, fmt in top_apps[:4]:
+                lines.append(f"  • {name}: {fmt}")
+        lines.append("\nClick to open Screen Time settings & goals")
+        self.setToolTip("\n".join(lines))
+        self.update()
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._progress > 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            bar_w = float(self.width()) * self._progress
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(self._accent)))
+            painter.drawRoundedRect(QRectF(0, self.height() - 2.0, bar_w, 2.0), 1.0, 1.0)
+
+
 class DraggableThumbnail(QLabel):
     """
     Thumbnail that displays an image and can be dragged directly out

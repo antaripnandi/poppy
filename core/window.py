@@ -54,6 +54,7 @@ from poppy.core.system_features import (
     ClipboardHistoryManager, AudioEndpointManager
 )
 from poppy.core.weather_manager import WeatherManager
+from poppy.core.screentime_manager import ScreenTimeManager
 from poppy.core.system_tools import (
     CaffeineManager, ColorEyedropperOverlay,
     launch_screen_snip, lock_workstation
@@ -122,6 +123,8 @@ class DynamicNotchWindow(QWidget):
 
         # Sizing and Themes
         self._load_appearance_config()
+        self.setMinimumSize(1, 1)
+        self.screentime = ScreenTimeManager(self.config, parent=self)
 
         # State & Animation
         self.state = NotchState.COLLAPSED
@@ -182,6 +185,7 @@ class DynamicNotchWindow(QWidget):
         self._apply_geometry_for_state(NotchState.COLLAPSED, animate=False)
 
     def _load_appearance_config(self):
+        self.setMinimumSize(1, 1)
         app_cfg = self.config.get("appearance", {})
         self._theme_name = app_cfg.get("theme", DEFAULT_THEME)
         self._theme = get_theme(self._theme_name)
@@ -471,6 +475,13 @@ class DynamicNotchWindow(QWidget):
         # =====================================================================
         self.view_expanded = QWidget(self)
         self.view_expanded.setFixedSize(self._open_w, self._open_h)
+        self.view_expanded.setMinimumSize(0, 0)
+        self._expanded_opacity = QGraphicsOpacityEffect(self.view_expanded)
+        self.view_expanded.setGraphicsEffect(self._expanded_opacity)
+        self._expanded_opacity.setOpacity(1.0)
+        self._anim_opacity = QPropertyAnimation(self._expanded_opacity, b"opacity", self)
+        self._anim_opacity.setDuration(260)
+        self._anim_opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
         v_exp_layout = QVBoxLayout(self.view_expanded)
         v_exp_layout.setContentsMargins(14, 8, 14, 12)
         v_exp_layout.setSpacing(8)
@@ -709,6 +720,31 @@ class DynamicNotchWindow(QWidget):
         # Home Audio & Bluetooth Menus
         self.tab_home.audio_device_menu_requested.connect(self._show_audio_device_dropdown)
         self.tab_home.bluetooth_menu_requested.connect(self._show_bluetooth_dropdown)
+
+        # Screen Time & Digital Wellbeing
+        self.screentime.stats_updated.connect(self._on_screentime_stats_updated)
+        self.screentime.break_reminder_triggered.connect(self._on_screentime_break_reminder)
+        self.screentime.daily_goal_reached.connect(self._on_screentime_goal_reached)
+        self.tab_home.screentime_clicked.connect(lambda: self.open_settings("Screen Time"))
+
+    def _on_screentime_stats_updated(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str):
+        st_cfg = self.config.get("screentime", {})
+        show_pill = st_cfg.get("enabled", True) and st_cfg.get("show_in_main_menu", True)
+        if hasattr(self.tab_home, "screentime_widget"):
+            self.tab_home.screentime_widget.setVisible(show_pill)
+            self.tab_home.screentime_widget.update_stats(
+                total_sec, streak_sec, top_apps, active_app, self.screentime.get_goal_hours()
+            )
+        if self._settings_window and self._settings_window.isVisible():
+            self._settings_window.update_screentime_display(
+                total_sec, streak_sec, top_apps, active_app, self.screentime.get_goal_hours()
+            )
+
+    def _on_screentime_break_reminder(self, streak_min: int):
+        self.trigger_island("Take a Rest Break", f"You've been active for {streak_min} mins. Rest your eyes!")
+
+    def _on_screentime_goal_reached(self, goal_hours: float):
+        self.trigger_island("Daily Target Reached", f"You've completed your screen time goal of {int(goal_hours)} hours.")
 
     def _update_clock(self):
         now = datetime.now()
@@ -1425,12 +1461,16 @@ class DynamicNotchWindow(QWidget):
         self._floating_notes.append(img_note)
         img_note.closed.connect(lambda n: self._floating_notes.remove(n) if n in self._floating_notes else None)
 
-    def open_settings(self):
+    def open_settings(self, page_name: str = None):
         """Open the dedicated Poppy Settings application window."""
         if self._settings_window is None:
             self._settings_window = SettingsWindow(config=self.config)
             self._settings_window.settings_saved.connect(self._on_settings_saved)
             self._settings_window.appearance_live_updated.connect(self._apply_live_appearance)
+            self._settings_window.screentime_reset_requested.connect(self.screentime.reset_today)
+
+        if page_name and hasattr(self._settings_window, "select_page"):
+            self._settings_window.select_page(page_name)
 
         self._settings_window.show()
         self._settings_window.raise_()
@@ -1483,6 +1523,16 @@ class DynamicNotchWindow(QWidget):
         rpc_cfg = self.config.get("discord_rpc", {})
         if rpc_cfg:
             self.discord_rpc.update_config(rpc_cfg)
+
+        if hasattr(self, "screentime"):
+            self.screentime.update_config(self.config)
+            st_cfg = self.config.get("screentime", {})
+            show_pill = st_cfg.get("enabled", True) and st_cfg.get("show_in_main_menu", True)
+            if hasattr(self.tab_home, "screentime_widget"):
+                self.tab_home.screentime_widget.setVisible(show_pill)
+
+        if hasattr(self.tab_home, "set_accent"):
+            self.tab_home.set_accent(self._theme["accent"])
 
     # --- Mouse & State Transitions ---
     def enterEvent(self, event):
@@ -1656,7 +1706,17 @@ class DynamicNotchWindow(QWidget):
         super().changeEvent(event)
 
     def _transition_to(self, new_state: NotchState):
+        if self.state == new_state:
+            return
+
+        old_state = self.state
         self.state = new_state
+
+        # Capture geometry BEFORE any view visibility changes
+        start_rect = self.geometry()
+        if self.anim and self.anim.state() == QPropertyAnimation.State.Running:
+            self.anim.stop()
+            start_rect = self.geometry()
 
         if new_state == NotchState.COLLAPSED:
             self._target_size = (self._collapsed_w, self._collapsed_h)
@@ -1706,7 +1766,7 @@ class DynamicNotchWindow(QWidget):
             self._click_outside_timer.stop()
             QTimer.singleShot(220, self._start_click_outside_timer)
 
-        self._apply_geometry_for_state(new_state, animate=True)
+        self._apply_geometry_for_state(new_state, animate=True, start_rect=start_rect)
 
     def _get_current_screen_geometry(self) -> QRect:
         """Multi-monitor aware screen lookup using configured display or cursor fallback."""
@@ -1734,7 +1794,7 @@ class DynamicNotchWindow(QWidget):
         if self.x() != expected_x or self.y() != expected_y:
             self.move(expected_x, expected_y)
 
-    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True):
+    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, start_rect: QRect = None):
         if state == NotchState.COLLAPSED:
             self._target_size = (self._collapsed_w, self._collapsed_h)
         elif state == NotchState.PEEK:
@@ -1757,6 +1817,15 @@ class DynamicNotchWindow(QWidget):
 
         if animate:
             self.anim.stop()
+            if hasattr(self, "_anim_opacity"):
+                self._anim_opacity.stop()
+
+            # Prevent Qt layout from shifting the window prior to interpolation
+            if start_rect is not None:
+                self.setGeometry(start_rect)
+            else:
+                start_rect = self.geometry()
+
             # Organic spring physics matching macOS Dynamic Island & NotchX
             if state == NotchState.COLLAPSED:
                 duration = 200
@@ -1765,18 +1834,29 @@ class DynamicNotchWindow(QWidget):
                 duration = 240
                 curve = QEasingCurve(QEasingCurve.Type.OutCubic)
             else:  # EXPANDED
-                duration = 280
+                duration = 260
                 curve = QEasingCurve(QEasingCurve.Type.OutCubic)
+                if hasattr(self, "_expanded_opacity"):
+                    self._expanded_opacity.setOpacity(0.0)
+                    self._anim_opacity.setDuration(duration)
+                    self._anim_opacity.setStartValue(0.0)
+                    self._anim_opacity.setEndValue(1.0)
+                    self._anim_opacity.setEasingCurve(curve)
+                    self._anim_opacity.start()
 
             self.anim.setDuration(duration)
             self.anim.setEasingCurve(curve)
             # Clear mask during animation to eliminate SetWindowRgn DWM pipeline stalls
             self.clearMask()
-            self.anim.setStartValue(self.geometry())
+            self.anim.setStartValue(start_rect)
             self.anim.setEndValue(target_rect)
             self.anim.start()
         else:
             self.anim.stop()
+            if hasattr(self, "_anim_opacity"):
+                self._anim_opacity.stop()
+            if hasattr(self, "_expanded_opacity"):
+                self._expanded_opacity.setOpacity(1.0)
             self.setGeometry(target_rect)
             self._recenter_window()
             self._update_clickthrough_mask()

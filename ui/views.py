@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.components import (
     IconButton, CircularProgressRing, AudioVisualizerBars, MetricLabel,
-    CardFrame, SourcePill, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget
+    CardFrame, SourcePill, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
+    ScreenTimeHomeWidget
 )
 from poppy.ui.icons import Icons
 
@@ -40,6 +41,7 @@ class HomeTabView(QWidget):
     audio_device_menu_requested = Signal()
     bluetooth_menu_requested = Signal()
     weather_refresh_requested = Signal()
+    screentime_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,8 +105,15 @@ class HomeTabView(QWidget):
 
         l_clock.addWidget(self.lbl_big_time)
         l_clock.addWidget(self.lbl_date)
-        l_clock.addSpacing(4)
+        l_clock.addSpacing(2)
         l_clock.addLayout(weather_row)
+        l_clock.addSpacing(4)
+
+        # Screen Time Interactive Pill
+        self.screentime_widget = ScreenTimeHomeWidget(self)
+        self.screentime_widget.clicked.connect(self.screentime_clicked.emit)
+        l_clock.addWidget(self.screentime_widget)
+
         l_clock.addStretch()
         l_clock.addLayout(telemetry_row)
         grid.addWidget(card_clock, 0, 0)
@@ -596,6 +605,11 @@ class HomeTabView(QWidget):
         self.lbl_weather_icon.setText(icon)
         self.lbl_weather_text.setText(text)
         self.lbl_weather_text.setToolTip(f"{city}\n{temp}°C · {cond}\nHigh: {h}°C · Low: {l}°C\nHumidity: {hum}%\n(Click to Refresh)")
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        if hasattr(self, "screentime_widget"):
+            self.screentime_widget.set_accent(accent)
 
 
 class MusicTabView(QWidget):

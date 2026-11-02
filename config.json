@@ -67,5 +67,26 @@
   "hardware_hud": {
     "monitor_gpu": true,
     "monitor_battery": true
+  },
+  "screentime": {
+    "enabled": true,
+    "show_in_main_menu": true,
+    "track_apps": true,
+    "idle_threshold_seconds": 120,
+    "daily_goal_hours": 6,
+    "goal_alert_enabled": true,
+    "break_reminders_enabled": true,
+    "break_interval_minutes": 60,
+    "excluded_apps": [
+      "keepass",
+      "1password"
+    ]
+  },
+  "notifications": {
+    "enabled": true,
+    "show_island_on_notify": true,
+    "mute_in_focus": true,
+    "sound": true,
+    "preview_text": true
   }
 }
