@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from poppy.ui.components import (
     IconButton, CircularProgressRing, AudioVisualizerBars, MetricLabel,
     CardFrame, SourcePill, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
-    ScreenTimeHomeWidget
+    ScreenTimeHomeWidget, CapsuleSlider
 )
 from poppy.ui.icons import Icons
 
@@ -59,30 +59,43 @@ class HomeTabView(QWidget):
         # -------------------------------------------------------------
         card_clock = CardFrame(self)
         l_clock = QVBoxLayout(card_clock)
-        l_clock.setContentsMargins(16, 14, 16, 14)
+        l_clock.setContentsMargins(18, 16, 18, 14)
         l_clock.setSpacing(4)
 
         self.lbl_big_time = QLabel("12:11:29 AM")
         self.lbl_big_time.setStyleSheet("""
             QLabel {
-                font-size: 28px;
+                font-size: 32px;
                 font-weight: 700;
-                color: #f8fafc;
+                color: #ffffff;
                 background: transparent;
                 border: none;
-                letter-spacing: -0.5px;
+                letter-spacing: -0.6px;
             }
         """)
         self.lbl_date = QLabel("Monday, 5 October")
-        self.lbl_date.setStyleSheet("QLabel { font-size: 11px; color: #94a3b8; font-weight: 500; background: transparent; border: none; }")
+        self.lbl_date.setStyleSheet("QLabel { font-size: 11.5px; color: #94a3b8; font-weight: 500; background: transparent; border: none; }")
 
-        # Weather / Status row
-        weather_row = QHBoxLayout()
+        # Weather / Status row in ambient glass capsule
+        weather_card = QFrame()
+        weather_card.setStyleSheet("""
+            QFrame {
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+            }
+            QFrame:hover {
+                background: rgba(255, 255, 255, 0.07);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+            }
+        """)
+        weather_row = QHBoxLayout(weather_card)
+        weather_row.setContentsMargins(8, 4, 10, 4)
         weather_row.setSpacing(6)
         self.lbl_weather_icon = QLabel(Icons.WEATHER_SUN)
-        self.lbl_weather_icon.setStyleSheet("font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 13px; color: #94a3b8; background: transparent; border: none;")
+        self.lbl_weather_icon.setStyleSheet("font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 13px; color: #38bdf8; background: transparent; border: none;")
         self.lbl_weather_text = QLabel("Fetching live weather...")
-        self.lbl_weather_text.setStyleSheet("font-size: 11px; color: #cbd5e1; background: transparent; border: none;")
+        self.lbl_weather_text.setStyleSheet("font-size: 11px; color: #cbd5e1; font-weight: 500; background: transparent; border: none;")
         self.lbl_weather_text.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_weather_text.setToolTip("Click to Refresh Weather")
         self.lbl_weather_text.mousePressEvent = lambda e: self.weather_refresh_requested.emit()
@@ -92,7 +105,7 @@ class HomeTabView(QWidget):
 
         # Telemetry pills row
         telemetry_row = QHBoxLayout()
-        telemetry_row.setSpacing(5)
+        telemetry_row.setSpacing(6)
         self.lbl_cpu = MetricLabel("CPU", "0%")
         self.lbl_gpu = MetricLabel("GPU", "--%")
         self.lbl_ram = MetricLabel("RAM", "0%")
@@ -105,8 +118,8 @@ class HomeTabView(QWidget):
 
         l_clock.addWidget(self.lbl_big_time)
         l_clock.addWidget(self.lbl_date)
-        l_clock.addSpacing(2)
-        l_clock.addLayout(weather_row)
+        l_clock.addSpacing(3)
+        l_clock.addWidget(weather_card)
         l_clock.addSpacing(4)
 
         # Screen Time Interactive Pill
@@ -119,76 +132,31 @@ class HomeTabView(QWidget):
         grid.addWidget(card_clock, 0, 0)
 
         # -------------------------------------------------------------
-        # Card 2: Audio, Sliders & Quick Controls (home-v2 Card 2)
+        # Card 2: Audio, Sliders & Quick Controls (Option 1 Bento)
         # -------------------------------------------------------------
         card_controls = CardFrame(self)
         l_ctrl = QVBoxLayout(card_controls)
-        l_ctrl.setContentsMargins(16, 12, 16, 12)
-        l_ctrl.setSpacing(8)
+        l_ctrl.setContentsMargins(18, 14, 18, 14)
+        l_ctrl.setSpacing(10)
 
-        # Volume Slider row with numeric readout
-        row_vol = QHBoxLayout()
-        row_vol.setSpacing(8)
+        # macOS Control Center thick capsule sliders
         self.btn_vol_mute = QPushButton(Icons.VOLUME)
-        self.btn_vol_mute.setFixedSize(22, 22)
-        self.btn_vol_mute.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_vol_mute.setToolTip("Click to Mute / Unmute")
-        self.btn_vol_mute.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: none;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 13px;
-                color: #94a3b8;
-                padding: 0px;
-            }
-            QPushButton:hover {
-                color: #ffffff;
-            }
-        """)
-        self.slider_vol = QSlider(Qt.Orientation.Horizontal)
-        self.slider_vol.setRange(0, 100)
-        self.slider_vol.setValue(50)
+        self.btn_vol_mute.setVisible(False)
         self.lbl_vol_num = QLabel("50")
-        self.lbl_vol_num.setFixedWidth(24)
-        self.lbl_vol_num.setStyleSheet("font-size: 11px; color: #94a3b8; font-weight: 600; background: transparent; border: none;")
-        self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_num.setText(str(v)))
-        row_vol.addWidget(self.btn_vol_mute)
-        row_vol.addWidget(self.slider_vol, stretch=1)
-        row_vol.addWidget(self.lbl_vol_num)
-        l_ctrl.addLayout(row_vol)
+        self.lbl_vol_num.setVisible(False)
 
-        # Brightness / Playback Slider row
-        row_bright = QHBoxLayout()
-        row_bright.setSpacing(8)
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, accent="#0a84ff", parent=self)
+        self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_num.setText(str(v)))
+        l_ctrl.addWidget(self.slider_vol)
+
         self.btn_bright_icon = QPushButton(Icons.BRIGHTNESS)
-        self.btn_bright_icon.setFixedSize(22, 22)
-        self.btn_bright_icon.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_bright_icon.setToolTip("Click to cycle brightness presets (25% → 50% → 75% → 100%)")
-        self.btn_bright_icon.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: none;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 13px;
-                color: #94a3b8;
-                padding: 0px;
-            }
-            QPushButton:hover {
-                color: #ffffff;
-            }
-        """)
-        self.slider_bright = QSlider(Qt.Orientation.Horizontal)
-        self.slider_bright.setRange(0, 100)
-        self.slider_bright.setValue(75)
+        self.btn_bright_icon.setVisible(False)
         self.lbl_bright_num = QLabel("75")
-        self.lbl_bright_num.setFixedWidth(24)
-        self.lbl_bright_num.setStyleSheet("font-size: 11px; color: #94a3b8; font-weight: 600; background: transparent; border: none;")
+        self.lbl_bright_num.setVisible(False)
+
+        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, accent="#38bdf8", parent=self)
         self.slider_bright.valueChanged.connect(lambda v: self.lbl_bright_num.setText(str(v)))
-        row_bright.addWidget(self.btn_bright_icon)
-        row_bright.addWidget(self.slider_bright, stretch=1)
-        row_bright.addWidget(self.lbl_bright_num)
-        l_ctrl.addLayout(row_bright)
+        l_ctrl.addWidget(self.slider_bright)
 
         # Audio Output & Media Player Selector Pills + Controls row
         row_dev = QHBoxLayout()
@@ -196,16 +164,17 @@ class HomeTabView(QWidget):
         self.btn_audio_drop = QPushButton("Speakers ▾")
         self.btn_audio_drop.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.06);
-                border: none;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 12px;
                 color: #e2e8f0;
                 font-size: 11px;
                 font-weight: 500;
-                padding: 3px 10px;
+                padding: 4px 11px;
             }
             QPushButton:hover {
                 background: rgba(255, 255, 255, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.16);
             }
         """)
         self.btn_audio_drop.clicked.connect(self.audio_device_menu_requested.emit)
@@ -213,16 +182,17 @@ class HomeTabView(QWidget):
         self.btn_player_drop = QPushButton("Spotify ▾")
         self.btn_player_drop.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.06);
-                border: none;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 12px;
                 color: #e2e8f0;
                 font-size: 11px;
                 font-weight: 500;
-                padding: 3px 10px;
+                padding: 4px 11px;
             }
             QPushButton:hover {
                 background: rgba(255, 255, 255, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.16);
             }
         """)
         self.btn_dev_lock = QPushButton("Lock")
@@ -230,26 +200,27 @@ class HomeTabView(QWidget):
         self.btn_dev_lock.setToolTip("Lock Windows Workstation (Win + L)")
         self.btn_dev_lock.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.06);
-                border: none;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 12px;
                 color: #94a3b8;
                 font-size: 11px;
                 font-weight: 500;
-                padding: 3px 8px;
+                padding: 4px 10px;
             }
             QPushButton:hover {
                 background: rgba(255, 255, 255, 0.12);
                 color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.16);
             }
         """)
         self.btn_dev_lock.clicked.connect(self.lock_workstation_requested.emit)
         self.btn_player_drop.clicked.connect(self.player_menu_requested.emit)
 
         # Transport icons inside controls card
-        self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous", size=22, font_size=10, is_fluent=True)
-        self.btn_ctrl_play = IconButton(Icons.PLAY, "Play/Pause", size=24, font_size=11, is_fluent=True)
-        self.btn_ctrl_next = IconButton(Icons.NEXT, "Next", size=22, font_size=10, is_fluent=True)
+        self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous", size=24, font_size=11, is_fluent=True)
+        self.btn_ctrl_play = IconButton(Icons.PLAY, "Play/Pause", size=26, font_size=12, is_fluent=True)
+        self.btn_ctrl_next = IconButton(Icons.NEXT, "Next", size=24, font_size=11, is_fluent=True)
         self.music_bars = AudioVisualizerBars(self)
 
         row_dev.addWidget(self.btn_audio_drop)
@@ -323,17 +294,18 @@ class HomeTabView(QWidget):
         self.btn_pop_note.setToolTip("Spawn an on-screen floating sticky note")
         self.btn_pop_note.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 255, 255, 0.08);
-                border: none;
-                border-radius: 5px;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
                 color: #e2e8f0;
                 font-size: 10px;
                 font-weight: 600;
-                padding: 3px 8px;
+                padding: 3px 9px;
             }
             QPushButton:hover {
-                background: rgba(255, 255, 255, 0.15);
+                background: rgba(255, 255, 255, 0.12);
                 color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.15);
             }
         """)
         self.btn_pop_note.clicked.connect(self._on_tear_off)
@@ -346,12 +318,12 @@ class HomeTabView(QWidget):
         self.txt_notes.setPlaceholderText("Jot something down...")
         self.txt_notes.setStyleSheet("""
             QTextEdit {
-                background: rgba(255, 255, 255, 0.035);
-                border: none;
+                background: rgba(255, 255, 255, 0.025);
+                border: 1px solid rgba(255, 255, 255, 0.05);
                 border-radius: 10px;
-                padding: 8px;
+                padding: 10px;
                 color: #f1f5f9;
-                font-size: 11px;
+                font-size: 11.5px;
             }
         """)
         self._notes_file = Path(os.path.expanduser("~/.poppy/home_notes.txt"))
@@ -369,18 +341,31 @@ class HomeTabView(QWidget):
         grid.addWidget(card_notes, 1, 0)
 
         # -------------------------------------------------------------
-        # Card 4: Quick Shelf & Calculator
+        # Card 4: Quick Shelf & Calculator (Option 1 Bento)
         # -------------------------------------------------------------
         card_shelf = CardFrame(self)
         l_shelf = QVBoxLayout(card_shelf)
-        l_shelf.setContentsMargins(16, 12, 16, 12)
+        l_shelf.setContentsMargins(18, 14, 18, 14)
         l_shelf.setSpacing(8)
 
         shelf_hdr = QHBoxLayout()
         self.lbl_shelf_status = QLabel("SHELF · 0 FILES")
-        self.lbl_shelf_status.setStyleSheet("QLabel { font-size: 10.5px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; background: transparent; border: none; }")
+        self.lbl_shelf_status.setStyleSheet("QLabel { font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; background: transparent; border: none; }")
         self.btn_clear_shelf = QPushButton("Clear")
-        self.btn_clear_shelf.setStyleSheet("font-size: 9px; padding: 2px 7px; border-radius: 4px; background: rgba(255,255,255,0.06);")
+        self.btn_clear_shelf.setStyleSheet("""
+            QPushButton {
+                font-size: 9.5px;
+                padding: 3px 8px;
+                border-radius: 5px;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                color: #94a3b8;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
         shelf_hdr.addWidget(self.lbl_shelf_status)
         shelf_hdr.addStretch()
         shelf_hdr.addWidget(self.btn_clear_shelf)
@@ -390,9 +375,13 @@ class HomeTabView(QWidget):
         self.shelf_preview_frame = QFrame()
         self.shelf_preview_frame.setStyleSheet("""
             QFrame {
-                background: rgba(255, 255, 255, 0.04);
-                border: none;
-                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.025);
+                border: 1px dashed rgba(255, 255, 255, 0.1);
+                border-radius: 10px;
+            }
+            QFrame:hover {
+                background: rgba(255, 255, 255, 0.045);
+                border: 1px dashed rgba(255, 255, 255, 0.18);
             }
         """)
         spf_layout = QHBoxLayout(self.shelf_preview_frame)
@@ -468,6 +457,20 @@ class HomeTabView(QWidget):
         calc_row = QHBoxLayout()
         self.input_calc = QLineEdit()
         self.input_calc.setPlaceholderText("calc: 45*12, 120/3, 50^2...")
+        self.input_calc.setStyleSheet("""
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+                padding: 6px 12px;
+                color: #f8fafc;
+                font-size: 11px;
+            }
+            QLineEdit:focus {
+                border: 1px solid rgba(10, 132, 255, 0.5);
+                background: rgba(255, 255, 255, 0.07);
+            }
+        """)
         self.input_calc.textChanged.connect(self._eval_calc)
         self.lbl_calc_res = QLabel("")
         self.lbl_calc_res.setStyleSheet("QLabel { color: #38bdf8; font-size: 11px; font-weight: 600; background: transparent; border: none; }")

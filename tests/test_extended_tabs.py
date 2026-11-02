@@ -159,3 +159,26 @@ def test_desktops_tab_view(qapp):
     assert hasattr(view, "_create_new_desktop")
     view.deleteLater()
     qapp.processEvents()
+
+
+def test_capsule_slider_and_rubber_segment(qapp):
+    from poppy.ui.components import CapsuleSlider, RubberSegment
+    slider = CapsuleSlider(icon="test_icon", accent="#0a84ff")
+    slider.setValue(72)
+    assert slider.value() == 72
+    assert slider.isSliderDown() is False
+
+    # Value changes
+    val_changes = []
+    slider.valueChanged.connect(lambda v: val_changes.append(v))
+    slider.setValue(85)
+    assert val_changes == [85]
+
+    # Test RubberSegment alias and keyframe physics
+    segment = RubberSegment([("Tab 1", ""), ("Tab 2", "")])
+    assert len(segment.buttons) == 2
+    segment.set_current_index(1, animate=False)
+    assert segment._current_index == 1
+    segment.deleteLater()
+    slider.deleteLater()
+    qapp.processEvents()

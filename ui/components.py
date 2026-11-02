@@ -169,30 +169,39 @@ class SettingRow(QWidget):
 
 class AnimatedTabStrip(QWidget):
     """
-    Fluid segmented tab bar with a gliding active indicator pill.
-    Smoothly animates its geometry between tab buttons with cubic spring physics.
-    Zero AI borders, pure solid/translucent modern glass styling.
+    Native PySide6 implementation of React Bits <RubberSegment />.
+    Features rubber dilation/stretch on change, spring landing with squash & relax,
+    and high-contrast typography.
     """
     tab_changed = Signal(int)
 
-    def __init__(self, tab_items: list[tuple[str, str]], accent="#6e9bff", parent=None):
+    def __init__(self, tab_items: list[tuple[str, str]], accent="#0a84ff", parent=None):
         super().__init__(parent)
         self._accent = accent
         self._current_index = 0
         self.buttons: list[QPushButton] = []
 
+        self.setStyleSheet("""
+            AnimatedTabStrip {
+                background-color: rgba(0, 0, 0, 0.45);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 14px;
+                padding: 2px 3px;
+            }
+        """)
+
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setContentsMargins(3, 2, 3, 2)
         self._layout.setSpacing(2)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Sliding indicator pill behind buttons
+        # Rubber indicator thumb behind buttons
         self.indicator = QWidget(self)
         self.indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._update_indicator_style()
 
         self._anim = QPropertyAnimation(self.indicator, b"geometry", self)
-        self._anim.setDuration(220)
+        self._anim.setDuration(240)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         for idx, (name, icon) in enumerate(tab_items):
@@ -233,28 +242,29 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_indicator_style(self):
-        bg = _accent_to_rgba(self._accent, 0.22)
+        bg = _accent_to_rgba(self._accent, 0.25)
+        border = _accent_to_rgba(self._accent, 0.5)
         self.indicator.setStyleSheet(f"""
             background-color: {bg};
-            border: none;
-            border-radius: 12px;
+            border: 1px solid {border};
+            border-radius: 11px;
         """)
 
     def _update_buttons_style(self):
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
-            color = self._accent if is_active else "#94a3b8"
+            color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
             font_weight = "600" if is_active else "500"
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: transparent;
                     border: none;
-                    border-radius: 12px;
+                    border-radius: 11px;
                     color: {color};
-                    font-family: -apple-system, 'Segoe UI Variable Text', 'Segoe UI', system-ui, Roboto, sans-serif;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
                     font-size: 11px;
                     font-weight: {font_weight};
-                    padding: 3px 8px;
+                    padding: 3px 9px;
                 }}
                 QPushButton:hover {{
                     color: #ffffff;
@@ -271,12 +281,50 @@ class AnimatedTabStrip(QWidget):
         target_btn = self.buttons[index]
         target_geom = target_btn.geometry()
 
-        if animate and old_idx != index and self.isVisible():
+        if animate and old_idx != index and self.isVisible() and len(self.buttons) > old_idx:
+            rect_from = self.buttons[old_idx].geometry()
+            rect_to = target_geom
+
+            # React Bits RubberSegment: Dilation stretch + Squash landing
+            if index > old_idx:
+                # Moving right: stretch leading edge forward across both slots
+                stretched = QRect(
+                    rect_from.left(),
+                    rect_to.top(),
+                    (rect_to.right() - rect_from.left()) + 4,
+                    rect_to.height()
+                )
+                squashed = QRect(
+                    rect_to.left() + 3,
+                    rect_to.top(),
+                    rect_to.width(),
+                    rect_to.height()
+                )
+            else:
+                # Moving left: stretch leading edge backwards across both slots
+                stretched = QRect(
+                    rect_to.left() - 4,
+                    rect_to.top(),
+                    (rect_from.right() - rect_to.left()) + 4,
+                    rect_to.height()
+                )
+                squashed = QRect(
+                    rect_to.left() - 3,
+                    rect_to.top(),
+                    rect_to.width(),
+                    rect_to.height()
+                )
+
             self._anim.stop()
-            self._anim.setStartValue(self.indicator.geometry())
-            self._anim.setEndValue(target_geom)
+            self._anim.setDuration(240)
+            self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._anim.setKeyValueAt(0.0, rect_from)
+            self._anim.setKeyValueAt(0.38, stretched)
+            self._anim.setKeyValueAt(0.78, squashed)
+            self._anim.setKeyValueAt(1.0, rect_to)
             self._anim.start()
         else:
+            self._anim.stop()
             self.indicator.setGeometry(target_geom)
 
         if emit_signal:
@@ -295,6 +343,10 @@ class AnimatedTabStrip(QWidget):
         if 0 <= self._current_index < len(self.buttons):
             self.indicator.setGeometry(self.buttons[self._current_index].geometry())
             self.indicator.lower()
+
+
+# React Bits RubberSegment Component Alias
+RubberSegment = AnimatedTabStrip
 
 
 class AnimatedStackedWidget(QStackedWidget):
@@ -418,15 +470,19 @@ class SourcePill(QPushButton):
 
 
 class CardFrame(QFrame):
-    """NotchX frosted card with clean borderless styling."""
+    """Option 1 Apple Studio Bento frosted obsidian glass card."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.setStyleSheet("""
             CardFrame#cardFrame {
-                background: rgba(255, 255, 255, 0.035);
-                border: none;
+                background: rgba(255, 255, 255, 0.032);
+                border: 1px solid rgba(255, 255, 255, 0.065);
                 border-radius: 16px;
+            }
+            CardFrame#cardFrame:hover {
+                background: rgba(255, 255, 255, 0.045);
+                border: 1px solid rgba(255, 255, 255, 0.11);
             }
             QLabel {
                 background: transparent;
@@ -800,6 +856,111 @@ class DraggableThumbnail(QLabel):
             Qt.DropAction.CopyAction
         )
         self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+
+class CapsuleSlider(QSlider):
+    """
+    Thick tactile capsule slider inspired by macOS Control Center & Option 1 Bento.
+    Renders as a 30px rounded pill with fluid fill, embedded icon, and clean numeric readout.
+    Fully backwards compatible with standard QSlider APIs.
+    """
+    def __init__(self, icon: str = "", accent: str = "#0a84ff", orientation=Qt.Orientation.Horizontal, parent=None):
+        super().__init__(orientation, parent)
+        self._icon = icon
+        self._accent = accent
+        self._is_down = False
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setRange(0, 100)
+        self.setValue(50)
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self.update()
+
+    def isSliderDown(self) -> bool:
+        return self._is_down
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_down = True
+            self._update_val_from_x(event.position().x())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._is_down:
+            self._update_val_from_x(event.position().x())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_down = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        delta = 5 if event.angleDelta().y() > 0 else -5
+        self.setValue(max(self.minimum(), min(self.maximum(), self.value() + delta)))
+        event.accept()
+
+    def _update_val_from_x(self, x: float):
+        w = max(1.0, float(self.width()))
+        pct = max(0.0, min(1.0, x / w))
+        val = int(round(self.minimum() + pct * (self.maximum() - self.minimum())))
+        if val != self.value():
+            self.setValue(val)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = float(self.width()), float(self.height())
+        r = h / 2.0
+
+        # 1. Background well / track
+        track_rect = QRectF(0, 0, w, h)
+        painter.setPen(QColor(255, 255, 255, 18))
+        painter.setBrush(QBrush(QColor(255, 255, 255, 14)))
+        painter.drawRoundedRect(track_rect, r, r)
+
+        # 2. Filled progress chunk
+        val_range = max(1, self.maximum() - self.minimum())
+        pct = max(0.0, min(1.0, (self.value() - self.minimum()) / float(val_range)))
+        fill_w = max(0.0, w * pct)
+
+        if fill_w > 0:
+            fill_rect = QRectF(0, 0, fill_w, h)
+            path = QPainterPath()
+            path.addRoundedRect(track_rect, r, r)
+            painter.save()
+            painter.setClipPath(path)
+
+            fill_color = QColor(self._accent)
+            fill_color.setAlpha(200)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(fill_color))
+            painter.drawRect(fill_rect)
+            painter.restore()
+
+        # 3. Icon on the left
+        if self._icon:
+            font = QFont("Segoe Fluent Icons", 11)
+            painter.setFont(font)
+            painter.setPen(QColor("#ffffff"))
+            icon_rect = QRectF(10, 0, 24, h)
+            painter.drawText(icon_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._icon)
+
+        # 4. Percentage text on the right
+        val_str = f"{self.value()}%"
+        font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
+        painter.setFont(font_val)
+        painter.setPen(QColor(241, 245, 249, 210))
+        txt_rect = QRectF(w - 44, 0, 36, h)
+        painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
 
 
 class ClickableSlider(QSlider):
