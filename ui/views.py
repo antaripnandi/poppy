@@ -660,12 +660,18 @@ class MusicTabView(QWidget):
         session_row.addStretch()
         v_main.addLayout(session_row)
 
-        # Center Content (Left: Album Art, Middle: Controls, Right: Spotify Animated Lyrics)
+        # Center Content: Option 1 Bento 2-Card Studio Layout (Left: Player Card, Right: Lyrics Card)
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(16)
+        main_layout.setSpacing(14)
+
+        # Left Bento Card: Player & Transport
+        card_player = CardFrame(self)
+        l_player = QHBoxLayout(card_player)
+        l_player.setContentsMargins(14, 14, 14, 14)
+        l_player.setSpacing(14)
 
         # Left: Album Art Card (144x144)
-        self.art_container = CardFrame(self)
+        self.art_container = CardFrame(card_player)
         self.art_container.setFixedSize(144, 144)
         art_layout = QVBoxLayout(self.art_container)
         art_layout.setContentsMargins(0, 0, 0, 0)
@@ -674,7 +680,7 @@ class MusicTabView(QWidget):
         self.lbl_large_art.setStyleSheet("font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 40px; color: #64748b; border: none; background: transparent;")
         self.lbl_large_art.setText(Icons.MUSIC)
         art_layout.addWidget(self.lbl_large_art)
-        main_layout.addWidget(self.art_container)
+        l_player.addWidget(self.art_container)
 
         # Center: Track Metadata, Scrubber, Transport Controls
         info_col = QVBoxLayout()
@@ -772,13 +778,19 @@ class MusicTabView(QWidget):
         transport_row.addWidget(self.vol_slider)
 
         info_col.addLayout(transport_row)
-        main_layout.addLayout(info_col, stretch=1)
+        l_player.addLayout(info_col, stretch=1)
+        main_layout.addWidget(card_player, stretch=1)
 
-        # Right: Spotify Animated Lyrics View (expansive native layout)
-        self.lyrics_widget = SpotifyLyricsWidget(self)
-        self.lyrics_widget.setMinimumWidth(380)
+        # Right Bento Card: Expansive Spotify Lyrics
+        card_lyrics = CardFrame(self)
+        l_lyrics_card = QVBoxLayout(card_lyrics)
+        l_lyrics_card.setContentsMargins(14, 12, 14, 12)
+        l_lyrics_card.setSpacing(0)
+
+        self.lyrics_widget = SpotifyLyricsWidget(card_lyrics)
         self.lyrics_widget.seek_requested.connect(self.seek_requested.emit)
-        main_layout.addWidget(self.lyrics_widget, stretch=2)
+        l_lyrics_card.addWidget(self.lyrics_widget)
+        main_layout.addWidget(card_lyrics, stretch=1)
 
         # Backwards compatibility dummy labels
         self.txt_lyrics = QLabel(self)

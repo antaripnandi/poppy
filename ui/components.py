@@ -8,14 +8,14 @@ import os
 import math
 import time
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
+    Qt, QRect, QRectF, QSize, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap, QFont
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect
+    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy
 )
 
 from poppy.ui.icons import Icons, get_fluent_font_family
@@ -981,10 +981,12 @@ class ClickableSlider(QSlider):
         super().mousePressEvent(event)
 
 
-class LyricLineWidget(QPushButton):
+class LyricLineWidget(QFrame):
     """Clean, high-craft lyric row matching native Spotify desktop typography."""
+    clicked = Signal(float)
+
     def __init__(self, time_sec: float, text: str, parent=None):
-        super().__init__("", parent)
+        super().__init__(parent)
         self.time_sec = time_sec
         self._raw_text = text
         self._is_active = False
@@ -994,37 +996,72 @@ class LyricLineWidget(QPushButton):
         self._lbl.setWordWrap(True)
         self._lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
+        # Explicit fonts ensure QLabel font metrics, sizeHint and heightForWidth are 100% accurate
+        self._font_active = QFont("Segoe UI", 18)
+        self._font_active.setWeight(QFont.Weight.ExtraBold)
+        self._font_inactive = QFont("Segoe UI", 15)
+        self._font_inactive.setWeight(QFont.Weight.DemiBold)
+        self._lbl.setFont(self._font_inactive)
+
+        sp = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(0)
         layout.addWidget(self._lbl)
 
         self.update_style()
 
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        inner_w = max(10, width - 28)
+        h = self._lbl.heightForWidth(inner_w)
+        if h <= 0:
+            h = self._lbl.sizeHint().height()
+        return max(44, h + 16)
+
+    def sizeHint(self) -> QSize:
+        sh = self._lbl.sizeHint()
+        return QSize(sh.width() + 28, max(44, sh.height() + 16))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(50, 44)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.time_sec)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
     def set_active(self, active: bool):
         if self._is_active != active:
             self._is_active = active
+            self._lbl.setFont(self._font_active if active else self._font_inactive)
+            self.updateGeometry()
             self.update_style()
 
     def update_style(self):
         self.setStyleSheet("""
-            QPushButton {
+            QFrame {
                 background: transparent;
                 border: none;
-                border-radius: 6px;
+                border-radius: 8px;
             }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.03);
+            QFrame:hover {
+                background: rgba(255, 255, 255, 0.04);
             }
         """)
         if self._is_active:
             self._lbl.setStyleSheet("""
                 QLabel {
                     color: #ffffff;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Circular Spotify Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-                    font-size: 20px;
+                    font-size: 18px;
                     font-weight: 800;
-                    line-height: 1.35;
                     background: transparent;
                     border: none;
                 }
@@ -1033,10 +1070,8 @@ class LyricLineWidget(QPushButton):
             self._lbl.setStyleSheet("""
                 QLabel {
                     color: rgba(255, 255, 255, 0.35);
-                    font-family: -apple-system, BlinkMacSystemFont, 'Circular Spotify Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-                    font-size: 18px;
+                    font-size: 15px;
                     font-weight: 700;
-                    line-height: 1.35;
                     background: transparent;
                     border: none;
                 }
@@ -1048,10 +1083,8 @@ class LyricLineWidget(QPushButton):
             self._lbl.setStyleSheet("""
                 QLabel {
                     color: rgba(255, 255, 255, 0.85);
-                    font-family: -apple-system, BlinkMacSystemFont, 'Circular Spotify Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-                    font-size: 18px;
+                    font-size: 15px;
                     font-weight: 700;
-                    line-height: 1.35;
                     background: transparent;
                     border: none;
                 }
@@ -1221,7 +1254,7 @@ class SpotifyLyricsWidget(QFrame):
         self.lines_layout.addSpacing(16)
         for time_sec, text in synced_lines:
             btn = LyricLineWidget(time_sec, text, self.lines_container)
-            btn.clicked.connect(lambda checked=False, t=time_sec: self.seek_requested.emit(t))
+            btn.clicked.connect(lambda *args, t=time_sec: self.seek_requested.emit(t))
             self.lines_layout.addWidget(btn)
             self._line_buttons.append(btn)
 

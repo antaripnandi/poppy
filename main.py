@@ -5,6 +5,7 @@ Main application entry point and lifecycle manager.
 
 import sys
 import os
+import time
 import json
 import subprocess
 from pathlib import Path
@@ -19,6 +20,28 @@ sys.path.insert(0, str(current_dir.parent))
 
 from poppy.core.window import DynamicNotchWindow
 from poppy.ui.styles import get_stylesheet, DEFAULT_THEME
+
+
+def _enforce_single_instance():
+    """Ensure only one Poppy instance is running; replace any existing stale background process."""
+    pid_file = current_dir / ".poppy.pid"
+    if pid_file.exists():
+        try:
+            old_pid = int(pid_file.read_text(encoding="utf-8").strip())
+            if old_pid != os.getpid():
+                import ctypes
+                PROCESS_TERMINATE = 0x0001
+                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, old_pid)
+                if handle:
+                    ctypes.windll.kernel32.TerminateProcess(handle, 0)
+                    ctypes.windll.kernel32.CloseHandle(handle)
+                    time.sleep(0.3)
+        except Exception:
+            pass
+    try:
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def load_config() -> dict:
@@ -55,6 +78,8 @@ def create_tray_icon() -> QIcon:
 
 
 def main():
+    _enforce_single_instance()
+
     # Windows DPI awareness & rendering hints
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
@@ -104,6 +129,12 @@ def main():
     def exit_app():
         tray_icon.hide()
         notch.close()
+        pid_file = current_dir / ".poppy.pid"
+        if pid_file.exists():
+            try:
+                pid_file.unlink()
+            except Exception:
+                pass
         app.quit()
 
     tray_menu.addSeparator()

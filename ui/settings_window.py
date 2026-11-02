@@ -40,21 +40,31 @@ def _create_setting_card(rows: list[QWidget]) -> QFrame:
     card.setStyleSheet("""
         QFrame {
             background-color: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.065);
+            border-radius: 12px;
         }
     """)
     l = QVBoxLayout(card)
-    l.setContentsMargins(14, 6, 14, 6)
+    l.setContentsMargins(16, 6, 16, 6)
     l.setSpacing(0)
     for i, row in enumerate(rows):
         if i > 0:
             div = QFrame()
             div.setFixedHeight(1)
-            div.setStyleSheet("background-color: rgba(255, 255, 255, 0.04); border: none;")
+            div.setStyleSheet("background-color: rgba(255, 255, 255, 0.035); border: none;")
             l.addWidget(div)
         l.addWidget(row)
     return card
+
+
+def _make_scroll_area(page_widget: QWidget) -> QScrollArea:
+    """Zero-artifact transparent scroll container with auto-hidden horizontal bar."""
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.Shape.NoFrame)
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    sa.setWidget(page_widget)
+    return sa
 
 
 ALL_AVAILABLE_TABS = [
@@ -137,8 +147,8 @@ class SettingsWindow(QWidget):
         super().__init__(parent)
         self.config = config or {}
         self.setWindowTitle("Poppy Settings — Make it yours")
-        self.resize(760, 540)
-        self.setMinimumSize(680, 480)
+        self.resize(840, 580)
+        self.setMinimumSize(780, 520)
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
 
         self._theme_cards = {}
@@ -149,31 +159,32 @@ class SettingsWindow(QWidget):
     def _init_ui(self):
         self.setStyleSheet("""
             QWidget {
-                background-color: #090a0f;
+                background-color: #07080c;
                 color: #e2e8f0;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
             }
             QListWidget {
-                background-color: #050609;
+                background-color: #040508;
                 border: none;
                 border-right: 1px solid rgba(255, 255, 255, 0.05);
-                padding: 12px 6px;
+                padding: 14px 6px;
                 font-size: 12px;
             }
             QListWidget::item {
                 padding: 8px 12px;
-                border-radius: 6px;
+                border-radius: 8px;
                 color: #94a3b8;
                 font-weight: 500;
-                margin: 1px 0px;
+                margin: 2px 2px;
             }
             QListWidget::item:selected {
-                background-color: rgba(10, 132, 255, 0.15);
-                color: #38bdf8;
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                color: #ffffff;
                 font-weight: 600;
             }
             QListWidget::item:hover:!selected {
-                background-color: rgba(255, 255, 255, 0.04);
+                background-color: rgba(255, 255, 255, 0.035);
                 color: #f1f5f9;
             }
             QSpinBox, QComboBox, QLineEdit {
@@ -209,17 +220,26 @@ class SettingsWindow(QWidget):
                 border-radius: 6px;
             }
             QScrollBar:vertical {
-                width: 6px;
+                width: 5px;
                 background: transparent;
-                margin: 0px;
+                margin: 2px 0px;
+            }
+            QScrollBar::horizontal {
+                height: 0px;
+                border: none;
+                background: transparent;
+            }
+            QScrollBar::corner {
+                background: transparent;
+                border: none;
             }
             QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.12);
-                min-height: 24px;
-                border-radius: 3px;
+                background: rgba(255, 255, 255, 0.14);
+                min-height: 28px;
+                border-radius: 2.5px;
             }
             QScrollBar::handle:vertical:hover {
-                background: rgba(255, 255, 255, 0.25);
+                background: rgba(255, 255, 255, 0.28);
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
@@ -236,18 +256,18 @@ class SettingsWindow(QWidget):
 
         # Left Nav Sidebar
         self.nav_list = QListWidget()
-        self.nav_list.setFixedWidth(176)
-        self.nav_list.addItem("Appearance")
-        self.nav_list.addItem("Tabs Manager")
-        self.nav_list.addItem("Behavior & Gestures")
-        self.nav_list.addItem("Notifications")
-        self.nav_list.addItem("Screen Time")
-        self.nav_list.addItem("Media & Lyrics")
-        self.nav_list.addItem("Weather & Location")
-        self.nav_list.addItem("Pomodoro")
-        self.nav_list.addItem("Discord RPC")
-        self.nav_list.addItem("Hardware HUD")
-        self.nav_list.addItem("About & System")
+        self.nav_list.setFixedWidth(186)
+        self.nav_list.addItem("🎨  Appearance")
+        self.nav_list.addItem("🗂️  Tabs Manager")
+        self.nav_list.addItem("⚡  Behavior & Gestures")
+        self.nav_list.addItem("🔔  Notifications")
+        self.nav_list.addItem("⏳  Screen Time")
+        self.nav_list.addItem("🎵  Media & Lyrics")
+        self.nav_list.addItem("⛅  Weather & Location")
+        self.nav_list.addItem("⏱️  Pomodoro")
+        self.nav_list.addItem("🎮  Discord RPC")
+        self.nav_list.addItem("📊  Hardware HUD")
+        self.nav_list.addItem("⚙️  About & System")
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
         main_layout.addWidget(self.nav_list)
 
@@ -262,8 +282,6 @@ class SettingsWindow(QWidget):
         # =====================================================================
         # 0. Appearance Page
         # =====================================================================
-        scroll_app = QScrollArea()
-        scroll_app.setWidgetResizable(True)
         page_app = QWidget()
         l_app = QVBoxLayout(page_app)
         l_app.setContentsMargins(0, 0, 8, 0)
@@ -326,14 +344,11 @@ class SettingsWindow(QWidget):
         l_app.addWidget(card_shape)
         l_app.addStretch()
 
-        scroll_app.setWidget(page_app)
-        self.stack.addWidget(scroll_app)
+        self.stack.addWidget(_make_scroll_area(page_app))
 
         # =====================================================================
         # 1. Tabs Manager Page
         # =====================================================================
-        scroll_tabs = QScrollArea()
-        scroll_tabs.setWidgetResizable(True)
         page_tabs = QWidget()
         l_tabs = QVBoxLayout(page_tabs)
         l_tabs.setContentsMargins(0, 0, 8, 0)
@@ -373,14 +388,11 @@ class SettingsWindow(QWidget):
         l_tabs.addWidget(card_tabs)
         l_tabs.addStretch()
 
-        scroll_tabs.setWidget(page_tabs)
-        self.stack.addWidget(scroll_tabs)
+        self.stack.addWidget(_make_scroll_area(page_tabs))
 
         # =====================================================================
         # 2. Behavior & Gestures Page
         # =====================================================================
-        scroll_beh = QScrollArea()
-        scroll_beh.setWidgetResizable(True)
         page_beh = QWidget()
         l_beh = QVBoxLayout(page_beh)
         l_beh.setContentsMargins(0, 0, 8, 0)
@@ -412,14 +424,11 @@ class SettingsWindow(QWidget):
         l_beh.addWidget(card_beh)
         l_beh.addStretch()
 
-        scroll_beh.setWidget(page_beh)
-        self.stack.addWidget(scroll_beh)
+        self.stack.addWidget(_make_scroll_area(page_beh))
 
         # =====================================================================
         # 3. Notifications Page
         # =====================================================================
-        scroll_notif = QScrollArea()
-        scroll_notif.setWidgetResizable(True)
         page_notif = QWidget()
         l_notif = QVBoxLayout(page_notif)
         l_notif.setContentsMargins(0, 0, 8, 0)
@@ -448,14 +457,11 @@ class SettingsWindow(QWidget):
         l_notif.addWidget(card_notif)
         l_notif.addStretch()
 
-        scroll_notif.setWidget(page_notif)
-        self.stack.addWidget(scroll_notif)
+        self.stack.addWidget(_make_scroll_area(page_notif))
 
         # =====================================================================
         # 4. Screen Time Page (Digital Wellbeing)
         # =====================================================================
-        scroll_st = QScrollArea()
-        scroll_st.setWidgetResizable(True)
         page_st = QWidget()
         l_st = QVBoxLayout(page_st)
         l_st.setContentsMargins(0, 0, 8, 0)
@@ -629,14 +635,11 @@ class SettingsWindow(QWidget):
         l_st.addWidget(card_st_privacy)
         l_st.addStretch()
 
-        scroll_st.setWidget(page_st)
-        self.stack.addWidget(scroll_st)
+        self.stack.addWidget(_make_scroll_area(page_st))
 
         # =====================================================================
         # 5. Media & Lyrics Page
         # =====================================================================
-        scroll_media = QScrollArea()
-        scroll_media.setWidgetResizable(True)
         page_media = QWidget()
         l_media = QVBoxLayout(page_media)
         l_media.setContentsMargins(0, 0, 8, 0)
@@ -681,14 +684,11 @@ class SettingsWindow(QWidget):
         l_media.addWidget(lbl_cookie_hint)
         l_media.addStretch()
 
-        scroll_media.setWidget(page_media)
-        self.stack.addWidget(scroll_media)
+        self.stack.addWidget(_make_scroll_area(page_media))
 
         # =====================================================================
         # 6. Weather & Location Page
         # =====================================================================
-        scroll_weath = QScrollArea()
-        scroll_weath.setWidgetResizable(True)
         page_weath = QWidget()
         l_weath = QVBoxLayout(page_weath)
         l_weath.setContentsMargins(0, 0, 8, 0)
@@ -716,14 +716,11 @@ class SettingsWindow(QWidget):
         l_weath.addWidget(card_weath)
         l_weath.addStretch()
 
-        scroll_weath.setWidget(page_weath)
-        self.stack.addWidget(scroll_weath)
+        self.stack.addWidget(_make_scroll_area(page_weath))
 
         # =====================================================================
         # 7. Pomodoro Page
         # =====================================================================
-        scroll_pomo = QScrollArea()
-        scroll_pomo.setWidgetResizable(True)
         page_pomo = QWidget()
         l_pomo = QVBoxLayout(page_pomo)
         l_pomo.setContentsMargins(0, 0, 8, 0)
@@ -759,14 +756,11 @@ class SettingsWindow(QWidget):
         l_pomo.addWidget(card_pomo)
         l_pomo.addStretch()
 
-        scroll_pomo.setWidget(page_pomo)
-        self.stack.addWidget(scroll_pomo)
+        self.stack.addWidget(_make_scroll_area(page_pomo))
 
         # =====================================================================
         # 8. Discord RPC Page
         # =====================================================================
-        scroll_rpc = QScrollArea()
-        scroll_rpc.setWidgetResizable(True)
         page_rpc = QWidget()
         l_rpc = QVBoxLayout(page_rpc)
         l_rpc.setContentsMargins(0, 0, 8, 0)
@@ -796,14 +790,11 @@ class SettingsWindow(QWidget):
         l_rpc.addWidget(card_rpc)
         l_rpc.addStretch()
 
-        scroll_rpc.setWidget(page_rpc)
-        self.stack.addWidget(scroll_rpc)
+        self.stack.addWidget(_make_scroll_area(page_rpc))
 
         # =====================================================================
         # 9. Hardware HUD Page
         # =====================================================================
-        scroll_hw = QScrollArea()
-        scroll_hw.setWidgetResizable(True)
         page_hw = QWidget()
         l_hw = QVBoxLayout(page_hw)
         l_hw.setContentsMargins(0, 0, 8, 0)
@@ -826,14 +817,11 @@ class SettingsWindow(QWidget):
         l_hw.addWidget(card_hw)
         l_hw.addStretch()
 
-        scroll_hw.setWidget(page_hw)
-        self.stack.addWidget(scroll_hw)
+        self.stack.addWidget(_make_scroll_area(page_hw))
 
         # =====================================================================
         # 10. About & System Page
         # =====================================================================
-        scroll_abt = QScrollArea()
-        scroll_abt.setWidgetResizable(True)
         page_abt = QWidget()
         l_abt = QVBoxLayout(page_abt)
         l_abt.setContentsMargins(0, 0, 8, 0)
@@ -892,8 +880,7 @@ class SettingsWindow(QWidget):
         l_abt.addWidget(card_abt)
         l_abt.addStretch()
 
-        scroll_abt.setWidget(page_abt)
-        self.stack.addWidget(scroll_abt)
+        self.stack.addWidget(_make_scroll_area(page_abt))
 
         right_layout.addWidget(self.stack, stretch=1)
 
@@ -906,50 +893,37 @@ class SettingsWindow(QWidget):
         bottom_bar.addWidget(lbl_auto_save)
         bottom_bar.addStretch()
 
-        self.btn_close = QPushButton("Close")
-        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_close.setStyleSheet("""
+        self.btn_done = QPushButton("Done")
+        self.btn_done.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_done.setStyleSheet("""
             QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.14);
                 border-radius: 8px;
-                padding: 6px 16px;
-                font-size: 11.5px;
-                font-weight: 500;
-                color: #94a3b8;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-                color: #ffffff;
-            }
-        """)
-        self.btn_close.clicked.connect(self.close)
-        bottom_bar.addWidget(self.btn_close)
-
-        self.btn_save = QPushButton("Save & Apply")
-        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(10, 132, 255, 0.15);
-                border: 1px solid rgba(10, 132, 255, 0.35);
-                border-radius: 8px;
-                padding: 6px 20px;
+                padding: 7px 24px;
+                font-size: 12px;
                 font-weight: 600;
-                font-size: 11.5px;
-                color: #38bdf8;
+                color: #f8fafc;
             }
             QPushButton:hover {
-                background-color: rgba(10, 132, 255, 0.28);
+                background-color: rgba(255, 255, 255, 0.16);
+                border: 1px solid rgba(255, 255, 255, 0.22);
                 color: #ffffff;
             }
         """)
-        self.btn_save.clicked.connect(self._save_settings)
-        bottom_bar.addWidget(self.btn_save)
+        self.btn_done.clicked.connect(self._save_and_close)
+        self.btn_save = self.btn_done
+        self.btn_close = self.btn_done
+        bottom_bar.addWidget(self.btn_done)
 
         right_layout.addLayout(bottom_bar)
 
         main_layout.addWidget(right_container, stretch=1)
         self.nav_list.setCurrentRow(0)
+
+    def _save_and_close(self):
+        self._save_settings()
+        self.close()
 
     def _open_config_file(self):
         cfg_path = Path(__file__).resolve().parent.parent / "config.json"
@@ -1252,7 +1226,9 @@ class SettingsWindow(QWidget):
             self.lbl_st_top_apps.setText(f"Active now: {active_app}")
 
     def select_page(self, page_name: str):
+        target = page_name.strip().lower()
         for idx in range(self.nav_list.count()):
-            if self.nav_list.item(idx).text().strip().lower() == page_name.strip().lower():
+            text = self.nav_list.item(idx).text().strip().lower()
+            if target in text:
                 self.nav_list.setCurrentRow(idx)
                 break
