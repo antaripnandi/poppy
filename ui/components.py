@@ -902,11 +902,7 @@ class SpotifyLyricsWidget(QFrame):
         lbl_hdr = QLabel("Lyrics")
         lbl_hdr.setStyleSheet("QLabel { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 600; color: #94a3b8; background: transparent; border: none; }")
 
-        lbl_badge = QLabel("SYNCED")
-        lbl_badge.setStyleSheet("QLabel { font-size: 8.5px; font-weight: 700; color: #38bdf8; background: rgba(10, 132, 255, 0.12); border: 1px solid rgba(10, 132, 255, 0.25); border-radius: 4px; padding: 1px 5px; letter-spacing: 0.5px; }")
-
         hdr_row.addWidget(lbl_hdr)
-        hdr_row.addWidget(lbl_badge)
         hdr_row.addStretch()
         layout.addLayout(hdr_row)
 
