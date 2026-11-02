@@ -274,3 +274,4 @@ class ScreenTimeManager(QObject):
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+

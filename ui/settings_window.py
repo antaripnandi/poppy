@@ -6,12 +6,14 @@ Faithfully recreating NotchX's Appearance & Configuration studio:
 - Tabs Manager (Show/hide individual tabs, Smart default tab)
 - Behavior & Gestures (Hover bloom, scroll on pill for volume, Windows autostart)
 - Notifications & Islands (Pop-up alerts, Do Not Disturb, sound chimes, text privacy)
+- Screen Time & Digital Wellbeing (Active tracking, AFK detection, daily targets, healthy rest breaks)
 - Media & Spotify Lyrics (Direct Spotify sp_dc color-lyrics, NetEase Romanized lyrics)
 - Weather & Location (Custom city geocoding, Celsius/Fahrenheit units)
 - Pomodoro timer settings
 - Discord Rich Presence customizer
 - Hardware HUD telemetry options
 - Quick actions (Open config.json, Open app folder)
+Zero external dependencies (pure stdlib + PySide6).
 """
 
 import json
@@ -23,12 +25,36 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QBrush, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-    QSpinBox, QCheckBox, QPushButton, QStackedWidget, QListWidget,
+    QSpinBox, QPushButton, QStackedWidget, QListWidget,
     QFrame, QComboBox, QSlider, QScrollArea, QProgressBar
 )
 
 from poppy.ui.styles import THEME_PRESETS, DEFAULT_THEME
 from poppy.core.system_features import get_autostart_state, set_autostart_state
+from poppy.ui.components import ToggleSwitch, SettingRow
+
+
+def _create_setting_card(rows: list[QWidget]) -> QFrame:
+    """Frosted obsidian glass container grouping setting rows with subtle dividers."""
+    card = QFrame()
+    card.setStyleSheet("""
+        QFrame {
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+        }
+    """)
+    l = QVBoxLayout(card)
+    l.setContentsMargins(14, 6, 14, 6)
+    l.setSpacing(0)
+    for i, row in enumerate(rows):
+        if i > 0:
+            div = QFrame()
+            div.setFixedHeight(1)
+            div.setStyleSheet("background-color: rgba(255, 255, 255, 0.04); border: none;")
+            l.addWidget(div)
+        l.addWidget(row)
+    return card
 
 
 ALL_AVAILABLE_TABS = [
@@ -111,8 +137,9 @@ class SettingsWindow(QWidget):
         super().__init__(parent)
         self.config = config or {}
         self.setWindowTitle("Poppy Settings — Make it yours")
-        self.resize(740, 530)
-        self.setMinimumSize(660, 470)
+        self.resize(760, 540)
+        self.setMinimumSize(680, 480)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
 
         self._theme_cards = {}
         self._tab_checkboxes = {}
@@ -122,26 +149,27 @@ class SettingsWindow(QWidget):
     def _init_ui(self):
         self.setStyleSheet("""
             QWidget {
-                background-color: #08090d;
+                background-color: #090a0f;
                 color: #e2e8f0;
-                font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
             }
             QListWidget {
-                background-color: #050608;
+                background-color: #050609;
                 border: none;
-                border-right: 1px solid rgba(255, 255, 255, 0.06);
-                padding: 10px 6px;
+                border-right: 1px solid rgba(255, 255, 255, 0.05);
+                padding: 12px 6px;
                 font-size: 12px;
             }
             QListWidget::item {
-                padding: 9px 14px;
+                padding: 8px 12px;
                 border-radius: 6px;
                 color: #94a3b8;
                 font-weight: 500;
+                margin: 1px 0px;
             }
             QListWidget::item:selected {
-                background-color: rgba(10, 132, 255, 0.16);
-                color: #0a84ff;
+                background-color: rgba(10, 132, 255, 0.15);
+                color: #38bdf8;
                 font-weight: 600;
             }
             QListWidget::item:hover:!selected {
@@ -150,10 +178,19 @@ class SettingsWindow(QWidget):
             }
             QSpinBox, QComboBox, QLineEdit {
                 background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.09);
+                border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 6px;
-                padding: 5px 8px;
+                padding: 5px 9px;
                 color: #f8fafc;
+                font-size: 11px;
+            }
+            QSpinBox:focus, QComboBox:focus, QLineEdit:focus {
+                border: 1px solid rgba(10, 132, 255, 0.5);
+                background-color: rgba(255, 255, 255, 0.08);
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 18px;
             }
             QSlider::groove:horizontal {
                 height: 4px;
@@ -171,21 +208,25 @@ class SettingsWindow(QWidget):
                 margin-bottom: -4px;
                 border-radius: 6px;
             }
-            QCheckBox {
-                spacing: 8px;
-                color: #cbd5e1;
-                font-size: 11px;
+            QScrollBar:vertical {
+                width: 6px;
+                background: transparent;
+                margin: 0px;
             }
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 4px;
-                background-color: rgba(255, 255, 255, 0.06);
+            QScrollBar::handle:vertical {
+                background: rgba(255, 255, 255, 0.12);
+                min-height: 24px;
+                border-radius: 3px;
             }
-            QCheckBox::indicator:checked {
-                background-color: #0a84ff;
-                border: 1px solid #0a84ff;
+            QScrollBar::handle:vertical:hover {
+                background: rgba(255, 255, 255, 0.25);
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollArea {
+                border: none;
+                background: transparent;
             }
         """)
 
@@ -195,7 +236,7 @@ class SettingsWindow(QWidget):
 
         # Left Nav Sidebar
         self.nav_list = QListWidget()
-        self.nav_list.setFixedWidth(172)
+        self.nav_list.setFixedWidth(176)
         self.nav_list.addItem("Appearance")
         self.nav_list.addItem("Tabs Manager")
         self.nav_list.addItem("Behavior & Gestures")
@@ -213,7 +254,7 @@ class SettingsWindow(QWidget):
         # Right Content Area
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(22, 16, 22, 16)
+        right_layout.setContentsMargins(22, 18, 22, 16)
         right_layout.setSpacing(12)
 
         self.stack = QStackedWidget()
@@ -223,7 +264,6 @@ class SettingsWindow(QWidget):
         # =====================================================================
         scroll_app = QScrollArea()
         scroll_app.setWidgetResizable(True)
-        scroll_app.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         page_app = QWidget()
         l_app = QVBoxLayout(page_app)
         l_app.setContentsMargins(0, 0, 8, 0)
@@ -260,36 +300,31 @@ class SettingsWindow(QWidget):
         l_app.addWidget(lbl_shape_hdr)
         l_app.addWidget(lbl_shape_sub)
 
-        # Style & Display row
-        row_pos = QHBoxLayout()
-        lbl_style = QLabel("Style:")
-        lbl_style.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.combo_style = QComboBox()
         self.combo_style.addItems(["Notch", "Pill"])
         self.combo_style.setToolTip("Notch hugs top screen edge (y=0); Pill floats with top padding.")
         self.combo_style.currentTextChanged.connect(self._on_live_appearance_change)
 
-        lbl_disp = QLabel("Target Display:")
-        lbl_disp.setStyleSheet("font-size: 11px; color: #cbd5e1; margin-left: 12px;")
         self.combo_display = QComboBox()
         self.combo_display.addItem("Primary")
         for i, s in enumerate(QGuiApplication.screens()):
             self.combo_display.addItem(f"Display {i + 1} ({s.geometry().width()}x{s.geometry().height()})")
 
-        row_pos.addWidget(lbl_style)
-        row_pos.addWidget(self.combo_style)
-        row_pos.addWidget(lbl_disp)
-        row_pos.addWidget(self.combo_display)
-        row_pos.addStretch()
-        l_app.addLayout(row_pos)
+        row_style = SettingRow("Window Display Style", "Notch hugs top screen edge; Pill floats with top gap", self.combo_style)
+        row_disp = SettingRow("Target Monitor", "Active screen display monitor for Poppy", self.combo_display)
 
-        # Sliders: Collapsed W, Collapsed H, Open W, Open H, Radius, Top Offset
-        self.slider_col_w, self.lbl_val_col_w = self._create_slider_row(l_app, "Collapsed width (px)", 180, 360, 240)
-        self.slider_col_h, self.lbl_val_col_h = self._create_slider_row(l_app, "Collapsed height (px)", 24, 44, 30)
-        self.slider_open_w, self.lbl_val_open_w = self._create_slider_row(l_app, "Open width (px)", 700, 1100, 940)
-        self.slider_open_h, self.lbl_val_open_h = self._create_slider_row(l_app, "Open height (px)", 360, 560, 460)
-        self.slider_radius, self.lbl_val_radius = self._create_slider_row(l_app, "Corner radius (px)", 8, 24, 16)
-        self.slider_top_offset, self.lbl_val_top_offset = self._create_slider_row(l_app, "Top offset / Taskbar gap (px)", 0, 40, 0)
+        self.slider_col_w, self.lbl_val_col_w, row_col_w = self._make_slider_setting("Collapsed Width", "Width when notch is closed (px)", 180, 360, 240)
+        self.slider_col_h, self.lbl_val_col_h, row_col_h = self._make_slider_setting("Collapsed Height", "Height of the compact pill (px)", 24, 44, 30)
+        self.slider_open_w, self.lbl_val_open_w, row_open_w = self._make_slider_setting("Open Width", "Width when drawer is expanded (px)", 700, 1100, 940)
+        self.slider_open_h, self.lbl_val_open_h, row_open_h = self._make_slider_setting("Open Height", "Height when drawer is expanded (px)", 360, 560, 460)
+        self.slider_radius, self.lbl_val_radius, row_radius = self._make_slider_setting("Corner Radius", "Curvature for rounded bezel corners (px)", 8, 24, 16)
+        self.slider_top_offset, self.lbl_val_top_offset, row_top = self._make_slider_setting("Top Offset Gap", "Vertical padding gap from top bezel (px)", 0, 40, 0)
+
+        card_shape = _create_setting_card([
+            row_style, row_disp, row_col_w, row_col_h, row_open_w, row_open_h, row_radius, row_top
+        ])
+        l_app.addWidget(card_shape)
+        l_app.addStretch()
 
         scroll_app.setWidget(page_app)
         self.stack.addWidget(scroll_app)
@@ -297,9 +332,12 @@ class SettingsWindow(QWidget):
         # =====================================================================
         # 1. Tabs Manager Page
         # =====================================================================
+        scroll_tabs = QScrollArea()
+        scroll_tabs.setWidgetResizable(True)
         page_tabs = QWidget()
         l_tabs = QVBoxLayout(page_tabs)
-        l_tabs.setSpacing(10)
+        l_tabs.setContentsMargins(0, 0, 8, 0)
+        l_tabs.setSpacing(12)
 
         lbl_tabs_hdr = QLabel("Tabs & Module Manager")
         lbl_tabs_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
@@ -309,186 +347,192 @@ class SettingsWindow(QWidget):
         l_tabs.addWidget(lbl_tabs_sub)
 
         # Default tab dropdown
-        row_dtab = QHBoxLayout()
-        lbl_dtab = QLabel("Default Active Tab on Expand:")
-        lbl_dtab.setStyleSheet("font-size: 11px; color: #cbd5e1; font-weight: 600;")
         self.combo_default_tab = QComboBox()
         self.combo_default_tab.addItem("Smart (Music if playing, Timer if active, else Home)")
         for tab_name, _ in ALL_AVAILABLE_TABS:
             self.combo_default_tab.addItem(tab_name)
-        row_dtab.addWidget(lbl_dtab)
-        row_dtab.addWidget(self.combo_default_tab)
-        row_dtab.addStretch()
-        l_tabs.addLayout(row_dtab)
 
-        l_tabs.addSpacing(6)
-        lbl_list_hdr = QLabel("Enabled Navigation Tabs:")
-        lbl_list_hdr.setStyleSheet("font-size: 12px; font-weight: 600; color: #cbd5e1;")
+        card_dtab = _create_setting_card([
+            SettingRow("Default Active Tab", "Tab opened automatically when expanding the drawer", self.combo_default_tab)
+        ])
+        l_tabs.addWidget(card_dtab)
+
+        l_tabs.addSpacing(4)
+        lbl_list_hdr = QLabel("Enabled Navigation Tabs")
+        lbl_list_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc;")
         l_tabs.addWidget(lbl_list_hdr)
 
-        tabs_grid = QGridLayout()
-        tabs_grid.setSpacing(8)
-        r_idx, c_idx = 0, 0
+        tab_rows = []
         for tab_name, tab_desc in ALL_AVAILABLE_TABS:
-            box = QFrame()
-            box.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(255, 255, 255, 0.03);
-                    border: 1px solid rgba(255, 255, 255, 0.06);
-                    border-radius: 6px;
-                    padding: 4px;
-                }
-                QFrame:hover {
-                    border: 1px solid rgba(10, 132, 255, 0.3);
-                }
-            """)
-            b_layout = QVBoxLayout(box)
-            b_layout.setContentsMargins(6, 6, 6, 6)
-            b_layout.setSpacing(2)
+            toggle = ToggleSwitch(checked=True)
+            self._tab_checkboxes[tab_name] = toggle
+            row = SettingRow(tab_name, tab_desc, toggle)
+            tab_rows.append(row)
 
-            chk = QCheckBox(f"{tab_name}")
-            chk.setStyleSheet("font-weight: 600; font-size: 11px; color: #f1f5f9;")
-            lbl_desc = QLabel(tab_desc)
-            lbl_desc.setStyleSheet("font-size: 9px; color: #94a3b8; border: none;")
-            lbl_desc.setWordWrap(True)
-
-            b_layout.addWidget(chk)
-            b_layout.addWidget(lbl_desc)
-
-            self._tab_checkboxes[tab_name] = chk
-            tabs_grid.addWidget(box, r_idx, c_idx)
-            c_idx += 1
-            if c_idx >= 2:
-                c_idx = 0
-                r_idx += 1
-
-        l_tabs.addLayout(tabs_grid)
+        card_tabs = _create_setting_card(tab_rows)
+        l_tabs.addWidget(card_tabs)
         l_tabs.addStretch()
-        self.stack.addWidget(page_tabs)
+
+        scroll_tabs.setWidget(page_tabs)
+        self.stack.addWidget(scroll_tabs)
 
         # =====================================================================
         # 2. Behavior & Gestures Page
         # =====================================================================
+        scroll_beh = QScrollArea()
+        scroll_beh.setWidgetResizable(True)
         page_beh = QWidget()
         l_beh = QVBoxLayout(page_beh)
+        l_beh.setContentsMargins(0, 0, 8, 0)
         l_beh.setSpacing(12)
 
         lbl_beh_hdr = QLabel("Behavior & Gestures")
         lbl_beh_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
+        lbl_beh_sub = QLabel("Notch interaction models, gestures, and system startup behavior.")
+        lbl_beh_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_beh.addWidget(lbl_beh_hdr)
+        l_beh.addWidget(lbl_beh_sub)
 
-        self.chk_hover_peek = QCheckBox("Bloom to Media HUD automatically on mouse hover")
-        l_beh.addWidget(self.chk_hover_peek)
+        self.chk_hover_peek = ToggleSwitch(checked=True)
+        self.chk_scroll_volume = ToggleSwitch(checked=True)
+        self.chk_autostart = ToggleSwitch(checked=False)
+        self.chk_tray_close = ToggleSwitch(checked=True)
 
-        self.chk_scroll_volume = QCheckBox("Scroll on closed pill to adjust Windows master volume")
-        self.chk_scroll_volume.setToolTip("Hover over the collapsed notch and roll mouse wheel up/down.")
-        l_beh.addWidget(self.chk_scroll_volume)
-
-        self.chk_autostart = QCheckBox("Start Poppy automatically when Windows boots (Run key)")
-        l_beh.addWidget(self.chk_autostart)
-
-        self.chk_tray_close = QCheckBox("Keep Poppy active in System Tray when drawer is closed")
-        l_beh.addWidget(self.chk_tray_close)
-
-        row_dur = QHBoxLayout()
-        lbl_dur = QLabel("Animation Spring Duration (ms):")
-        lbl_dur.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.spin_anim_ms = QSpinBox()
         self.spin_anim_ms.setRange(80, 500)
         self.spin_anim_ms.setSingleStep(20)
-        row_dur.addWidget(lbl_dur)
-        row_dur.addWidget(self.spin_anim_ms)
-        row_dur.addStretch()
-        l_beh.addLayout(row_dur)
 
+        card_beh = _create_setting_card([
+            SettingRow("Media HUD Hover Peek", "Bloom to compact Media HUD automatically on mouse hover", self.chk_hover_peek),
+            SettingRow("Volume Wheel Gesture", "Scroll mouse wheel on closed pill to adjust Windows master volume", self.chk_scroll_volume),
+            SettingRow("Windows Startup Boot", "Start Poppy automatically when Windows logs in (Run registry key)", self.chk_autostart),
+            SettingRow("System Tray Resident", "Keep Poppy active in System Tray when drawer is closed", self.chk_tray_close),
+            SettingRow("Spring Animation Duration", "Duration for expansion and collapse springs in milliseconds", self.spin_anim_ms)
+        ])
+        l_beh.addWidget(card_beh)
         l_beh.addStretch()
-        self.stack.addWidget(page_beh)
+
+        scroll_beh.setWidget(page_beh)
+        self.stack.addWidget(scroll_beh)
 
         # =====================================================================
-        # 3. Notifications Page (NEW)
+        # 3. Notifications Page
         # =====================================================================
+        scroll_notif = QScrollArea()
+        scroll_notif.setWidgetResizable(True)
         page_notif = QWidget()
         l_notif = QVBoxLayout(page_notif)
+        l_notif.setContentsMargins(0, 0, 8, 0)
         l_notif.setSpacing(12)
 
         lbl_notif_hdr = QLabel("Notifications & Island Alerts")
         lbl_notif_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
-        lbl_notif_sub = QLabel("Control banner pop-ups, toast alerts, sounds, and Focus / Do Not Disturb rules.")
+        lbl_notif_sub = QLabel("Control banner pop-ups, toast alerts, chime sounds, and Focus rules.")
         lbl_notif_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_notif.addWidget(lbl_notif_hdr)
         l_notif.addWidget(lbl_notif_sub)
 
-        self.chk_notif_enabled = QCheckBox("Enable Poppy Notification Alerts")
-        l_notif.addWidget(self.chk_notif_enabled)
+        self.chk_notif_enabled = ToggleSwitch(checked=True)
+        self.chk_notif_show_island = ToggleSwitch(checked=True)
+        self.chk_notif_mute_focus = ToggleSwitch(checked=True)
+        self.chk_notif_sound = ToggleSwitch(checked=True)
+        self.chk_notif_preview = ToggleSwitch(checked=True)
 
-        self.chk_notif_show_island = QCheckBox("Show dynamic pop-up island when notifications or downloads arrive")
-        l_notif.addWidget(self.chk_notif_show_island)
-
-        self.chk_notif_mute_focus = QCheckBox("Mute notifications during Pomodoro Focus sprints (Do Not Disturb)")
-        l_notif.addWidget(self.chk_notif_mute_focus)
-
-        self.chk_notif_sound = QCheckBox("Play notification chime sound on arrival")
-        l_notif.addWidget(self.chk_notif_sound)
-
-        self.chk_notif_preview = QCheckBox("Show notification message preview text (Uncheck to hide sensitive text)")
-        l_notif.addWidget(self.chk_notif_preview)
-
+        card_notif = _create_setting_card([
+            SettingRow("Poppy Notification Alerts", "Enable popup alerts for notifications and downloads", self.chk_notif_enabled),
+            SettingRow("Dynamic Island Pop-up", "Expand notch into a floating island when notifications arrive", self.chk_notif_show_island),
+            SettingRow("Do Not Disturb in Focus", "Silence incoming notification popups during Pomodoro sprints", self.chk_notif_mute_focus),
+            SettingRow("Chime Sound", "Play an acoustic chime sound on notification arrival", self.chk_notif_sound),
+            SettingRow("Preview Message Content", "Display message text in alert (disable to protect privacy)", self.chk_notif_preview)
+        ])
+        l_notif.addWidget(card_notif)
         l_notif.addStretch()
-        self.stack.addWidget(page_notif)
+
+        scroll_notif.setWidget(page_notif)
+        self.stack.addWidget(scroll_notif)
 
         # =====================================================================
         # 4. Screen Time Page (Digital Wellbeing)
         # =====================================================================
+        scroll_st = QScrollArea()
+        scroll_st.setWidgetResizable(True)
         page_st = QWidget()
         l_st = QVBoxLayout(page_st)
+        l_st.setContentsMargins(0, 0, 8, 0)
         l_st.setSpacing(12)
 
         lbl_st_hdr = QLabel("Screen Time & Digital Wellbeing")
         lbl_st_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
-        lbl_st_sub = QLabel("Monitor daily active usage, track top applications, enforce daily goals, and schedule rest breaks.")
+        lbl_st_sub = QLabel("Monitor daily active usage, track top applications, enforce daily targets, and schedule rest breaks.")
         lbl_st_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_st.addWidget(lbl_st_hdr)
         l_st.addWidget(lbl_st_sub)
 
-        # Live Today Summary Card
+        # Clean obsidian stat card
         card_st_summary = QFrame()
         card_st_summary.setStyleSheet("""
             QFrame {
                 background-color: rgba(255, 255, 255, 0.04);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
+                border-radius: 12px;
             }
         """)
         l_card_summary = QVBoxLayout(card_st_summary)
-        l_card_summary.setContentsMargins(12, 10, 12, 10)
-        l_card_summary.setSpacing(6)
+        l_card_summary.setContentsMargins(16, 14, 16, 14)
+        l_card_summary.setSpacing(10)
 
-        row_st_stats = QHBoxLayout()
-        self.lbl_st_today_time = QLabel("Today: 0m")
-        self.lbl_st_today_time.setStyleSheet("font-size: 15px; font-weight: 700; color: #0a84ff; background: transparent; border: none;")
-        self.lbl_st_goal_pct = QLabel("Goal: 0%")
-        self.lbl_st_goal_pct.setStyleSheet("font-size: 12px; font-weight: 600; color: #94a3b8; background: transparent; border: none;")
+        row_top_stat = QHBoxLayout()
+        stat_left = QVBoxLayout()
+        stat_left.setSpacing(2)
+        lbl_st_tag = QLabel("TODAY'S SCREEN TIME")
+        lbl_st_tag.setStyleSheet("font-size: 9.5px; font-weight: 700; color: #64748b; letter-spacing: 0.5px; background: transparent; border: none;")
+        self.lbl_st_today_time = QLabel("0m")
+        self.lbl_st_today_time.setStyleSheet("font-size: 26px; font-weight: 700; color: #f8fafc; background: transparent; border: none;")
+        stat_left.addWidget(lbl_st_tag)
+        stat_left.addWidget(self.lbl_st_today_time)
+        row_top_stat.addLayout(stat_left)
+        row_top_stat.addStretch()
+
+        badges_layout = QHBoxLayout()
+        badges_layout.setSpacing(8)
         self.lbl_st_streak = QLabel("Active Streak: 0m")
-        self.lbl_st_streak.setStyleSheet("font-size: 11px; color: #64748b; background: transparent; border: none;")
-        row_st_stats.addWidget(self.lbl_st_today_time)
-        row_st_stats.addWidget(self.lbl_st_goal_pct)
-        row_st_stats.addStretch()
-        row_st_stats.addWidget(self.lbl_st_streak)
-        l_card_summary.addLayout(row_st_stats)
+        self.lbl_st_streak.setStyleSheet("""
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 4px 10px;
+            font-size: 11px;
+            color: #cbd5e1;
+            font-weight: 500;
+        """)
+        self.lbl_st_goal_pct = QLabel("Goal: 0%")
+        self.lbl_st_goal_pct.setStyleSheet("""
+            background: rgba(10, 132, 255, 0.12);
+            border: 1px solid rgba(10, 132, 255, 0.28);
+            border-radius: 12px;
+            padding: 4px 10px;
+            font-size: 11px;
+            color: #38bdf8;
+            font-weight: 600;
+        """)
+        badges_layout.addWidget(self.lbl_st_streak)
+        badges_layout.addWidget(self.lbl_st_goal_pct)
+        row_top_stat.addLayout(badges_layout)
+        l_card_summary.addLayout(row_top_stat)
 
         # Micro progress bar
         self.bar_st_goal = QProgressBar()
-        self.bar_st_goal.setFixedHeight(6)
+        self.bar_st_goal.setFixedHeight(5)
         self.bar_st_goal.setTextVisible(False)
         self.bar_st_goal.setStyleSheet("""
             QProgressBar {
                 background-color: rgba(255, 255, 255, 0.08);
                 border: none;
-                border-radius: 3px;
+                border-radius: 2px;
             }
             QProgressBar::chunk {
                 background-color: #0a84ff;
-                border-radius: 3px;
+                border-radius: 2px;
             }
         """)
         self.bar_st_goal.setRange(0, 100)
@@ -497,114 +541,105 @@ class SettingsWindow(QWidget):
 
         # Top Apps Breakdown row
         self.lbl_st_top_apps = QLabel("Top apps will appear as you work...")
-        self.lbl_st_top_apps.setStyleSheet("font-size: 11px; color: #cbd5e1; background: transparent; border: none;")
+        self.lbl_st_top_apps.setStyleSheet("font-size: 11px; color: #94a3b8; background: transparent; border: none;")
         l_card_summary.addWidget(self.lbl_st_top_apps)
-
         l_st.addWidget(card_st_summary)
 
-        # Controls
-        self.chk_st_enabled = QCheckBox("Enable Screen Time & Active Usage Tracking")
-        l_st.addWidget(self.chk_st_enabled)
+        # Card 1: Tracking & Display
+        self.chk_st_enabled = ToggleSwitch(checked=True)
+        self.chk_st_show_main_menu = ToggleSwitch(checked=True)
+        self.chk_st_track_apps = ToggleSwitch(checked=True)
 
-        self.chk_st_show_main_menu = QCheckBox("Show Screen Time pill in Main Menu (Home Tab)")
-        l_st.addWidget(self.chk_st_show_main_menu)
-
-        self.chk_st_track_apps = QCheckBox("Track per-application time breakdown (Code, Brave, Spotify, etc.)")
-        l_st.addWidget(self.chk_st_track_apps)
-
-        # AFK / Idle Detection Row
-        row_afk = QHBoxLayout()
-        lbl_afk = QLabel("AFK / Away Detection (Pause timer when inactive):")
-        lbl_afk.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.combo_st_afk = QComboBox()
         self.combo_st_afk.addItem("1 minute", 60)
         self.combo_st_afk.addItem("2 minutes (Recommended)", 120)
         self.combo_st_afk.addItem("5 minutes", 300)
         self.combo_st_afk.addItem("10 minutes", 600)
-        row_afk.addWidget(lbl_afk)
-        row_afk.addStretch()
-        row_afk.addWidget(self.combo_st_afk)
-        l_st.addLayout(row_afk)
 
-        # Daily Goal Slider
-        row_goal = QHBoxLayout()
-        lbl_goal = QLabel("Daily Target / Goal:")
-        lbl_goal.setStyleSheet("font-size: 11px; color: #cbd5e1;")
-        self.lbl_goal_val = QLabel("6 hrs")
-        self.lbl_goal_val.setStyleSheet("font-size: 11px; font-weight: 600; color: #0a84ff; min-width: 45px;")
+        card_st_track = _create_setting_card([
+            SettingRow("Active Usage Tracking", "Monitor active keyboard/mouse foreground session time", self.chk_st_enabled),
+            SettingRow("Show in Notch Home Tab", "Display live Screen Time pill directly on notch home dashboard", self.chk_st_show_main_menu),
+            SettingRow("Application Breakdown Tracking", "Record per-application duration (Code, Brave, Spotify, etc.)", self.chk_st_track_apps),
+            SettingRow("Away / AFK Inactivity Timeout", "Pause tracking when mouse and keyboard are idle", self.combo_st_afk)
+        ])
+        l_st.addWidget(card_st_track)
+
+        # Card 2: Daily Target & Wellbeing
         self.slider_st_goal = QSlider(Qt.Orientation.Horizontal)
         self.slider_st_goal.setRange(1, 16)
         self.slider_st_goal.setValue(6)
+        self.slider_st_goal.setFixedWidth(130)
+        self.lbl_goal_val = QLabel("6 hrs")
+        self.lbl_goal_val.setStyleSheet("font-size: 11px; font-weight: 600; color: #0a84ff; min-width: 42px;")
         self.slider_st_goal.valueChanged.connect(lambda v: self.lbl_goal_val.setText(f"{v} hrs"))
-        row_goal.addWidget(lbl_goal)
-        row_goal.addWidget(self.slider_st_goal, 1)
-        row_goal.addWidget(self.lbl_goal_val)
-        l_st.addLayout(row_goal)
 
-        self.chk_st_goal_alert = QCheckBox("Notify when daily target is reached")
-        l_st.addWidget(self.chk_st_goal_alert)
+        goal_widget = QWidget()
+        gw_l = QHBoxLayout(goal_widget)
+        gw_l.setContentsMargins(0, 0, 0, 0)
+        gw_l.setSpacing(8)
+        gw_l.addWidget(self.slider_st_goal)
+        gw_l.addWidget(self.lbl_goal_val)
 
-        # Break Reminders
-        self.chk_st_break_reminder = QCheckBox("Remind me to take a rest break during continuous work")
-        l_st.addWidget(self.chk_st_break_reminder)
+        self.chk_st_goal_alert = ToggleSwitch(checked=True)
+        self.chk_st_break_reminder = ToggleSwitch(checked=True)
 
-        row_break = QHBoxLayout()
-        lbl_break_int = QLabel("Break Reminder Interval:")
-        lbl_break_int.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.combo_st_break_interval = QComboBox()
         self.combo_st_break_interval.addItem("Every 30 minutes", 30)
         self.combo_st_break_interval.addItem("Every 45 minutes", 45)
         self.combo_st_break_interval.addItem("Every 60 minutes (Recommended)", 60)
         self.combo_st_break_interval.addItem("Every 90 minutes", 90)
         self.combo_st_break_interval.addItem("Every 120 minutes", 120)
-        row_break.addWidget(lbl_break_int)
-        row_break.addStretch()
-        row_break.addWidget(self.combo_st_break_interval)
-        l_st.addLayout(row_break)
 
-        # Excluded Apps
-        row_excl = QVBoxLayout()
-        row_excl.setSpacing(4)
-        lbl_excl = QLabel("Excluded Apps (Privacy Filter, comma-separated):")
-        lbl_excl.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        card_st_goals = _create_setting_card([
+            SettingRow("Daily Target Goal", "Maximum desired screen time per day", goal_widget),
+            SettingRow("Target Limit Reached Alert", "Pop up dynamic island alert when reaching daily limit", self.chk_st_goal_alert),
+            SettingRow("Healthy Rest Break Alerts", "Prompt rest breaks during continuous uninterrupted screen time", self.chk_st_break_reminder),
+            SettingRow("Break Reminder Frequency", "Interval between posture and eye rest reminders", self.combo_st_break_interval)
+        ])
+        l_st.addWidget(card_st_goals)
+
+        # Card 3: Privacy & Reset
         self.txt_st_excluded = QLineEdit()
         self.txt_st_excluded.setPlaceholderText("e.g. keepass, 1password, bitwarden")
-        row_excl.addWidget(lbl_excl)
-        row_excl.addWidget(self.txt_st_excluded)
-        l_st.addLayout(row_excl)
+        self.txt_st_excluded.setFixedWidth(200)
 
-        # Reset button
-        row_reset = QHBoxLayout()
-        self.btn_st_reset = QPushButton("Reset Today's Screen Time")
+        self.btn_st_reset = QPushButton("Reset Today")
         self.btn_st_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_st_reset.setStyleSheet("""
             QPushButton {
-                background-color: rgba(239, 68, 68, 0.15);
-                border: 1px solid rgba(239, 68, 68, 0.35);
+                background-color: rgba(239, 68, 68, 0.12);
+                border: 1px solid rgba(239, 68, 68, 0.3);
                 border-radius: 6px;
                 color: #fca5a5;
                 font-size: 11px;
                 font-weight: 600;
-                padding: 6px 14px;
+                padding: 5px 14px;
             }
             QPushButton:hover {
-                background-color: rgba(239, 68, 68, 0.28);
+                background-color: rgba(239, 68, 68, 0.25);
                 color: #ffffff;
             }
         """)
         self.btn_st_reset.clicked.connect(self._on_screentime_reset_clicked)
-        row_reset.addWidget(self.btn_st_reset)
-        row_reset.addStretch()
-        l_st.addLayout(row_reset)
 
+        card_st_privacy = _create_setting_card([
+            SettingRow("Excluded Applications", "Sensitive apps to omit from logs (comma-separated)", self.txt_st_excluded),
+            SettingRow("Reset Today's Screen Time", "Clear active session counter and app stats for today", self.btn_st_reset)
+        ])
+        l_st.addWidget(card_st_privacy)
         l_st.addStretch()
-        self.stack.addWidget(page_st)
+
+        scroll_st.setWidget(page_st)
+        self.stack.addWidget(scroll_st)
 
         # =====================================================================
         # 5. Media & Lyrics Page
         # =====================================================================
+        scroll_media = QScrollArea()
+        scroll_media.setWidgetResizable(True)
         page_media = QWidget()
         l_media = QVBoxLayout(page_media)
+        l_media.setContentsMargins(0, 0, 8, 0)
         l_media.setSpacing(12)
 
         lbl_media_hdr = QLabel("Media & Spotify Lyrics")
@@ -614,240 +649,303 @@ class SettingsWindow(QWidget):
         l_media.addWidget(lbl_media_hdr)
         l_media.addWidget(lbl_media_sub)
 
-        row_spdc = QVBoxLayout()
-        row_spdc.setSpacing(4)
-        lbl_spdc_title = QLabel("Spotify Direct Cookie (Optional for Official Lyrics):")
-        lbl_spdc_title.setStyleSheet("font-size: 11px; font-weight: 600; color: #f1f5f9;")
         self.txt_sp_dc = QLineEdit()
         self.txt_sp_dc.setPlaceholderText("Paste sp_dc cookie from open.spotify.com")
         self.txt_sp_dc.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        row_spdc.addWidget(lbl_spdc_title)
-        row_spdc.addWidget(self.txt_sp_dc)
-        l_media.addLayout(row_spdc)
+        self.txt_sp_dc.setFixedWidth(240)
+
+        self.chk_lyrics_auto_scroll = ToggleSwitch(checked=True)
+
+        card_media = _create_setting_card([
+            SettingRow("Spotify sp_dc Cookie", "Optional cookie for genuine Spotify Color Lyrics", self.txt_sp_dc),
+            SettingRow("Auto-Scroll Synced Lyrics", "Follow song timeline and center current line in real time", self.chk_lyrics_auto_scroll)
+        ])
+        l_media.addWidget(card_media)
 
         lbl_cookie_hint = QLabel(
             "💡 How it works:\n"
-            "• Poppy automatically fetches official Romanized synced lyrics via NetEase & LRCLIB without any login.\n"
+            "• Poppy automatically fetches Romanized synchronized lyrics via NetEase & LRCLIB without any login.\n"
             "• If you want 100% genuine direct Spotify Color Lyrics for rare or regional songs, log into open.spotify.com, "
             "open DevTools (F12) → Application → Cookies → copy 'sp_dc' value and paste above."
         )
         lbl_cookie_hint.setStyleSheet("""
-            background-color: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 6px;
-            padding: 8px 10px;
-            font-size: 10px;
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 10.5px;
             color: #94a3b8;
             line-height: 1.4;
         """)
         lbl_cookie_hint.setWordWrap(True)
         l_media.addWidget(lbl_cookie_hint)
-
-        self.chk_lyrics_auto_scroll = QCheckBox("Automatically scroll synced lyrics to follow song timeline")
-        self.chk_lyrics_auto_scroll.setChecked(True)
-        l_media.addWidget(self.chk_lyrics_auto_scroll)
-
         l_media.addStretch()
-        self.stack.addWidget(page_media)
+
+        scroll_media.setWidget(page_media)
+        self.stack.addWidget(scroll_media)
 
         # =====================================================================
-        # 5. Weather & Location Page
+        # 6. Weather & Location Page
         # =====================================================================
+        scroll_weath = QScrollArea()
+        scroll_weath.setWidgetResizable(True)
         page_weath = QWidget()
         l_weath = QVBoxLayout(page_weath)
+        l_weath.setContentsMargins(0, 0, 8, 0)
         l_weath.setSpacing(12)
 
         lbl_weath_hdr = QLabel("Weather & Forecast")
         lbl_weath_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
-        lbl_weath_sub = QLabel("Powered by Open-Meteo free public forecast. Auto-detects via IP or specify any city.")
+        lbl_weath_sub = QLabel("Powered by Open-Meteo public forecast. Auto-detects via IP or specify any city.")
         lbl_weath_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_weath.addWidget(lbl_weath_hdr)
         l_weath.addWidget(lbl_weath_sub)
 
-        row_city = QHBoxLayout()
-        lbl_city = QLabel("City / Location:")
-        lbl_city.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.txt_weather_city = QLineEdit()
-        self.txt_weather_city.setPlaceholderText("Auto-detect or type city (e.g. New York, London, Tokyo, Delhi)")
-        row_city.addWidget(lbl_city)
-        row_city.addWidget(self.txt_weather_city, stretch=1)
-        l_weath.addLayout(row_city)
+        self.txt_weather_city.setPlaceholderText("Auto-detect or type city (e.g. London, Tokyo, Delhi)")
+        self.txt_weather_city.setFixedWidth(220)
 
-        row_unit = QHBoxLayout()
-        lbl_unit = QLabel("Temperature Unit:")
-        lbl_unit.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.combo_weather_unit = QComboBox()
         self.combo_weather_unit.addItems(["Celsius (°C)", "Fahrenheit (°F)"])
-        row_unit.addWidget(lbl_unit)
-        row_unit.addWidget(self.combo_weather_unit)
-        row_unit.addStretch()
-        l_weath.addLayout(row_unit)
+        self.combo_weather_unit.setFixedWidth(140)
 
+        card_weath = _create_setting_card([
+            SettingRow("City / Location", "Auto-detect by IP or specify custom city", self.txt_weather_city),
+            SettingRow("Temperature Unit", "Display temperatures in Celsius or Fahrenheit", self.combo_weather_unit)
+        ])
+        l_weath.addWidget(card_weath)
         l_weath.addStretch()
-        self.stack.addWidget(page_weath)
+
+        scroll_weath.setWidget(page_weath)
+        self.stack.addWidget(scroll_weath)
 
         # =====================================================================
-        # 6. Pomodoro Page
+        # 7. Pomodoro Page
         # =====================================================================
+        scroll_pomo = QScrollArea()
+        scroll_pomo.setWidgetResizable(True)
         page_pomo = QWidget()
         l_pomo = QVBoxLayout(page_pomo)
+        l_pomo.setContentsMargins(0, 0, 8, 0)
         l_pomo.setSpacing(12)
 
         lbl_pomo_hdr = QLabel("Pomodoro Timer")
         lbl_pomo_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
+        lbl_pomo_sub = QLabel("Configure focus sprints, rest intervals, and acoustic completion chimes.")
+        lbl_pomo_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_pomo.addWidget(lbl_pomo_hdr)
+        l_pomo.addWidget(lbl_pomo_sub)
 
-        self.spin_pomo_work = self._create_spin_row(l_pomo, "Focus Sprint (minutes):", 1, 120, 25)
-        self.spin_pomo_break = self._create_spin_row(l_pomo, "Short Break (minutes):", 1, 60, 5)
-        self.spin_pomo_long = self._create_spin_row(l_pomo, "Long Break (minutes):", 1, 90, 15)
+        self.spin_pomo_work = QSpinBox()
+        self.spin_pomo_work.setRange(1, 120)
+        self.spin_pomo_work.setValue(25)
 
-        self.chk_pomo_sound = QCheckBox("Play notification chime on cycle completion")
-        l_pomo.addWidget(self.chk_pomo_sound)
+        self.spin_pomo_break = QSpinBox()
+        self.spin_pomo_break.setRange(1, 60)
+        self.spin_pomo_break.setValue(5)
 
+        self.spin_pomo_long = QSpinBox()
+        self.spin_pomo_long.setRange(1, 90)
+        self.spin_pomo_long.setValue(15)
+
+        self.chk_pomo_sound = ToggleSwitch(checked=True)
+
+        card_pomo = _create_setting_card([
+            SettingRow("Focus Sprint Duration", "Minutes dedicated to focused work", self.spin_pomo_work),
+            SettingRow("Short Break Duration", "Minutes for quick recharge breaks", self.spin_pomo_break),
+            SettingRow("Long Break Duration", "Minutes for extended recovery after 4 sprints", self.spin_pomo_long),
+            SettingRow("Completion Chime", "Play acoustic chime when sprint or break finishes", self.chk_pomo_sound)
+        ])
+        l_pomo.addWidget(card_pomo)
         l_pomo.addStretch()
-        self.stack.addWidget(page_pomo)
+
+        scroll_pomo.setWidget(page_pomo)
+        self.stack.addWidget(scroll_pomo)
 
         # =====================================================================
-        # 7. Discord RPC Page
+        # 8. Discord RPC Page
         # =====================================================================
+        scroll_rpc = QScrollArea()
+        scroll_rpc.setWidgetResizable(True)
         page_rpc = QWidget()
         l_rpc = QVBoxLayout(page_rpc)
-        l_rpc.setSpacing(10)
+        l_rpc.setContentsMargins(0, 0, 8, 0)
+        l_rpc.setSpacing(12)
 
         lbl_rpc_hdr = QLabel("Discord Rich Presence")
         lbl_rpc_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
+        lbl_rpc_sub = QLabel("Broadcast active Spotify media and Pomodoro status to Discord.")
+        lbl_rpc_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_rpc.addWidget(lbl_rpc_hdr)
+        l_rpc.addWidget(lbl_rpc_sub)
 
-        self.chk_rpc_enable = QCheckBox("Enable Discord Rich Presence status broadcasting")
-        l_rpc.addWidget(self.chk_rpc_enable)
+        self.chk_rpc_enable = ToggleSwitch(checked=False)
 
-        row_client = QHBoxLayout()
-        lbl_cid = QLabel("Application Client ID:")
-        lbl_cid.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.txt_rpc_client = QLineEdit()
-        self.txt_rpc_client.setPlaceholderText("Enter your Discord Developer Client ID")
-        row_client.addWidget(lbl_cid)
-        row_client.addWidget(self.txt_rpc_client)
-        l_rpc.addLayout(row_client)
+        self.txt_rpc_client.setPlaceholderText("Enter Discord Client ID")
+        self.txt_rpc_client.setFixedWidth(200)
 
-        row_mode = QHBoxLayout()
-        lbl_mode = QLabel("Presence Mode:")
-        lbl_mode.setStyleSheet("font-size: 11px; color: #cbd5e1;")
         self.combo_rpc_mode = QComboBox()
         self.combo_rpc_mode.addItems(["Dynamic (Follows Pomodoro & Media)", "Static Custom Presence"])
-        row_mode.addWidget(lbl_mode)
-        row_mode.addWidget(self.combo_rpc_mode)
-        row_mode.addStretch()
-        l_rpc.addLayout(row_mode)
 
+        card_rpc = _create_setting_card([
+            SettingRow("Broadcasting State", "Broadcast active Poppy activity to Discord profile", self.chk_rpc_enable),
+            SettingRow("Application Client ID", "Discord Developer Portal application ID", self.txt_rpc_client),
+            SettingRow("Presence Mode", "Dynamic sync (Media & Pomodoro) or static status", self.combo_rpc_mode)
+        ])
+        l_rpc.addWidget(card_rpc)
         l_rpc.addStretch()
-        self.stack.addWidget(page_rpc)
+
+        scroll_rpc.setWidget(page_rpc)
+        self.stack.addWidget(scroll_rpc)
 
         # =====================================================================
-        # 8. Hardware HUD Page
+        # 9. Hardware HUD Page
         # =====================================================================
+        scroll_hw = QScrollArea()
+        scroll_hw.setWidgetResizable(True)
         page_hw = QWidget()
         l_hw = QVBoxLayout(page_hw)
+        l_hw.setContentsMargins(0, 0, 8, 0)
         l_hw.setSpacing(12)
 
         lbl_hw_hdr = QLabel("Hardware Telemetry HUD")
         lbl_hw_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
+        lbl_hw_sub = QLabel("Select background hardware telemetry polling options.")
+        lbl_hw_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         l_hw.addWidget(lbl_hw_hdr)
+        l_hw.addWidget(lbl_hw_sub)
 
-        self.chk_monitor_gpu = QCheckBox("Query NVIDIA GPU Utilization (via NVML)")
-        l_hw.addWidget(self.chk_monitor_gpu)
+        self.chk_monitor_gpu = ToggleSwitch(checked=True)
+        self.chk_monitor_bat = ToggleSwitch(checked=True)
 
-        self.chk_monitor_bat = QCheckBox("Monitor Battery Level & AC Power State")
-        l_hw.addWidget(self.chk_monitor_bat)
-
+        card_hw = _create_setting_card([
+            SettingRow("NVIDIA GPU Telemetry", "Query GPU core utilization and temperature via NVML", self.chk_monitor_gpu),
+            SettingRow("Battery & AC Power State", "Monitor laptop battery percentage and charging state", self.chk_monitor_bat)
+        ])
+        l_hw.addWidget(card_hw)
         l_hw.addStretch()
-        self.stack.addWidget(page_hw)
+
+        scroll_hw.setWidget(page_hw)
+        self.stack.addWidget(scroll_hw)
 
         # =====================================================================
-        # 9. About & System Page
+        # 10. About & System Page
         # =====================================================================
+        scroll_abt = QScrollArea()
+        scroll_abt.setWidgetResizable(True)
         page_abt = QWidget()
         l_abt = QVBoxLayout(page_abt)
+        l_abt.setContentsMargins(0, 0, 8, 0)
         l_abt.setSpacing(12)
 
         lbl_abt_hdr = QLabel("Poppy Dynamic Notch")
         lbl_abt_hdr.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
         lbl_abt_ver = QLabel("Version 2.0 (Windows 11 / 10)")
         lbl_abt_ver.setStyleSheet("font-size: 11px; color: #94a3b8;")
-        lbl_abt_desc = QLabel("Hardware-accelerated top-bezel notch inspired by NotchX and Apple Dynamic Island.\nBuilt in Python with PySide6.")
+        lbl_abt_desc = QLabel("Hardware-accelerated top-bezel notch inspired by NotchX and Apple Dynamic Island.\nBuilt in Python with PySide6 and native Windows Win32 ctypes.")
         lbl_abt_desc.setStyleSheet("font-size: 11px; color: #64748b; line-height: 1.5;")
         l_abt.addWidget(lbl_abt_hdr)
         l_abt.addWidget(lbl_abt_ver)
         l_abt.addWidget(lbl_abt_desc)
 
-        l_abt.addSpacing(8)
-        lbl_sys_hdr = QLabel("Configuration & Diagnostics")
-        lbl_sys_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc;")
-        l_abt.addWidget(lbl_sys_hdr)
-
-        row_sys_btns = QHBoxLayout()
         btn_open_cfg = QPushButton("Edit config.json")
+        btn_open_cfg.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_open_cfg.setStyleSheet("""
             QPushButton {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 6px;
-                padding: 6px 14px;
+                padding: 5px 12px;
                 color: #e2e8f0;
                 font-size: 11px;
             }
             QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.14);
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
             }
         """)
         btn_open_cfg.clicked.connect(self._open_config_file)
 
         btn_open_folder = QPushButton("Open Poppy Folder")
+        btn_open_folder.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_open_folder.setStyleSheet("""
             QPushButton {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 6px;
-                padding: 6px 14px;
+                padding: 5px 12px;
                 color: #e2e8f0;
                 font-size: 11px;
             }
             QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.14);
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
             }
         """)
         btn_open_folder.clicked.connect(self._open_poppy_folder)
 
-        row_sys_btns.addWidget(btn_open_cfg)
-        row_sys_btns.addWidget(btn_open_folder)
-        row_sys_btns.addStretch()
-        l_abt.addLayout(row_sys_btns)
-
+        card_abt = _create_setting_card([
+            SettingRow("Configuration File", "Open config.json directly in your default editor", btn_open_cfg),
+            SettingRow("App Directory", "Browse Poppy installation and assets directory", btn_open_folder)
+        ])
+        l_abt.addWidget(card_abt)
         l_abt.addStretch()
-        self.stack.addWidget(page_abt)
+
+        scroll_abt.setWidget(page_abt)
+        self.stack.addWidget(scroll_abt)
 
         right_layout.addWidget(self.stack, stretch=1)
 
-        # Bottom Bar: Save & Close button
+        # Bottom Action Footer
         bottom_bar = QHBoxLayout()
+        bottom_bar.setContentsMargins(4, 4, 4, 0)
+
+        lbl_auto_save = QLabel("●  Settings are saved automatically")
+        lbl_auto_save.setStyleSheet("font-size: 10.5px; color: #64748b; background: transparent; border: none;")
+        bottom_bar.addWidget(lbl_auto_save)
         bottom_bar.addStretch()
-        self.btn_save = QPushButton("Save & Apply")
-        self.btn_save.setStyleSheet("""
+
+        self.btn_close = QPushButton("Close")
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_close.setStyleSheet("""
             QPushButton {
-                background-color: #0a84ff;
-                border: none;
-                border-radius: 6px;
-                padding: 7px 22px;
-                font-weight: 600;
-                font-size: 12px;
-                color: #ffffff;
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                padding: 6px 16px;
+                font-size: 11.5px;
+                font-weight: 500;
+                color: #94a3b8;
             }
             QPushButton:hover {
-                background-color: #38bdf8;
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
+        """)
+        self.btn_close.clicked.connect(self.close)
+        bottom_bar.addWidget(self.btn_close)
+
+        self.btn_save = QPushButton("Save & Apply")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(10, 132, 255, 0.15);
+                border: 1px solid rgba(10, 132, 255, 0.35);
+                border-radius: 8px;
+                padding: 6px 20px;
+                font-weight: 600;
+                font-size: 11.5px;
+                color: #38bdf8;
+            }
+            QPushButton:hover {
+                background-color: rgba(10, 132, 255, 0.28);
+                color: #ffffff;
             }
         """)
         self.btn_save.clicked.connect(self._save_settings)
         bottom_bar.addWidget(self.btn_save)
+
         right_layout.addLayout(bottom_bar)
 
         main_layout.addWidget(right_container, stretch=1)
@@ -867,37 +965,28 @@ class SettingsWindow(QWidget):
         except Exception:
             pass
 
-    def _create_slider_row(self, layout, label_text: str, min_v: int, max_v: int, default_v: int):
-        row = QHBoxLayout()
-        lbl = QLabel(label_text)
-        lbl.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+    def _make_slider_setting(self, title: str, subtitle: str, min_v: int, max_v: int, default_v: int):
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(min_v, max_v)
         slider.setValue(default_v)
+        slider.setFixedWidth(130)
+
         val_lbl = QLabel(str(default_v))
-        val_lbl.setFixedWidth(36)
-        val_lbl.setStyleSheet("font-size: 11px; color: #0a84ff; font-weight: 600;")
+        val_lbl.setFixedWidth(32)
+        val_lbl.setStyleSheet("font-size: 11px; color: #0a84ff; font-weight: 600; background: transparent; border: none;")
+
         slider.valueChanged.connect(lambda v: val_lbl.setText(str(v)))
         slider.valueChanged.connect(self._on_live_appearance_change)
 
-        row.addWidget(lbl, stretch=1)
-        row.addWidget(slider, stretch=2)
-        row.addWidget(val_lbl)
-        layout.addLayout(row)
-        return slider, val_lbl
+        ctrl_wrap = QWidget()
+        ctrl_l = QHBoxLayout(ctrl_wrap)
+        ctrl_l.setContentsMargins(0, 0, 0, 0)
+        ctrl_l.setSpacing(8)
+        ctrl_l.addWidget(slider)
+        ctrl_l.addWidget(val_lbl)
 
-    def _create_spin_row(self, layout, label_text: str, min_v: int, max_v: int, default_v: int):
-        row = QHBoxLayout()
-        lbl = QLabel(label_text)
-        lbl.setStyleSheet("font-size: 11px; color: #cbd5e1;")
-        spin = QSpinBox()
-        spin.setRange(min_v, max_v)
-        spin.setValue(default_v)
-        row.addWidget(lbl)
-        row.addWidget(spin)
-        row.addStretch()
-        layout.addLayout(row)
-        return spin
+        row = SettingRow(title, subtitle, ctrl_wrap)
+        return slider, val_lbl, row
 
     def _on_nav_changed(self, row: int):
         self.stack.setCurrentIndex(row)
@@ -955,7 +1044,7 @@ class SettingsWindow(QWidget):
         tabs_cfg = self.config.get("tabs", {})
         enabled_tabs = tabs_cfg.get("enabled", [name for name, _ in ALL_AVAILABLE_TABS])
         for name, chk in self._tab_checkboxes.items():
-            chk.setChecked(name in enabled_tabs)
+            chk.setChecked(name in enabled_tabs, animate=False)
 
         dtab = self.config.get("notch", {}).get("default_tab", "Smart")
         for i in range(self.combo_default_tab.count()):
@@ -965,25 +1054,25 @@ class SettingsWindow(QWidget):
 
         # 2. Behavior
         notch_cfg = self.config.get("notch", {})
-        self.chk_hover_peek.setChecked(notch_cfg.get("auto_hover_peek", True))
-        self.chk_scroll_volume.setChecked(notch_cfg.get("scroll_volume", True))
+        self.chk_hover_peek.setChecked(notch_cfg.get("auto_hover_peek", True), animate=False)
+        self.chk_scroll_volume.setChecked(notch_cfg.get("scroll_volume", True), animate=False)
         self.spin_anim_ms.setValue(notch_cfg.get("animation_duration_ms", 200))
-        self.chk_tray_close.setChecked(notch_cfg.get("keep_in_tray", True))
-        self.chk_autostart.setChecked(get_autostart_state())
+        self.chk_tray_close.setChecked(notch_cfg.get("keep_in_tray", True), animate=False)
+        self.chk_autostart.setChecked(get_autostart_state(), animate=False)
 
         # 3. Notifications
         notif_cfg = self.config.get("notifications", {})
-        self.chk_notif_enabled.setChecked(notif_cfg.get("enabled", True))
-        self.chk_notif_show_island.setChecked(notif_cfg.get("show_island_on_notify", True))
-        self.chk_notif_mute_focus.setChecked(notif_cfg.get("mute_in_focus", True))
-        self.chk_notif_sound.setChecked(notif_cfg.get("sound", True))
-        self.chk_notif_preview.setChecked(notif_cfg.get("preview_text", True))
+        self.chk_notif_enabled.setChecked(notif_cfg.get("enabled", True), animate=False)
+        self.chk_notif_show_island.setChecked(notif_cfg.get("show_island_on_notify", True), animate=False)
+        self.chk_notif_mute_focus.setChecked(notif_cfg.get("mute_in_focus", True), animate=False)
+        self.chk_notif_sound.setChecked(notif_cfg.get("sound", True), animate=False)
+        self.chk_notif_preview.setChecked(notif_cfg.get("preview_text", True), animate=False)
 
         # 4. Screen Time
         st_cfg = self.config.get("screentime", {})
-        self.chk_st_enabled.setChecked(st_cfg.get("enabled", True))
-        self.chk_st_show_main_menu.setChecked(st_cfg.get("show_in_main_menu", True))
-        self.chk_st_track_apps.setChecked(st_cfg.get("track_apps", True))
+        self.chk_st_enabled.setChecked(st_cfg.get("enabled", True), animate=False)
+        self.chk_st_show_main_menu.setChecked(st_cfg.get("show_in_main_menu", True), animate=False)
+        self.chk_st_track_apps.setChecked(st_cfg.get("track_apps", True), animate=False)
 
         afk_sec = st_cfg.get("idle_threshold_seconds", 120)
         for i in range(self.combo_st_afk.count()):
@@ -995,8 +1084,8 @@ class SettingsWindow(QWidget):
         self.slider_st_goal.setValue(goal_h)
         self.lbl_goal_val.setText(f"{goal_h} hrs")
 
-        self.chk_st_goal_alert.setChecked(st_cfg.get("goal_alert_enabled", True))
-        self.chk_st_break_reminder.setChecked(st_cfg.get("break_reminders_enabled", True))
+        self.chk_st_goal_alert.setChecked(st_cfg.get("goal_alert_enabled", True), animate=False)
+        self.chk_st_break_reminder.setChecked(st_cfg.get("break_reminders_enabled", True), animate=False)
 
         break_int = st_cfg.get("break_interval_minutes", 60)
         for i in range(self.combo_st_break_interval.count()):
@@ -1007,35 +1096,35 @@ class SettingsWindow(QWidget):
         excl_list = st_cfg.get("excluded_apps", [])
         self.txt_st_excluded.setText(", ".join(excl_list))
 
-        # 4. Media & Lyrics
+        # 5. Media & Lyrics
         media_cfg = self.config.get("media", {})
         self.txt_sp_dc.setText(media_cfg.get("spotify_sp_dc", ""))
-        self.chk_lyrics_auto_scroll.setChecked(media_cfg.get("auto_scroll_lyrics", True))
+        self.chk_lyrics_auto_scroll.setChecked(media_cfg.get("auto_scroll_lyrics", True), animate=False)
 
-        # 5. Weather
+        # 6. Weather
         w_cfg = self.config.get("weather", {})
         self.txt_weather_city.setText(w_cfg.get("city", "Auto-detect"))
         u_idx = 1 if w_cfg.get("unit", "celsius").lower() == "fahrenheit" else 0
         self.combo_weather_unit.setCurrentIndex(u_idx)
 
-        # 6. Pomodoro
+        # 7. Pomodoro
         pomo_cfg = self.config.get("pomodoro", {})
         self.spin_pomo_work.setValue(pomo_cfg.get("work_duration", 1500) // 60)
         self.spin_pomo_break.setValue(pomo_cfg.get("break_duration", 300) // 60)
         self.spin_pomo_long.setValue(pomo_cfg.get("long_break_duration", 900) // 60)
-        self.chk_pomo_sound.setChecked(pomo_cfg.get("sound_enabled", True))
+        self.chk_pomo_sound.setChecked(pomo_cfg.get("sound_enabled", True), animate=False)
 
-        # 7. Discord RPC
+        # 8. Discord RPC
         rpc_cfg = self.config.get("discord_rpc", {})
-        self.chk_rpc_enable.setChecked(rpc_cfg.get("enabled", False))
+        self.chk_rpc_enable.setChecked(rpc_cfg.get("enabled", False), animate=False)
         self.txt_rpc_client.setText(rpc_cfg.get("client_id", "120000000000000000"))
         mode_idx = 0 if rpc_cfg.get("mode") == "dynamic" else 1
         self.combo_rpc_mode.setCurrentIndex(mode_idx)
 
-        # 8. Hardware HUD
+        # 9. Hardware HUD
         hw_cfg = self.config.get("hardware_hud", {})
-        self.chk_monitor_gpu.setChecked(hw_cfg.get("monitor_gpu", True))
-        self.chk_monitor_bat.setChecked(hw_cfg.get("monitor_battery", True))
+        self.chk_monitor_gpu.setChecked(hw_cfg.get("monitor_gpu", True), animate=False)
+        self.chk_monitor_bat.setChecked(hw_cfg.get("monitor_battery", True), animate=False)
 
     def _save_settings(self):
         # Update Windows autostart registry state
@@ -1137,7 +1226,7 @@ class SettingsWindow(QWidget):
 
     def _on_screentime_reset_clicked(self):
         self.screentime_reset_requested.emit()
-        self.lbl_st_today_time.setText("Today: 0m")
+        self.lbl_st_today_time.setText("0m")
         self.lbl_st_goal_pct.setText("Goal: 0%")
         self.bar_st_goal.setValue(0)
         self.lbl_st_streak.setText("Active Streak: 0m")
@@ -1147,7 +1236,7 @@ class SettingsWindow(QWidget):
         h = total_sec // 3600
         m = (total_sec % 3600) // 60
         time_str = f"{h}h {m:02d}m" if h > 0 else f"{m}m"
-        self.lbl_st_today_time.setText(f"Today: {time_str}")
+        self.lbl_st_today_time.setText(time_str)
 
         goal_sec = max(1.0, goal_hours * 3600.0)
         pct = min(100, int((total_sec / goal_sec) * 100))

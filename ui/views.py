@@ -771,9 +771,9 @@ class MusicTabView(QWidget):
         info_col.addLayout(transport_row)
         main_layout.addLayout(info_col, stretch=1)
 
-        # Right: Spotify Animated Lyrics View (280px width)
+        # Right: Spotify Animated Lyrics View (310px width)
         self.lyrics_widget = SpotifyLyricsWidget(self)
-        self.lyrics_widget.setFixedWidth(280)
+        self.lyrics_widget.setFixedWidth(310)
         self.lyrics_widget.seek_requested.connect(self.seek_requested.emit)
         main_layout.addWidget(self.lyrics_widget)
 

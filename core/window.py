@@ -1463,16 +1463,31 @@ class DynamicNotchWindow(QWidget):
 
     def open_settings(self, page_name: str = None):
         """Open the dedicated Poppy Settings application window."""
+        # Collapse the notch drawer so settings is completely unobscured
+        if self.state != NotchState.COLLAPSED:
+            self._collapse_to_pill()
+
         if self._settings_window is None:
             self._settings_window = SettingsWindow(config=self.config)
             self._settings_window.settings_saved.connect(self._on_settings_saved)
             self._settings_window.appearance_live_updated.connect(self._apply_live_appearance)
             self._settings_window.screentime_reset_requested.connect(self.screentime.reset_today)
 
+        # Center Settings window cleanly on active screen
+        screen = self._get_current_screen_geometry()
+        w = self._settings_window.width()
+        h = self._settings_window.height()
+        x = screen.x() + (screen.width() - w) // 2
+        y = screen.y() + (screen.height() - h) // 2
+        self._settings_window.move(x, y)
+
         if page_name and hasattr(self._settings_window, "select_page"):
             self._settings_window.select_page(page_name)
 
-        self._settings_window.show()
+        if self._settings_window.isMinimized():
+            self._settings_window.showNormal()
+        else:
+            self._settings_window.show()
         self._settings_window.raise_()
         self._settings_window.activateWindow()
 

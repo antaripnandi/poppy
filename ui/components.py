@@ -8,7 +8,7 @@ import os
 import math
 import time
 from PySide6.QtCore import (
-    Qt, QRectF, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent
+    Qt, QRectF, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap
@@ -62,6 +62,109 @@ class IconButton(QPushButton):
                 color: #ffffff;
             }}
         """)
+
+
+class ToggleSwitch(QWidget):
+    """
+    Modern iOS / macOS / Fluent style animated toggle switch.
+    Replaces bulky Qt checkboxes with a clean, minimalist 36x20 pill.
+    """
+    toggled = Signal(bool)
+
+    def __init__(self, checked: bool = False, accent: str = "#0a84ff", parent=None):
+        super().__init__(parent)
+        self.setFixedSize(36, 20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._checked = bool(checked)
+        self._accent = accent
+        self._thumb_pos = 18.0 if checked else 2.0
+
+        self._anim = QPropertyAnimation(self, b"thumb_position", self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool, animate: bool = True):
+        checked = bool(checked)
+        if self._checked == checked:
+            return
+        self._checked = checked
+        target = 18.0 if checked else 2.0
+        if animate and self.isVisible():
+            self._anim.stop()
+            self._anim.setStartValue(self._thumb_pos)
+            self._anim.setEndValue(target)
+            self._anim.start()
+        else:
+            self._thumb_pos = target
+            self.update()
+        self.toggled.emit(self._checked)
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self.update()
+
+    def _get_thumb_position(self) -> float:
+        return self._thumb_pos
+
+    def _set_thumb_position(self, pos: float):
+        self._thumb_pos = pos
+        self.update()
+
+    thumb_position = Property(float, _get_thumb_position, _set_thumb_position)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setChecked(not self._checked)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = float(self.width()), float(self.height())
+        r = h / 2.0
+        track_color = QColor(self._accent) if self._checked else QColor(255, 255, 255, 30)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(track_color))
+        painter.drawRoundedRect(QRectF(0, 0, w, h), r, r)
+
+        thumb_d = h - 4.0
+        thumb_color = QColor(255, 255, 255)
+        painter.setBrush(QBrush(thumb_color))
+        painter.drawEllipse(QRectF(self._thumb_pos, 2.0, thumb_d, thumb_d))
+
+
+class SettingRow(QWidget):
+    """
+    Minimalist setting row: Title + optional subtitle on the left, control on the right.
+    """
+    def __init__(self, title: str, subtitle: str = "", control: QWidget = None, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 5, 0, 5)
+        layout.setSpacing(12)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 12px; font-weight: 500; color: #f1f5f9; background: transparent; border: none;")
+        text_col.addWidget(lbl_title)
+
+        if subtitle:
+            lbl_sub = QLabel(subtitle)
+            lbl_sub.setStyleSheet("font-size: 10px; color: #64748b; background: transparent; border: none;")
+            text_col.addWidget(lbl_sub)
+
+        layout.addLayout(text_col, 1)
+
+        if control:
+            layout.addWidget(control)
 
 
 class AnimatedTabStrip(QWidget):
@@ -735,14 +838,16 @@ class LyricLineWidget(QPushButton):
         if self._is_active:
             self.setStyleSheet("""
                 QPushButton {
-                    background: transparent;
+                    background: rgba(255, 255, 255, 0.07);
                     border: none;
+                    border-left: 3px solid #0a84ff;
+                    border-radius: 4px;
                     color: #ffffff;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', Roboto, sans-serif;
                     font-size: 15px;
                     font-weight: 700;
                     text-align: left;
-                    padding: 6px 4px;
+                    padding: 7px 10px;
                     margin: 2px 0px;
                 }
             """)
@@ -751,17 +856,19 @@ class LyricLineWidget(QPushButton):
                 QPushButton {
                     background: transparent;
                     border: none;
+                    border-left: 3px solid transparent;
                     color: rgba(255, 255, 255, 0.35);
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', Roboto, sans-serif;
                     font-size: 13.5px;
                     font-weight: 500;
                     text-align: left;
-                    padding: 5px 4px;
+                    padding: 5px 10px;
                     margin: 1px 0px;
                 }
                 QPushButton:hover {
                     color: rgba(255, 255, 255, 0.85);
-                    background: transparent;
+                    background: rgba(255, 255, 255, 0.04);
+                    border-radius: 4px;
                 }
             """)
 
@@ -795,7 +902,11 @@ class SpotifyLyricsWidget(QFrame):
         lbl_hdr = QLabel("Lyrics")
         lbl_hdr.setStyleSheet("QLabel { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 600; color: #94a3b8; background: transparent; border: none; }")
 
+        lbl_badge = QLabel("SYNCED")
+        lbl_badge.setStyleSheet("QLabel { font-size: 8.5px; font-weight: 700; color: #38bdf8; background: rgba(10, 132, 255, 0.12); border: 1px solid rgba(10, 132, 255, 0.25); border-radius: 4px; padding: 1px 5px; letter-spacing: 0.5px; }")
+
         hdr_row.addWidget(lbl_hdr)
+        hdr_row.addWidget(lbl_badge)
         hdr_row.addStretch()
         layout.addLayout(hdr_row)
 

@@ -124,3 +124,4 @@ def test_settings_window_screentime_page(qapp):
     assert "1h 30m" in sw.lbl_st_today_time.text()
     assert "Goal: 18%" in sw.lbl_st_goal_pct.text()
     assert "45m" in sw.lbl_st_streak.text()
+
