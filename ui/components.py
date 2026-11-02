@@ -104,6 +104,28 @@ class AnimatedTabStrip(QWidget):
 
         self._update_buttons_style()
 
+    def set_tabs(self, tab_items: list[tuple[str, str]]):
+        """Dynamically replace tabs in the strip without recreating the widget."""
+        for btn in self.buttons:
+            self._layout.removeWidget(btn)
+            btn.deleteLater()
+        self.buttons.clear()
+
+        fluent_font = get_fluent_font_family()
+        for idx, (name, icon) in enumerate(tab_items):
+            label = f"{icon}  {name}" if icon else name
+            btn = QPushButton(label, self)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(28)
+            btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i, animate=True))
+            self.buttons.append(btn)
+            self._layout.addWidget(btn)
+
+        self._current_index = 0
+        self._update_buttons_style()
+        if self.buttons:
+            self.indicator.setGeometry(self.buttons[0].geometry())
+
     def set_accent(self, accent: str):
         self._accent = accent
         self._update_indicator_style()

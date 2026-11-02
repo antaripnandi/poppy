@@ -395,3 +395,39 @@ class AudioEndpointManager:
             pass
         return devices
 
+
+def get_autostart_state() -> bool:
+    """Checks whether Poppy is registered to launch on Windows startup."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
+        val, _ = winreg.QueryValueEx(key, "Poppy")
+        winreg.CloseKey(key)
+        return bool(val)
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
+def set_autostart_state(enable: bool) -> bool:
+    """Registers or unregisters Poppy in the Windows CurrentVersion Run registry key."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
+        if enable:
+            exe_path = sys.executable
+            main_py = Path(__file__).resolve().parent.parent / "main.py"
+            # Use pythonw if available or regular python
+            cmd = f'"{exe_path}" "{main_py}"'
+            winreg.SetValueEx(key, "Poppy", 0, winreg.REG_SZ, cmd)
+        else:
+            try:
+                winreg.DeleteValue(key, "Poppy")
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        print(f"[Poppy] Autostart error: {e}")
+        return False
+
+

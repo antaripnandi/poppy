@@ -137,3 +137,15 @@ def test_audio_visualizer_bars_fluid_physics(qapp):
     for h in viz._heights:
         assert 2.5 <= h <= 14.0
 
+
+def test_netease_romanized_synced_lyrics():
+    mgr = LyricsManager()
+    data = mgr._query_netease("Dilliwaali Girlfriend", "Pritam")
+    assert data is not None
+    assert bool(data.get("syncedLyrics")) is True
+    synced = parse_lrc(data.get("syncedLyrics"))
+    assert len(synced) > 10
+    # Must have Romanized lyrics matching Spotify, NOT Gurmukhi script
+    assert any("girlfriend" in text.lower() or "dilliwali" in text.lower() for _, text in synced)
+
+

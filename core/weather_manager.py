@@ -7,6 +7,7 @@ Zero external dependencies (uses standard library urllib and json).
 
 import threading
 import urllib.request
+import urllib.parse
 import json
 
 from PySide6.QtCore import QObject, Signal, QTimer
@@ -15,17 +16,23 @@ from poppy.ui.icons import Icons
 
 class WeatherManager(QObject):
     """
-    Background weather monitor. Resolves client location via IP geolocation,
-    fetches live temperature, weather code, and high/low forecasts.
+    Background weather monitor. Resolves client location via custom city or IP geolocation,
+    fetches live temperature, weather code, and high/low forecasts via Open-Meteo.
     """
     weather_updated = Signal(dict)
 
-    def __init__(self, parent=None):
+    def __init__(self, config: dict = None, parent=None):
         super().__init__(parent)
+        self.config = config or {}
         self._cached_data = {}
         self._timer = QTimer(self)
         self._timer.setInterval(20 * 60 * 1000)  # Refresh every 20 minutes
         self._timer.timeout.connect(self.refresh)
+
+    def update_config(self, config: dict):
+        """Update weather preferences and trigger immediate background fetch."""
+        self.config = config or {}
+        self.refresh()
 
     def start(self):
         """Starts periodic weather refresh and triggers initial fetch."""
@@ -37,38 +44,64 @@ class WeatherManager(QObject):
         threading.Thread(target=self._worker, daemon=True).start()
 
     def _worker(self):
+        wcfg = self.config.get("weather", {}) if self.config else {}
+        target_city = wcfg.get("city", "Auto-detect").strip()
+        unit = wcfg.get("unit", "celsius").lower()
+
         city = "Local"
         region = ""
         country = ""
         lat, lon = None, None
 
-        # 1. Geolocation lookup (with multiple fallbacks)
-        geo_services = [
-            ("http://ip-api.com/json/", lambda d: (d.get("city", "Local"), d.get("regionName", ""), d.get("country", ""), d.get("lat"), d.get("lon")) if d.get("status") == "success" else None),
-            ("https://get.geojs.io/v1/ip/geo.json", lambda d: (d.get("city", "Local"), d.get("region", ""), d.get("country", ""), float(d.get("latitude")), float(d.get("longitude"))) if d.get("latitude") else None),
-            ("https://ipapi.co/json/", lambda d: (d.get("city", "Local"), d.get("region", ""), d.get("country_name", ""), float(d.get("latitude")), float(d.get("longitude"))) if d.get("latitude") else None),
-        ]
-
-        for url, parser in geo_services:
+        # 1a. If user supplied a specific city, geocode with Open-Meteo
+        if target_city and target_city.lower() != "auto-detect":
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Poppy/1.0"})
+                enc_city = urllib.parse.quote(target_city)
+                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={enc_city}&count=1"
+                req = urllib.request.Request(geo_url, headers={"User-Agent": "Poppy/1.0"})
                 with urllib.request.urlopen(req, timeout=4) as res:
-                    raw = json.loads(res.read().decode())
-                    parsed = parser(raw)
-                    if parsed:
-                        city, region, country, lat, lon = parsed
-                        break
+                    gdata = json.loads(res.read().decode())
+                    results = gdata.get("results")
+                    if results and isinstance(results, list):
+                        r = results[0]
+                        city = r.get("name", target_city)
+                        region = r.get("admin1", "")
+                        country = r.get("country", "")
+                        lat = float(r.get("latitude"))
+                        lon = float(r.get("longitude"))
             except Exception:
-                continue
+                pass
+
+        # 1b. Geolocation lookup fallback (IP-based)
+        if lat is None or lon is None:
+            geo_services = [
+                ("http://ip-api.com/json/", lambda d: (d.get("city", "Local"), d.get("regionName", ""), d.get("country", ""), d.get("lat"), d.get("lon")) if d.get("status") == "success" else None),
+                ("https://get.geojs.io/v1/ip/geo.json", lambda d: (d.get("city", "Local"), d.get("region", ""), d.get("country", ""), float(d.get("latitude")), float(d.get("longitude"))) if d.get("latitude") else None),
+                ("https://ipapi.co/json/", lambda d: (d.get("city", "Local"), d.get("region", ""), d.get("country_name", ""), float(d.get("latitude")), float(d.get("longitude"))) if d.get("latitude") else None),
+            ]
+
+            for url, parser in geo_services:
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "Poppy/1.0"})
+                    with urllib.request.urlopen(req, timeout=4) as res:
+                        raw = json.loads(res.read().decode())
+                        parsed = parser(raw)
+                        if parsed:
+                            city, region, country, lat, lon = parsed
+                            break
+                except Exception:
+                    continue
 
         if lat is None or lon is None:
             lat, lon = 13.08, 80.27  # Default if offline
 
         # 2. Open-Meteo Weather API
+        temp_unit_param = "&temperature_unit=fahrenheit" if unit == "fahrenheit" else ""
+        unit_sym = "°F" if unit == "fahrenheit" else "°C"
         url = (
             f"https://api.open-meteo.com/v1/forecast?"
             f"latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,weather_code,is_day"
-            f"&daily=temperature_2m_max,temperature_2m_min&timezone=auto"
+            f"&daily=temperature_2m_max,temperature_2m_min&timezone=auto{temp_unit_param}"
         )
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Poppy/1.0"})
@@ -98,8 +131,8 @@ class WeatherManager(QObject):
                     "condition": cond,
                     "icon": icon,
                     "is_day": is_day,
-                    "display_text": f"{temp}° {cond} · H {high}° L {low}° · {city}",
-                    "short_text": f"{temp}° {cond} · H {high}° L {low}°"
+                    "display_text": f"{temp}{unit_sym} {cond} · H {high}° L {low}° · {city}",
+                    "short_text": f"{temp}{unit_sym} {cond} · H {high}° L {low}°"
                 }
                 self._cached_data = data
                 self.weather_updated.emit(data)

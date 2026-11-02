@@ -110,8 +110,8 @@ class DynamicNotchWindow(QWidget):
         self.bright_ctrl = SystemBrightnessController()
         self.caffeine = CaffeineManager()
         self._eyedropper_overlay = None
-        self.weather_manager = WeatherManager(parent=self)
-        self.lyrics_manager = LyricsManager(parent=self)
+        self.weather_manager = WeatherManager(config=self.config, parent=self)
+        self.lyrics_manager = LyricsManager(config=self.config, parent=self)
         self.privacy_monitor = PrivacyMonitor(parent=self)
         self.bt_manager = BluetoothManager(parent=self)
         self.clip_mgr = ClipboardHistoryManager(parent=self)
@@ -186,11 +186,13 @@ class DynamicNotchWindow(QWidget):
         self._theme_name = app_cfg.get("theme", DEFAULT_THEME)
         self._theme = get_theme(self._theme_name)
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
-        self._collapsed_w = app_cfg.get("collapsed_width", 210)
+        self._collapsed_w = app_cfg.get("collapsed_width", 240)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
         self._open_w = max(app_cfg.get("open_width", 940), 940)
         self._open_h = max(app_cfg.get("open_height", 460), 460)
         self._corner_radius = app_cfg.get("corner_radius", 16)
+        self._top_offset = app_cfg.get("top_offset", 0)
+        self._display = app_cfg.get("display", "Primary")
 
     def minimumSizeHint(self) -> QSize:
         return QSize(self._collapsed_w, self._collapsed_h)
@@ -479,17 +481,23 @@ class DynamicNotchWindow(QWidget):
         header_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Smooth Segmented Tab Strip with sliding indicator pill
-        tab_items = [
-            ("Home", ""),
-            ("Music", ""),
-            ("Calendar", ""),
-            ("Clipboard", ""),
-            ("Docs", ""),
-            ("Desktops", ""),
-            ("Timer", ""),
-            ("Shelf", ""),
-            ("Notes", "")
-        ]
+        self._tab_name_to_stack_idx = {
+            "Home": 0,
+            "Music": 1,
+            "Calendar": 2,
+            "Clipboard": 3,
+            "Docs": 4,
+            "Desktops": 5,
+            "Timer": 6,
+            "Shelf": 7,
+            "Notes": 8
+        }
+        enabled_tabs = self.config.get("tabs", {}).get("enabled", list(self._tab_name_to_stack_idx.keys()))
+        self._active_tab_names = [name for name in self._tab_name_to_stack_idx.keys() if name in enabled_tabs]
+        if not self._active_tab_names:
+            self._active_tab_names = ["Home"]
+
+        tab_items = [(name, "") for name in self._active_tab_names]
         self.tab_strip = AnimatedTabStrip(tab_items, accent=self._theme["accent"], parent=self)
         self.tab_strip.tab_changed.connect(self._switch_tab)
         header_bar.addWidget(self.tab_strip)
@@ -643,9 +651,32 @@ class DynamicNotchWindow(QWidget):
         self._switch_tab(0)
 
     def _switch_tab(self, index: int):
-        self.tab_stack.slide_to_index(index)
+        if not hasattr(self, '_active_tab_names') or not (0 <= index < len(self._active_tab_names)):
+            self.tab_stack.slide_to_index(index)
+            return
+        tab_name = self._active_tab_names[index]
+        stack_idx = self._tab_name_to_stack_idx.get(tab_name, 0)
+        self.tab_stack.slide_to_index(stack_idx)
         if hasattr(self, 'tab_strip'):
             self.tab_strip.set_current_index(index, animate=True, emit_signal=False)
+
+    def _switch_to_tab_by_name(self, tab_name: str):
+        if hasattr(self, '_active_tab_names') and tab_name in self._active_tab_names:
+            strip_idx = self._active_tab_names.index(tab_name)
+            self._switch_tab(strip_idx)
+        elif hasattr(self, '_tab_name_to_stack_idx') and tab_name in self._tab_name_to_stack_idx:
+            stack_idx = self._tab_name_to_stack_idx[tab_name]
+            self.tab_stack.slide_to_index(stack_idx)
+
+    def _rebuild_tabs(self):
+        enabled_tabs = self.config.get("tabs", {}).get("enabled", list(self._tab_name_to_stack_idx.keys()))
+        self._active_tab_names = [name for name in self._tab_name_to_stack_idx.keys() if name in enabled_tabs]
+        if not self._active_tab_names:
+            self._active_tab_names = ["Home"]
+        tab_items = [(name, "") for name in self._active_tab_names]
+        if hasattr(self, 'tab_strip'):
+            self.tab_strip.set_tabs(tab_items)
+            self._switch_tab(0)
 
     def _connect_signals(self):
         # Pomodoro
@@ -871,7 +902,7 @@ class DynamicNotchWindow(QWidget):
     def _trigger_quick_search(self):
         if self.state != NotchState.EXPANDED:
             self._transition_to(NotchState.EXPANDED)
-        self._switch_tab(0)
+        self._switch_to_tab_by_name("Home")
         self.tab_home.input_calc.setFocus()
         self.tab_home.input_calc.selectAll()
 
@@ -1350,7 +1381,7 @@ class DynamicNotchWindow(QWidget):
 
     def _open_shelf_from_island(self):
         self._island_timer.stop()
-        self._switch_tab(7)
+        self._switch_to_tab_by_name("Shelf")
         self._transition_to(NotchState.EXPANDED)
 
     def _on_island_timeout(self):
@@ -1431,6 +1462,13 @@ class DynamicNotchWindow(QWidget):
         self.config = new_config or {}
         self._load_appearance_config()
         self._apply_live_appearance(self.config.get("appearance", {}))
+        self._rebuild_tabs()
+
+        if hasattr(self, "weather_manager"):
+            self.weather_manager.update_config(self.config)
+
+        if hasattr(self, "lyrics_manager"):
+            self.lyrics_manager.update_config(self.config)
 
         pomo = self.config.get("pomodoro", {})
         if pomo:
@@ -1507,6 +1545,22 @@ class DynamicNotchWindow(QWidget):
 
         super().mousePressEvent(event)
 
+    def wheelEvent(self, event):
+        # NotchX Gesture: Scroll on the closed pill to adjust Windows master volume
+        if self.config.get("notch", {}).get("scroll_volume", True):
+            if self.state == NotchState.COLLAPSED or (hasattr(self, "view_collapsed") and self.view_collapsed.isVisible()):
+                delta = event.angleDelta().y()
+                if delta != 0:
+                    delta_steps = 2 if delta > 0 else -2
+                    cur_vol = self.audio_ctrl.get_volume()
+                    new_vol = max(0, min(100, cur_vol + delta_steps))
+                    self.audio_ctrl.set_volume(new_vol)
+                    self.tab_home.set_volume_display(new_vol, False)
+                    self.tab_music.set_volume_display(new_vol, False)
+                    event.accept()
+                    return
+        super().wheelEvent(event)
+
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape:
             if self.state != NotchState.COLLAPSED:
@@ -1527,9 +1581,11 @@ class DynamicNotchWindow(QWidget):
                 Qt.Key.Key_9: 8,
             }
             if event.key() in key_map:
-                self._switch_tab(key_map[event.key()])
-                event.accept()
-                return
+                idx = key_map[event.key()]
+                if hasattr(self, '_active_tab_names') and idx < len(self._active_tab_names):
+                    self._switch_tab(idx)
+                    event.accept()
+                    return
         super().keyPressEvent(event)
 
     def _collapse_to_pill(self):
@@ -1630,6 +1686,21 @@ class DynamicNotchWindow(QWidget):
             self.view_island.setVisible(False)
             self.view_expanded.setVisible(True)
             self._sync_system_controls(force=True)
+
+            # Smart Default Tab auto-selection
+            dtab = self.config.get("notch", {}).get("default_tab", "Smart")
+            target_tab = "Home"
+            if dtab == "Smart":
+                if hasattr(self, "media_manager") and getattr(self.media_manager, "is_playing", False):
+                    target_tab = "Music"
+                elif hasattr(self, "pomodoro") and getattr(self.pomodoro, "is_running", False):
+                    target_tab = "Timer"
+                else:
+                    target_tab = "Home"
+            elif hasattr(self, "_tab_name_to_stack_idx") and dtab in self._tab_name_to_stack_idx:
+                target_tab = dtab
+            self._switch_to_tab_by_name(target_tab)
+
             self.raise_()
             self.activateWindow()
             self._click_outside_timer.stop()
@@ -1638,7 +1709,14 @@ class DynamicNotchWindow(QWidget):
         self._apply_geometry_for_state(new_state, animate=True)
 
     def _get_current_screen_geometry(self) -> QRect:
-        """Multi-monitor aware screen lookup using window center and cursor fallback."""
+        """Multi-monitor aware screen lookup using configured display or cursor fallback."""
+        target_disp = getattr(self, "_display", "Primary")
+        screens = QGuiApplication.screens()
+        if target_disp and target_disp != "Primary" and screens:
+            for idx, scr in enumerate(screens):
+                if target_disp.startswith(f"Display {idx + 1}") or target_disp == scr.name():
+                    return scr.geometry()
+
         screen = QGuiApplication.screenAt(self.geometry().center())
         if not screen:
             screen = QGuiApplication.screenAt(QCursor.pos())
@@ -1650,8 +1728,9 @@ class DynamicNotchWindow(QWidget):
         """Ensure the window is mathematically centered on the active screen at all times."""
         screen = self._get_current_screen_geometry()
         w = self.width()
+        top_offset = getattr(self, "_top_offset", 0)
         expected_x = screen.x() + (screen.width() - w) // 2
-        expected_y = screen.y() if self._style == "Notch" else screen.y() + 8
+        expected_y = screen.y() + top_offset if self._style == "Notch" else screen.y() + max(8, 8 + top_offset)
         if self.x() != expected_x or self.y() != expected_y:
             self.move(expected_x, expected_y)
 
@@ -1671,8 +1750,9 @@ class DynamicNotchWindow(QWidget):
 
         screen = self._get_current_screen_geometry()
         w, h = self._target_size
+        top_offset = getattr(self, "_top_offset", 0)
         x = screen.x() + (screen.width() - w) // 2
-        y = screen.y() if self._style == "Notch" else screen.y() + 8
+        y = screen.y() + top_offset if self._style == "Notch" else screen.y() + max(8, 8 + top_offset)
         target_rect = QRect(x, y, w, h)
 
         if animate:
@@ -1739,14 +1819,14 @@ class DynamicNotchWindow(QWidget):
             event.acceptProposedAction()
             if self.state != NotchState.EXPANDED:
                 self._transition_to(NotchState.EXPANDED)
-                self._switch_tab(7)  # Switch to Shelf
+                self._switch_to_tab_by_name("Shelf")
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
             paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if paths:
                 self.drop_shelf.add_paths(paths)
-                self._switch_tab(7)  # Shelf tab
+                self._switch_to_tab_by_name("Shelf")
                 event.acceptProposedAction()
                 return
         event.ignore()
