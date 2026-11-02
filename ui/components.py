@@ -15,7 +15,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy
+    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout
 )
 
 from poppy.ui.icons import Icons, get_fluent_font_family
@@ -1006,6 +1006,7 @@ class LyricLineWidget(QFrame):
         sp = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         sp.setHeightForWidth(True)
         self.setSizePolicy(sp)
+        self.setMinimumHeight(44)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 8, 14, 8)
@@ -1022,14 +1023,14 @@ class LyricLineWidget(QFrame):
         h = self._lbl.heightForWidth(inner_w)
         if h <= 0:
             h = self._lbl.sizeHint().height()
-        return max(44, h + 16)
+        return max(56 if self._is_active else 44, h + 18)
 
     def sizeHint(self) -> QSize:
         sh = self._lbl.sizeHint()
-        return QSize(sh.width() + 28, max(44, sh.height() + 16))
+        return QSize(sh.width() + 28, max(56 if self._is_active else 44, sh.height() + 18))
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(50, 44)
+        return QSize(50, 56 if self._is_active else 44)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1041,6 +1042,7 @@ class LyricLineWidget(QFrame):
     def set_active(self, active: bool):
         if self._is_active != active:
             self._is_active = active
+            self.setMinimumHeight(56 if active else 44)
             self._lbl.setFont(self._font_active if active else self._font_inactive)
             self.updateGeometry()
             self.update_style()
@@ -1168,6 +1170,7 @@ class SpotifyLyricsWidget(QFrame):
         self.lines_container = QWidget()
         self.lines_container.setStyleSheet("background: transparent; border: none;")
         self.lines_layout = QVBoxLayout(self.lines_container)
+        self.lines_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.lines_layout.setContentsMargins(0, 4, 0, 8)
         self.lines_layout.setSpacing(2)
         self.scroll_area.setWidget(self.lines_container)
@@ -1251,14 +1254,14 @@ class SpotifyLyricsWidget(QFrame):
         self._synced_lines = synced_lines
         self._current_line_idx = -1
 
-        self.lines_layout.addSpacing(16)
+        self.lines_layout.addSpacing(60)
         for time_sec, text in synced_lines:
             btn = LyricLineWidget(time_sec, text, self.lines_container)
             btn.clicked.connect(lambda *args, t=time_sec: self.seek_requested.emit(t))
             self.lines_layout.addWidget(btn)
             self._line_buttons.append(btn)
 
-        self.lines_layout.addSpacing(28)
+        self.lines_layout.addSpacing(100)
         self.lines_layout.addStretch()
 
     def set_plain_lyrics(self, plain_text: str):
