@@ -188,8 +188,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
         self._collapsed_w = app_cfg.get("collapsed_width", 240)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = max(app_cfg.get("open_width", 940), 940)
-        self._open_h = max(app_cfg.get("open_height", 460), 460)
+        self._open_w = max(app_cfg.get("open_width", 960), 960)
+        self._open_h = max(app_cfg.get("open_height", 480), 480)
         self._corner_radius = app_cfg.get("corner_radius", 16)
         self._top_offset = app_cfg.get("top_offset", 0)
         self._display = app_cfg.get("display", "Primary")
@@ -1442,8 +1442,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")
         self._collapsed_w = app_cfg.get("collapsed_width", 210)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = max(app_cfg.get("open_width", 940), 940)
-        self._open_h = max(app_cfg.get("open_height", 460), 460)
+        self._open_w = max(app_cfg.get("open_width", 960), 960)
+        self._open_h = max(app_cfg.get("open_height", 480), 480)
         self._corner_radius = app_cfg.get("corner_radius", 16)
 
         accent = self._theme["accent"]
@@ -1744,8 +1744,8 @@ class DynamicNotchWindow(QWidget):
         elif state == NotchState.EXPANDED:
             min_w = self.view_expanded.minimumSizeHint().width()
             min_h = self.view_expanded.minimumSizeHint().height()
-            w = max(self._open_w, min_w, 940)
-            h = max(self._open_h, min_h, 460)
+            w = max(self._open_w, min_w, 960)
+            h = max(self._open_h, min_h, 480)
             self._target_size = (w, h)
 
         screen = self._get_current_screen_geometry()

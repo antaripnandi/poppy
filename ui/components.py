@@ -92,7 +92,6 @@ class AnimatedTabStrip(QWidget):
         self._anim.setDuration(220)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        fluent_font = get_fluent_font_family()
         for idx, (name, icon) in enumerate(tab_items):
             label = f"{icon}  {name}" if icon else name
             btn = QPushButton(label, self)
@@ -111,7 +110,6 @@ class AnimatedTabStrip(QWidget):
             btn.deleteLater()
         self.buttons.clear()
 
-        fluent_font = get_fluent_font_family()
         for idx, (name, icon) in enumerate(tab_items):
             label = f"{icon}  {name}" if icon else name
             btn = QPushButton(label, self)
@@ -140,7 +138,6 @@ class AnimatedTabStrip(QWidget):
         """)
 
     def _update_buttons_style(self):
-        fluent_font = get_fluent_font_family()
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             color = self._accent if is_active else "#94a3b8"
@@ -151,7 +148,7 @@ class AnimatedTabStrip(QWidget):
                     border: none;
                     border-radius: 12px;
                     color: {color};
-                    font-family: '{fluent_font}', -apple-system, 'Segoe UI', Roboto, sans-serif;
+                    font-family: -apple-system, 'Segoe UI Variable Text', 'Segoe UI', system-ui, Roboto, sans-serif;
                     font-size: 11px;
                     font-weight: {font_weight};
                     padding: 3px 8px;
