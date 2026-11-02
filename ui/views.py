@@ -774,11 +774,11 @@ class MusicTabView(QWidget):
         info_col.addLayout(transport_row)
         main_layout.addLayout(info_col, stretch=1)
 
-        # Right: Spotify Animated Lyrics View (310px width)
+        # Right: Spotify Animated Lyrics View (expansive native layout)
         self.lyrics_widget = SpotifyLyricsWidget(self)
-        self.lyrics_widget.setFixedWidth(310)
+        self.lyrics_widget.setMinimumWidth(380)
         self.lyrics_widget.seek_requested.connect(self.seek_requested.emit)
-        main_layout.addWidget(self.lyrics_widget)
+        main_layout.addWidget(self.lyrics_widget, stretch=2)
 
         # Backwards compatibility dummy labels
         self.txt_lyrics = QLabel(self)

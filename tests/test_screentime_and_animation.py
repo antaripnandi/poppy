@@ -125,3 +125,43 @@ def test_settings_window_screentime_page(qapp):
     assert "Goal: 18%" in sw.lbl_st_goal_pct.text()
     assert "45m" in sw.lbl_st_streak.text()
 
+
+def test_open_settings_collapses_notch_and_focuses_front(qapp):
+    """
+    Ensure opening settings immediately collapses the notch so it never obscures the settings window.
+    """
+    w = DynamicNotchWindow()
+    w.setMinimumSize(1, 1)
+    w.show()
+    w._transition_to(NotchState.EXPANDED)
+    assert w.state == NotchState.EXPANDED
+
+    # Open settings
+    w.open_settings("Notifications")
+    assert w.state == NotchState.COLLAPSED
+    assert w._settings_window is not None
+    assert w._settings_window.isVisible() is True
+    w._settings_window.close()
+    w.close()
+
+
+def test_spotify_lyrics_word_wrap_and_style(qapp):
+    """
+    Ensure lyric rows wrap naturally and match Spotify desktop typography.
+    """
+    from poppy.ui.components import LyricLineWidget
+    row = LyricLineWidget(12.5, "tuje scene main dikhaa ke film Golmaal ke (ke-ke-ke-ke)")
+    assert row.time_sec == 12.5
+    assert row._lbl.wordWrap() is True
+    assert row._is_active is False
+
+    row.set_active(True)
+    assert row._is_active is True
+    assert "font-weight: 800" in row._lbl.styleSheet()
+    assert "#ffffff" in row._lbl.styleSheet()
+
+    row.set_active(False)
+    assert row._is_active is False
+    assert "font-weight: 700" in row._lbl.styleSheet()
+
+

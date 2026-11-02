@@ -8,10 +8,10 @@ import os
 import math
 import time
 from PySide6.QtCore import (
-    Qt, QRectF, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
+    Qt, QRect, QRectF, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap
+    QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap, QFont
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
@@ -948,7 +948,7 @@ class CapsuleSlider(QSlider):
 
         # 3. Icon on the left
         if self._icon:
-            font = QFont("Segoe Fluent Icons", 11)
+            font = QFont(get_fluent_font_family(), 11)
             painter.setFont(font)
             painter.setPen(QColor("#ffffff"))
             icon_rect = QRectF(10, 0, 24, h)
@@ -982,12 +982,23 @@ class ClickableSlider(QSlider):
 
 
 class LyricLineWidget(QPushButton):
-    """Clean, modern lyric row matching native Spotify desktop typography."""
+    """Clean, high-craft lyric row matching native Spotify desktop typography."""
     def __init__(self, time_sec: float, text: str, parent=None):
-        super().__init__(text, parent)
+        super().__init__("", parent)
         self.time_sec = time_sec
+        self._raw_text = text
         self._is_active = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._lbl = QLabel(text, self)
+        self._lbl.setWordWrap(True)
+        self._lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(0)
+        layout.addWidget(self._lbl)
+
         self.update_style()
 
     def set_active(self, active: bool):
@@ -996,42 +1007,60 @@ class LyricLineWidget(QPushButton):
             self.update_style()
 
     def update_style(self):
+        self.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.03);
+            }
+        """)
         if self._is_active:
-            self.setStyleSheet("""
-                QPushButton {
-                    background: rgba(255, 255, 255, 0.07);
-                    border: none;
-                    border-left: 3px solid #0a84ff;
-                    border-radius: 4px;
+            self._lbl.setStyleSheet("""
+                QLabel {
                     color: #ffffff;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', Roboto, sans-serif;
-                    font-size: 15px;
-                    font-weight: 700;
-                    text-align: left;
-                    padding: 7px 10px;
-                    margin: 2px 0px;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Circular Spotify Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+                    font-size: 20px;
+                    font-weight: 800;
+                    line-height: 1.35;
+                    background: transparent;
+                    border: none;
                 }
             """)
         else:
-            self.setStyleSheet("""
-                QPushButton {
+            self._lbl.setStyleSheet("""
+                QLabel {
+                    color: rgba(255, 255, 255, 0.35);
+                    font-family: -apple-system, BlinkMacSystemFont, 'Circular Spotify Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+                    font-size: 18px;
+                    font-weight: 700;
+                    line-height: 1.35;
                     background: transparent;
                     border: none;
-                    border-left: 3px solid transparent;
-                    color: rgba(255, 255, 255, 0.35);
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', Roboto, sans-serif;
-                    font-size: 13.5px;
-                    font-weight: 500;
-                    text-align: left;
-                    padding: 5px 10px;
-                    margin: 1px 0px;
-                }
-                QPushButton:hover {
-                    color: rgba(255, 255, 255, 0.85);
-                    background: rgba(255, 255, 255, 0.04);
-                    border-radius: 4px;
                 }
             """)
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        if not self._is_active:
+            self._lbl.setStyleSheet("""
+                QLabel {
+                    color: rgba(255, 255, 255, 0.85);
+                    font-family: -apple-system, BlinkMacSystemFont, 'Circular Spotify Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+                    font-size: 18px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                    background: transparent;
+                    border: none;
+                }
+            """)
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        if not self._is_active:
+            self.update_style()
 
 
 class SpotifyLyricsWidget(QFrame):

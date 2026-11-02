@@ -661,7 +661,7 @@ class DynamicNotchWindow(QWidget):
         # Activate initial tab (Home)
         self._switch_tab(0)
 
-    def _switch_tab(self, index: int):
+    def _switch_tab(self, index: int, animate: bool = True):
         if not hasattr(self, '_active_tab_names') or not (0 <= index < len(self._active_tab_names)):
             self.tab_stack.slide_to_index(index)
             return
@@ -669,12 +669,12 @@ class DynamicNotchWindow(QWidget):
         stack_idx = self._tab_name_to_stack_idx.get(tab_name, 0)
         self.tab_stack.slide_to_index(stack_idx)
         if hasattr(self, 'tab_strip'):
-            self.tab_strip.set_current_index(index, animate=True, emit_signal=False)
+            self.tab_strip.set_current_index(index, animate=animate, emit_signal=False)
 
-    def _switch_to_tab_by_name(self, tab_name: str):
+    def _switch_to_tab_by_name(self, tab_name: str, animate: bool = True):
         if hasattr(self, '_active_tab_names') and tab_name in self._active_tab_names:
             strip_idx = self._active_tab_names.index(tab_name)
-            self._switch_tab(strip_idx)
+            self._switch_tab(strip_idx, animate=animate)
         elif hasattr(self, '_tab_name_to_stack_idx') and tab_name in self._tab_name_to_stack_idx:
             stack_idx = self._tab_name_to_stack_idx[tab_name]
             self.tab_stack.slide_to_index(stack_idx)
@@ -1463,9 +1463,9 @@ class DynamicNotchWindow(QWidget):
 
     def open_settings(self, page_name: str = None):
         """Open the dedicated Poppy Settings application window."""
-        # Collapse the notch drawer so settings is completely unobscured
-        if self.state != NotchState.COLLAPSED:
-            self._collapse_to_pill()
+        # Immediately collapse the notch drawer to sleek pill mode so Settings is completely unobscured
+        self._transition_to(NotchState.COLLAPSED)
+        self.clearFocus()
 
         if self._settings_window is None:
             self._settings_window = SettingsWindow(config=self.config)
@@ -1473,12 +1473,12 @@ class DynamicNotchWindow(QWidget):
             self._settings_window.appearance_live_updated.connect(self._apply_live_appearance)
             self._settings_window.screentime_reset_requested.connect(self.screentime.reset_today)
 
-        # Center Settings window cleanly on active screen
+        # Center Settings window cleanly on active screen comfortably below the top pill
         screen = self._get_current_screen_geometry()
         w = self._settings_window.width()
         h = self._settings_window.height()
         x = screen.x() + (screen.width() - w) // 2
-        y = screen.y() + (screen.height() - h) // 2
+        y = max(screen.y() + 50, screen.y() + (screen.height() - h) // 2)
         self._settings_window.move(x, y)
 
         if page_name and hasattr(self._settings_window, "select_page"):
@@ -1774,7 +1774,7 @@ class DynamicNotchWindow(QWidget):
                     target_tab = "Home"
             elif hasattr(self, "_tab_name_to_stack_idx") and dtab in self._tab_name_to_stack_idx:
                 target_tab = dtab
-            self._switch_to_tab_by_name(target_tab)
+            self._switch_to_tab_by_name(target_tab, animate=False)
 
             self.raise_()
             self.activateWindow()
@@ -1835,11 +1835,17 @@ class DynamicNotchWindow(QWidget):
             if hasattr(self, "_anim_opacity"):
                 self._anim_opacity.stop()
 
-            # Prevent Qt layout from shifting the window prior to interpolation
+            # Align start_rect mathematically around target_rect's exact center axis
+            target_center_x = target_rect.x() + target_rect.width() // 2
             if start_rect is not None:
+                sw = max(1, start_rect.width())
+                start_rect = QRect(target_center_x - sw // 2, start_rect.y(), sw, start_rect.height())
                 self.setGeometry(start_rect)
             else:
-                start_rect = self.geometry()
+                cur_geo = self.geometry()
+                sw = max(1, cur_geo.width())
+                start_rect = QRect(target_center_x - sw // 2, cur_geo.y(), sw, cur_geo.height())
+                self.setGeometry(start_rect)
 
             # Organic spring physics matching macOS Dynamic Island & NotchX
             if state == NotchState.COLLAPSED:
@@ -1849,15 +1855,17 @@ class DynamicNotchWindow(QWidget):
                 duration = 240
                 curve = QEasingCurve(QEasingCurve.Type.OutCubic)
             else:  # EXPANDED
-                duration = 260
+                duration = 240
                 curve = QEasingCurve(QEasingCurve.Type.OutCubic)
                 if hasattr(self, "_expanded_opacity"):
                     self._expanded_opacity.setOpacity(0.0)
-                    self._anim_opacity.setDuration(duration)
+                    self._anim_opacity.stop()
+                    self._anim_opacity.setDuration(170)
                     self._anim_opacity.setStartValue(0.0)
                     self._anim_opacity.setEndValue(1.0)
                     self._anim_opacity.setEasingCurve(curve)
-                    self._anim_opacity.start()
+                    # Smoothly fade content into view as the container blooms outward from center
+                    QTimer.singleShot(60, self._anim_opacity.start)
 
             self.anim.setDuration(duration)
             self.anim.setEasingCurve(curve)
