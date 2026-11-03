@@ -15,9 +15,10 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout
+    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
 )
 
+from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.core.system_controls import AudioPeakMeter
 
@@ -41,8 +42,9 @@ class IconButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         if tooltip:
             self.setToolTip(tooltip)
+            self.setAccessibleName(tooltip)
         family = "'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'" if is_fluent else "'Segoe UI Variable Text', 'Segoe UI', -apple-system, sans-serif"
-        self.setStyleSheet(f"""
+        set_widget_style(self, f"""
             QPushButton {{
                 background-color: transparent;
                 border: none;
@@ -57,6 +59,8 @@ class IconButton(QPushButton):
                 background-color: rgba(255, 255, 255, 0.08);
                 color: #f8fafc;
             }}
+            QPushButton:focus {{ border: 1px solid #b7c5bc; }}
+            QPushButton:disabled {{ color: #59615d; }}
             QPushButton:pressed {{
                 background-color: rgba(255, 255, 255, 0.15);
                 color: #ffffff;
@@ -74,6 +78,7 @@ class ToggleSwitch(QWidget):
     def __init__(self, checked: bool = False, accent: str = "#0a84ff", parent=None):
         super().__init__(parent)
         self.setFixedSize(36, 20)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._checked = bool(checked)
         self._accent = accent
@@ -101,6 +106,14 @@ class ToggleSwitch(QWidget):
             self._thumb_pos = target
             self.update()
         self.toggled.emit(self._checked)
+        self.setAccessibleDescription("On" if self._checked else "Off")
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.setChecked(not self._checked)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def set_accent(self, accent: str):
         self._accent = accent
@@ -128,7 +141,7 @@ class ToggleSwitch(QWidget):
 
         w, h = float(self.width()), float(self.height())
         r = h / 2.0
-        track_color = QColor(self._accent) if self._checked else QColor(255, 255, 255, 30)
+        track_color = QColor(self._accent) if self._checked else (QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 30))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(track_color))
         painter.drawRoundedRect(QRectF(0, 0, w, h), r, r)
@@ -137,6 +150,10 @@ class ToggleSwitch(QWidget):
         thumb_color = QColor(255, 255, 255)
         painter.setBrush(QBrush(thumb_color))
         painter.drawEllipse(QRectF(self._thumb_pos, 2.0, thumb_d, thumb_d))
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("#ffffff"), 1))
+            painter.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), r, r)
 
 
 class SettingRow(QWidget):
@@ -146,32 +163,49 @@ class SettingRow(QWidget):
     def __init__(self, title: str, subtitle: str = "", control: QWidget = None, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 5, 0, 5)
+        layout.setContentsMargins(0, 10, 0, 10)
         layout.setSpacing(12)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(1)
+        text_col.setSpacing(4)
 
         lbl_title = QLabel(title)
-        lbl_title.setStyleSheet("font-size: 12px; font-weight: 500; color: #f1f5f9; background: transparent; border: none;")
+        lbl_title.setWordWrap(True)
+        set_widget_style(lbl_title, "font-size: 12px; font-weight: 500; color: #f1f5f9; background: transparent; border: none;")
         text_col.addWidget(lbl_title)
 
         if subtitle:
             lbl_sub = QLabel(subtitle)
-            lbl_sub.setStyleSheet("font-size: 10px; color: #64748b; background: transparent; border: none;")
+            lbl_sub.setWordWrap(True)
+            set_widget_style(lbl_sub, "font-size: 11px; color: #919899; background: transparent; border: none;")
             text_col.addWidget(lbl_sub)
 
         layout.addLayout(text_col, 1)
 
         if control:
+            control.setAccessibleName(title)
             layout.addWidget(control)
+
+
+class ScrollArea(QScrollArea):
+    """Handle pixel wheel input consistently, with native wheel-notch behavior."""
+    def wheelEvent(self, event):
+        delta = event.pixelDelta().y()
+        if delta:
+            bar = self.verticalScrollBar()
+            previous = bar.value()
+            bar.setValue(previous - delta)
+            if bar.value() != previous:
+                event.accept()
+            else:
+                event.ignore()
+            return
+        super().wheelEvent(event)
 
 
 class AnimatedTabStrip(QWidget):
     """
-    Native PySide6 implementation of React Bits <RubberSegment />.
-    Features rubber dilation/stretch on change, spring landing with squash & relax,
-    and high-contrast typography.
+    Compact text navigation with a short, direct selection transition.
     """
     tab_changed = Signal(int)
 
@@ -181,11 +215,11 @@ class AnimatedTabStrip(QWidget):
         self._current_index = 0
         self.buttons: list[QPushButton] = []
 
-        self.setStyleSheet("""
+        set_widget_style(self, """
             AnimatedTabStrip {
-                background-color: rgba(0, 0, 0, 0.45);
-                border: 1px solid rgba(255, 255, 255, 0.07);
-                border-radius: 14px;
+                background-color: transparent;
+                border: none;
+                border-radius: 10px;
                 padding: 2px 3px;
             }
         """)
@@ -242,27 +276,40 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_indicator_style(self):
-        bg = _accent_to_rgba(self._accent, 0.25)
-        border = _accent_to_rgba(self._accent, 0.5)
-        self.indicator.setStyleSheet(f"""
-            background-color: {bg};
-            border: 1px solid {border};
-            border-radius: 11px;
-        """)
+        name = current_layout()
+        if name == "Flat":
+            source = "background: transparent; border: none; border-bottom: 2px solid #b5c9bd;"
+        elif name == "Paper":
+            source = "background: transparent; border: none;"
+        elif name == "Instrument":
+            source = "background: #343c3b; border: 1px solid #67766e; border-radius: 2px;"
+        else:
+            source = "background: #2b2e2f; border: none; border-radius: 8px;"
+        set_widget_style(self.indicator, source)
+
+    def apply_design(self):
+        self._update_indicator_style()
+        self._update_buttons_style()
+
+    def clear_selection(self):
+        self._anim.stop()
+        self._current_index = -1
+        self.indicator.hide()
+        self._update_buttons_style()
 
     def _update_buttons_style(self):
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
             font_weight = "600" if is_active else "500"
-            btn.setStyleSheet(f"""
+            set_widget_style(btn, f"""
                 QPushButton {{
                     background-color: transparent;
                     border: none;
                     border-radius: 11px;
                     color: {color};
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-                    font-size: 11px;
+                    font-family: 'Segoe UI';
+                    font-size: 12px;
                     font-weight: {font_weight};
                     padding: 3px 9px;
                 }}
@@ -281,47 +328,11 @@ class AnimatedTabStrip(QWidget):
         target_btn = self.buttons[index]
         target_geom = target_btn.geometry()
 
-        if animate and old_idx != index and self.isVisible() and len(self.buttons) > old_idx:
-            rect_from = self.buttons[old_idx].geometry()
-            rect_to = target_geom
-
-            # React Bits RubberSegment: Dilation stretch + Squash landing
-            if index > old_idx:
-                # Moving right: stretch leading edge forward across both slots
-                stretched = QRect(
-                    rect_from.left(),
-                    rect_to.top(),
-                    (rect_to.right() - rect_from.left()) + 4,
-                    rect_to.height()
-                )
-                squashed = QRect(
-                    rect_to.left() + 3,
-                    rect_to.top(),
-                    rect_to.width(),
-                    rect_to.height()
-                )
-            else:
-                # Moving left: stretch leading edge backwards across both slots
-                stretched = QRect(
-                    rect_to.left() - 4,
-                    rect_to.top(),
-                    (rect_from.right() - rect_to.left()) + 4,
-                    rect_to.height()
-                )
-                squashed = QRect(
-                    rect_to.left() - 3,
-                    rect_to.top(),
-                    rect_to.width(),
-                    rect_to.height()
-                )
-
+        self.indicator.show()
+        if animate and old_idx != index and self.isVisible() and 0 <= old_idx < len(self.buttons):
             self._anim.stop()
-            self._anim.setDuration(240)
-            self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            self._anim.setKeyValueAt(0.0, rect_from)
-            self._anim.setKeyValueAt(0.38, stretched)
-            self._anim.setKeyValueAt(0.78, squashed)
-            self._anim.setKeyValueAt(1.0, rect_to)
+            self._anim.setDuration(150)
+            self._anim.setKeyValues([(0.0, self.indicator.geometry()), (1.0, target_geom)])
             self._anim.start()
         else:
             self._anim.stop()
@@ -358,6 +369,10 @@ class AnimatedStackedWidget(QStackedWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+    def minimumSizeHint(self):
+        # Hidden utility pages must not force the compact panel to their own minimum size.
+        return QSize(0, 0)
+
     def slide_to_index(self, target_idx: int):
         if not (0 <= target_idx < self.count()):
             return
@@ -391,7 +406,7 @@ class TabButton(QPushButton):
     def update_style(self):
         if self._is_active:
             bg_color = _accent_to_rgba(self._accent, 0.22)
-            self.setStyleSheet(f"""
+            set_widget_style(self, f"""
                 QPushButton {{
                     background-color: {bg_color};
                     border: none;
@@ -403,7 +418,7 @@ class TabButton(QPushButton):
                 }}
             """)
         else:
-            self.setStyleSheet("""
+            set_widget_style(self, """
                 QPushButton {
                     background-color: transparent;
                     border: none;
@@ -440,7 +455,7 @@ class SourcePill(QPushButton):
     def update_style(self):
         if self._is_active:
             bg_color = _accent_to_rgba(self._accent, 0.22)
-            self.setStyleSheet(f"""
+            set_widget_style(self, f"""
                 QPushButton {{
                     background-color: {bg_color};
                     border: none;
@@ -452,7 +467,7 @@ class SourcePill(QPushButton):
                 }}
             """)
         else:
-            self.setStyleSheet("""
+            set_widget_style(self, """
                 QPushButton {
                     background-color: rgba(255, 255, 255, 0.05);
                     border: none;
@@ -470,25 +485,23 @@ class SourcePill(QPushButton):
 
 
 class CardFrame(QFrame):
-    """Option 1 Apple Studio Bento frosted obsidian glass card."""
+    """Shared surface following the selected layout theme."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
-        self.setStyleSheet("""
-            CardFrame#cardFrame {
-                background: rgba(255, 255, 255, 0.032);
-                border: 1px solid rgba(255, 255, 255, 0.065);
-                border-radius: 16px;
-            }
-            CardFrame#cardFrame:hover {
-                background: rgba(255, 255, 255, 0.045);
-                border: 1px solid rgba(255, 255, 255, 0.11);
-            }
-            QLabel {
-                background: transparent;
-                border: none;
-            }
-        """)
+        self.apply_layout(current_layout())
+
+    def apply_layout(self, name):
+        spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
+        self.setProperty("layoutTheme", name)
+        border = "none" if name == "Minimal" else "1px solid rgba(255,255,255,0.08)"
+        if name == "Flat":
+            border = "none; border-top: 1px solid rgba(255,255,255,0.13)"
+        elif name == "Paper":
+            border = "none"
+        elif name == "Instrument":
+            border = "1px solid rgba(255,255,255,0.16)"
+        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255,255,255,{spec['fill']}); border: {border}; border-radius: {spec['radius']}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
 class CircularProgressRing(QWidget):
@@ -518,7 +531,7 @@ class CircularProgressRing(QWidget):
         draw_rect = QRectF(margin, margin, rect.width() - 2 * margin, rect.height() - 2 * margin)
 
         # Track Background
-        pen_track = QPen(self._track_color, self.track_width)
+        pen_track = QPen(QColor(0, 0, 0, 22) if is_light_theme() else self._track_color, self.track_width)
         pen_track.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen_track)
         painter.drawEllipse(draw_rect)
@@ -568,8 +581,7 @@ class AudioVisualizerBars(QWidget):
     def _animate_bars(self):
         # If widget is not visible on screen, suspend animation updates to save CPU
         if not self.isVisible():
-            if not self._is_playing:
-                self._timer.stop()
+            self._timer.stop()
             return
 
         if not self._is_playing:
@@ -628,10 +640,21 @@ class AudioVisualizerBars(QWidget):
 
         self.update()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._is_playing:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        super().hideEvent(event)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         color = QColor(241, 245, 249, 235) if self._is_playing else QColor(148, 163, 184, 80)
+        if is_light_theme():
+            color = QColor(32, 40, 51, 235 if self._is_playing else 120)
         painter.setBrush(QBrush(color))
         painter.setPen(Qt.PenStyle.NoPen)
 
@@ -651,7 +674,7 @@ class MetricLabel(QLabel):
         super().__init__(parent)
         self.tag = tag
         self.setText(f"{tag} {val}")
-        self.setStyleSheet("""
+        self._default_style = """
             QLabel {
                 background: rgba(255, 255, 255, 0.05);
                 border: none;
@@ -662,10 +685,46 @@ class MetricLabel(QLabel):
                 font-weight: 600;
                 padding: 3px 8px;
             }
-        """)
+        """
+        self.apply_design(current_layout())
+
+    def apply_design(self, name):
+        if name in ("Flat", "Paper", "Instrument"):
+            family = "Consolas" if name == "Instrument" else "Segoe UI"
+            set_widget_style(self, f"QLabel {{ background: transparent; border: none; color: #a6b5b0; font-family: '{family}'; font-size: 10px; padding: 2px 5px 9px 5px; }}")
+        else:
+            set_widget_style(self, self._default_style)
+        self.update()
 
     def set_val(self, val_str: str):
         self.setText(f"{self.tag} {val_str}")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        name = current_layout()
+        if name not in ("Flat", "Paper", "Instrument"):
+            return
+        value = self.text().rsplit(" ", 1)[-1]
+        try:
+            percentage = max(0.0, min(1.0, float(value.rstrip("%")) / 100)) if value.endswith("%") else None
+        except ValueError:
+            percentage = None
+        painter = QPainter(self)
+        track = QColor(0, 0, 0, 28) if is_light_theme() else QColor(255, 255, 255, 28)
+        fill = QColor("#526c60" if is_light_theme() else "#a3b9ab")
+        painter.setPen(Qt.PenStyle.NoPen)
+        width = max(1, self.width() - 10)
+        for index in range(10 if name == "Instrument" else 1):
+            segments = 10 if name == "Instrument" else 1
+            rect = QRectF(5 + index * width / segments, self.height() - 5,
+                          width / segments - (2 if segments > 1 else 0), 3)
+            painter.fillRect(rect, track)
+            if percentage is not None:
+                if segments == 1:
+                    rect.setWidth(rect.width() * percentage)
+                    painter.fillRect(rect, fill)
+                elif (index + 1) / segments <= percentage:
+                    painter.fillRect(rect, fill)
 
 
 class ScreenTimeHomeWidget(QFrame):
@@ -683,7 +742,7 @@ class ScreenTimeHomeWidget(QFrame):
         self._progress = 0.0
         self._accent = "#6e9bff"
 
-        self.setStyleSheet("""
+        set_widget_style(self, """
             QFrame#screenTimeWidget {
                 background: rgba(255, 255, 255, 0.05);
                 border: none;
@@ -700,21 +759,21 @@ class ScreenTimeHomeWidget(QFrame):
         layout.setSpacing(6)
 
         self.lbl_icon = QLabel(Icons.TIMER)
-        self.lbl_icon.setStyleSheet("font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 11px; color: #94a3b8; background: transparent; border: none;")
+        set_widget_style(self.lbl_icon, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 11px; color: #94a3b8; background: transparent; border: none;")
         layout.addWidget(self.lbl_icon)
 
         self.lbl_time = QLabel("0m")
-        self.lbl_time.setStyleSheet("font-size: 11px; font-weight: 600; color: #f1f5f9; background: transparent; border: none;")
+        set_widget_style(self.lbl_time, "font-size: 11px; font-weight: 600; color: #f1f5f9; background: transparent; border: none;")
         layout.addWidget(self.lbl_time)
 
         self.lbl_sub = QLabel("• Screen Time")
-        self.lbl_sub.setStyleSheet("font-size: 10px; color: #94a3b8; background: transparent; border: none;")
+        set_widget_style(self.lbl_sub, "font-size: 10px; color: #94a3b8; background: transparent; border: none;")
         layout.addWidget(self.lbl_sub)
 
         layout.addStretch()
 
         self.lbl_arrow = QLabel("›")
-        self.lbl_arrow.setStyleSheet("font-size: 12px; color: #64748b; background: transparent; border: none;")
+        set_widget_style(self.lbl_arrow, "font-size: 12px; color: #64748b; background: transparent; border: none;")
         layout.addWidget(self.lbl_arrow)
 
     def mousePressEvent(self, event):
@@ -779,7 +838,7 @@ class DraggableThumbnail(QLabel):
         self._drag_start_pos: QPoint | None = None
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet(f"""
+        set_widget_style(self, f"""
             QLabel {{
                 background-color: rgba(255, 255, 255, 0.06);
                 border: none;
@@ -817,7 +876,7 @@ class DraggableThumbnail(QLabel):
             painter.end()
             self.setPixmap(rounded)
         else:
-            self.setStyleSheet(f"font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 14px; color: #64748b; background: rgba(255, 255, 255, 0.05); border-radius: {self.border_radius}px;")
+            set_widget_style(self, f"font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 14px; color: #64748b; background: rgba(255, 255, 255, 0.05); border-radius: {self.border_radius}px;")
             self.setText(Icons.IMAGE)
 
     def mousePressEvent(self, event):
@@ -910,6 +969,9 @@ class CapsuleSlider(QSlider):
 
     def _update_val_from_x(self, x: float):
         w = max(1.0, float(self.width()))
+        if current_layout() in ("Flat", "Paper", "Instrument"):
+            x -= 32
+            w = max(1.0, w - 80)
         pct = max(0.0, min(1.0, x / w))
         val = int(round(self.minimum() + pct * (self.maximum() - self.minimum())))
         if val != self.value():
@@ -919,12 +981,15 @@ class CapsuleSlider(QSlider):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = float(self.width()), float(self.height())
+        if current_layout() in ("Flat", "Paper", "Instrument"):
+            self._paint_track_control(painter, w, h)
+            return
         r = h / 2.0
 
         # 1. Background well / track
         track_rect = QRectF(0, 0, w, h)
-        painter.setPen(QColor(255, 255, 255, 18))
-        painter.setBrush(QBrush(QColor(255, 255, 255, 14)))
+        painter.setPen(QColor(0, 0, 0, 30) if is_light_theme() else QColor(255, 255, 255, 18))
+        painter.setBrush(QBrush(QColor(0, 0, 0, 14) if is_light_theme() else QColor(255, 255, 255, 14)))
         painter.drawRoundedRect(track_rect, r, r)
 
         # 2. Filled progress chunk
@@ -951,6 +1016,8 @@ class CapsuleSlider(QSlider):
             font = QFont(get_fluent_font_family(), 11)
             painter.setFont(font)
             painter.setPen(QColor("#ffffff"))
+            if (pct >= 0.1 and QColor(self._accent).lightness() > 145) or (is_light_theme() and pct < 0.1):
+                painter.setPen(QColor("#202833"))
             icon_rect = QRectF(10, 0, 24, h)
             painter.drawText(icon_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._icon)
 
@@ -959,26 +1026,104 @@ class CapsuleSlider(QSlider):
         font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
         painter.setFont(font_val)
         painter.setPen(QColor(241, 245, 249, 210))
+        if (pct >= 0.9 and QColor(self._accent).lightness() > 145) or (is_light_theme() and pct < 0.9):
+            painter.setPen(QColor("#202833"))
         txt_rect = QRectF(w - 44, 0, 36, h)
         painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
 
+    def _paint_track_control(self, painter, w, h):
+        name = current_layout()
+        foreground = QColor("#28362f" if is_light_theme() else "#e1e9e5")
+        accent = QColor(self._accent)
+        if is_light_theme() and accent.lightness() > 145:
+            accent = accent.darker(175)
+        track = QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 35)
+        left, width = 32.0, max(1.0, w - 80)
+        pct = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
+        painter.setPen(Qt.PenStyle.NoPen)
+        if name == "Instrument":
+            count = max(1, int(width / 10))
+            for index in range(count):
+                painter.fillRect(QRectF(left + index * width / count, h / 2 - 5, width / count - 2, 10),
+                                 accent if (index + 1) / count <= pct else track)
+        else:
+            thickness = 2 if name == "Paper" else 3
+            painter.fillRect(QRectF(left, h / 2, width, thickness), track)
+            painter.fillRect(QRectF(left, h / 2, width * pct, thickness), accent)
+        painter.fillRect(QRectF(left + width * pct - 1, h / 2 - 7, 2, 14), foreground)
+        painter.setPen(foreground)
+        painter.setFont(QFont(get_fluent_font_family(), 10))
+        painter.drawText(QRectF(5, 0, 24, h), Qt.AlignmentFlag.AlignVCenter, self._icon)
+        painter.setFont(QFont("Consolas" if name == "Instrument" else "Segoe UI", 9))
+        painter.drawText(QRectF(w - 45, 0, 40, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, f"{self.value()}%")
+        if self.hasFocus():
+            painter.setPen(QPen(accent, 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(1, 1, w - 2, h - 2))
+
 
 class ClickableSlider(QSlider):
-    """Horizontal scrubber that jumps to exact click position and emits seeking values."""
+    """Native thumb dragging and track jumps, with committed keyboard/wheel seeks."""
     seek_clicked = Signal(int)
 
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._track_drag = False
+
+    def _value_at(self, point):
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
+        span = max(1, groove.width() - handle.width())
+        position = round(point.x() - groove.x() - handle.width() / 2)
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), position, span, option.upsideDown)
+
+    def _move_to(self, point):
+        self.setValue(self._value_at(point))
+        self.sliderMoved.emit(self.value())
+
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            val_range = self.maximum() - self.minimum()
-            if val_range > 0 and self.width() > 0:
-                pos = event.position().x()
-                pct = max(0.0, min(1.0, pos / float(self.width())))
-                val = int(round(self.minimum() + pct * val_range))
-                self.setValue(val)
-                self.seek_clicked.emit(val)
-                event.accept()
-                return
-        super().mousePressEvent(event)
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        handle = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
+        if event.button() == Qt.MouseButton.LeftButton and not handle.contains(event.position().toPoint()):
+            self._track_drag = True
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self.setSliderDown(True)
+            self._move_to(event.position())
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._track_drag:
+            self._move_to(event.position())
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._track_drag and event.button() == Qt.MouseButton.LeftButton:
+            self._move_to(event.position())
+            self._track_drag = False
+            self.setSliderDown(False)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        before = self.value()
+        super().keyPressEvent(event)
+        if self.value() != before and not self.isSliderDown():
+            self.seek_clicked.emit(self.value())
+
+    def wheelEvent(self, event):
+        before = self.value()
+        super().wheelEvent(event)
+        if self.value() != before and not self.isSliderDown():
+            self.seek_clicked.emit(self.value())
 
 
 class LyricLineWidget(QFrame):
@@ -1048,7 +1193,7 @@ class LyricLineWidget(QFrame):
             self.update_style()
 
     def update_style(self):
-        self.setStyleSheet("""
+        set_widget_style(self, """
             QFrame {
                 background: transparent;
                 border: none;
@@ -1059,7 +1204,7 @@ class LyricLineWidget(QFrame):
             }
         """)
         if self._is_active:
-            self._lbl.setStyleSheet("""
+            set_widget_style(self._lbl, """
                 QLabel {
                     color: #ffffff;
                     font-size: 18px;
@@ -1069,7 +1214,7 @@ class LyricLineWidget(QFrame):
                 }
             """)
         else:
-            self._lbl.setStyleSheet("""
+            set_widget_style(self._lbl, """
                 QLabel {
                     color: rgba(255, 255, 255, 0.35);
                     font-size: 15px;
@@ -1082,7 +1227,7 @@ class LyricLineWidget(QFrame):
     def enterEvent(self, event):
         super().enterEvent(event)
         if not self._is_active:
-            self._lbl.setStyleSheet("""
+            set_widget_style(self._lbl, """
                 QLabel {
                     color: rgba(255, 255, 255, 0.85);
                     font-size: 15px;
@@ -1110,7 +1255,7 @@ class SpotifyLyricsWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("lyricsWidgetFrame")
-        self.setStyleSheet("""
+        set_widget_style(self, """
             QFrame#lyricsWidgetFrame {
                 background: transparent;
                 border: none;
@@ -1125,7 +1270,7 @@ class SpotifyLyricsWidget(QFrame):
         hdr_row = QHBoxLayout()
         hdr_row.setContentsMargins(4, 0, 4, 4)
         lbl_hdr = QLabel("Lyrics")
-        lbl_hdr.setStyleSheet("QLabel { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 600; color: #94a3b8; background: transparent; border: none; }")
+        set_widget_style(lbl_hdr, "QLabel { font-family: 'Segoe UI'; font-size: 11px; font-weight: 600; color: #94a3b8; background: transparent; border: none; }")
 
         hdr_row.addWidget(lbl_hdr)
         hdr_row.addStretch()
@@ -1133,10 +1278,10 @@ class SpotifyLyricsWidget(QFrame):
 
         # Content stack: Page 0 = Lyrics Scroll Area, Page 1 = Placeholder / Status
         self.content_stack = QStackedWidget(self)
-        self.content_stack.setStyleSheet("background: transparent; border: none;")
+        set_widget_style(self.content_stack, "background: transparent; border: none;")
 
         # Page 0: Scroll Area for Lyrics
-        self.scroll_area = QScrollArea(self)
+        self.scroll_area = ScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1144,7 +1289,7 @@ class SpotifyLyricsWidget(QFrame):
         self.scroll_area.viewport().setAutoFillBackground(False)
         self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.scroll_area.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.scroll_area.setStyleSheet("""
+        set_widget_style(self.scroll_area, """
             QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
                 background: transparent;
                 border: none;
@@ -1168,7 +1313,7 @@ class SpotifyLyricsWidget(QFrame):
         """)
 
         self.lines_container = QWidget()
-        self.lines_container.setStyleSheet("background: transparent; border: none;")
+        set_widget_style(self.lines_container, "background: transparent; border: none;")
         self.lines_layout = QVBoxLayout(self.lines_container)
         self.lines_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.lines_layout.setContentsMargins(0, 4, 0, 8)
@@ -1178,7 +1323,7 @@ class SpotifyLyricsWidget(QFrame):
 
         # Page 1: Centered Status / Placeholder
         placeholder_wrap = QWidget()
-        placeholder_wrap.setStyleSheet("background: transparent; border: none;")
+        set_widget_style(placeholder_wrap, "background: transparent; border: none;")
         p_layout = QVBoxLayout(placeholder_wrap)
         p_layout.setContentsMargins(12, 24, 12, 24)
         p_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1186,7 +1331,7 @@ class SpotifyLyricsWidget(QFrame):
         self.lbl_status = QLabel("Play music to view lyrics", placeholder_wrap)
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setWordWrap(True)
-        self.lbl_status.setStyleSheet("QLabel { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; font-weight: 400; color: #64748b; background: transparent; border: none; line-height: 1.5; }")
+        set_widget_style(self.lbl_status, "QLabel { font-family: 'Segoe UI'; font-size: 12px; font-weight: 400; color: #64748b; background: transparent; border: none; }")
         p_layout.addWidget(self.lbl_status)
         self.content_stack.addWidget(placeholder_wrap)
 
@@ -1201,6 +1346,10 @@ class SpotifyLyricsWidget(QFrame):
         self._line_buttons: list[LyricLineWidget] = []
         self._current_line_idx = -1
         self._user_scrolling = False
+        self._auto_scroll_enabled = True
+        self._layout_scroll_timer = QTimer(self)
+        self._layout_scroll_timer.setSingleShot(True)
+        self._layout_scroll_timer.timeout.connect(self._scroll_current_line)
 
         # Resume auto-scroll timer after user manual scrolling
         self._resume_timer = QTimer(self)
@@ -1223,13 +1372,34 @@ class SpotifyLyricsWidget(QFrame):
     def set_playback_state(self, is_playing: bool):
         pass
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._layout_scroll_timer.start(0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_layout_scroll_timer"):
+            self._layout_scroll_timer.start(0)
+
     def _on_user_scroll(self):
+        self._scroll_anim.stop()
         self._user_scrolling = True
         self._resume_timer.start()
 
+    def set_auto_scroll_enabled(self, enabled):
+        self._auto_scroll_enabled = bool(enabled)
+        if not enabled:
+            self._scroll_anim.stop()
+            self._resume_timer.stop()
+        else:
+            self._resume_auto_scroll()
+
     def _resume_auto_scroll(self):
         self._user_scrolling = False
-        if self._current_line_idx >= 0 and self._current_line_idx < len(self._line_buttons):
+        self._scroll_current_line()
+
+    def _scroll_current_line(self):
+        if not self._user_scrolling and 0 <= self._current_line_idx < len(self._line_buttons):
             self._scroll_to_line(self._current_line_idx)
 
     def set_loading(self, title: str, artist: str):
@@ -1251,7 +1421,7 @@ class SpotifyLyricsWidget(QFrame):
     def set_synced_lyrics(self, synced_lines: list[tuple[float, str]]):
         self._clear_lines()
         self.content_stack.setCurrentIndex(0)
-        self._synced_lines = synced_lines
+        self._synced_lines = list(synced_lines)
         self._current_line_idx = -1
 
         self.lines_layout.addSpacing(60)
@@ -1263,6 +1433,7 @@ class SpotifyLyricsWidget(QFrame):
 
         self.lines_layout.addSpacing(100)
         self.lines_layout.addStretch()
+        self._layout_scroll_timer.start(0)
 
     def set_plain_lyrics(self, plain_text: str):
         self._clear_lines()
@@ -1276,7 +1447,7 @@ class SpotifyLyricsWidget(QFrame):
             if not clean:
                 continue
             lbl = QLabel(clean, self.lines_container)
-            lbl.setStyleSheet("""
+            set_widget_style(lbl, """
                 QLabel {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                     font-size: 13.5px;
@@ -1321,6 +1492,8 @@ class SpotifyLyricsWidget(QFrame):
                     self._scroll_to_line(active_idx)
 
     def _scroll_to_line(self, idx: int):
+        if not self._auto_scroll_enabled or not self.isVisible():
+            return
         if 0 <= idx < len(self._line_buttons):
             btn = self._line_buttons[idx]
             viewport_h = self.scroll_area.viewport().height()
@@ -1334,13 +1507,15 @@ class SpotifyLyricsWidget(QFrame):
             self._scroll_anim.start()
 
     def _clear_lines(self):
+        self._layout_scroll_timer.stop()
         self._scroll_anim.stop()
-        self._synced_lines.clear()
+        self._synced_lines = []
         self._line_buttons.clear()
         self._current_line_idx = -1
         while self.lines_layout.count() > 0:
             item = self.lines_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
 

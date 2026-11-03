@@ -45,6 +45,7 @@ def test_parse_lrc_unsorted_and_empty():
     assert parsed[1] == (60.0, "Second line")
 
 
+@pytest.mark.live_service
 def test_lyrics_query_lrclib_mind_over_matter():
     mgr = LyricsManager()
     data = mgr._query_lrclib("Mind Over Matter (Reprise)", "Young the Giant", "Mirrorball / Mind Over Matter (Reprise)")
@@ -90,6 +91,22 @@ def test_spotify_lyrics_widget_sync_and_progress(qapp):
     assert widget._current_line_idx == 2
     assert widget._line_buttons[2]._is_active
     assert not widget._line_buttons[0]._is_active
+
+
+def test_new_lyrics_center_the_current_line_after_layout(qapp):
+    from PySide6.QtTest import QTest
+    widget = SpotifyLyricsWidget()
+    widget.resize(400, 300)
+    widget.show()
+    widget.set_synced_lyrics([(i * 5, f"Lyric line {i}") for i in range(80)])
+    widget.update_playback_time(200)
+    QTest.qWait(30)
+    widget._scroll_anim.setCurrentTime(widget._scroll_anim.duration())
+    line = widget._line_buttons[40]
+    bar = widget.scroll_area.verticalScrollBar()
+    assert bar.value() > 0
+    assert 0 <= line.y() - bar.value()
+    assert line.y() - bar.value() + line.height() <= widget.scroll_area.viewport().height()
 
 
 def test_clickable_slider_jump(qapp):
@@ -138,6 +155,7 @@ def test_audio_visualizer_bars_fluid_physics(qapp):
         assert 2.5 <= h <= 14.0
 
 
+@pytest.mark.live_service
 def test_netease_romanized_synced_lyrics():
     mgr = LyricsManager()
     data = mgr._query_netease("Dilliwaali Girlfriend", "Pritam")

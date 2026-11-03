@@ -83,7 +83,8 @@ def test_safe_math_evaluator_security_and_dos_protection():
 # 3. Pomodoro State Machine Transitions
 # -------------------------------------------------------------
 def test_pomodoro_transitions():
-    pomo = PomodoroManager(work_duration=10, break_duration=5, parent=None)
+    now = [100.0]
+    pomo = PomodoroManager(work_duration=10, break_duration=5, parent=None, clock=lambda: now[0])
     pomo.sound_enabled = False  # Mute during automated test
     
     # Initial state
@@ -95,8 +96,8 @@ def test_pomodoro_transitions():
     assert pomo.remaining_seconds == 10
     
     # Simulate countdown to end
-    pomo.remaining_seconds = 1
-    pomo._tick()  # decrements to 0, transitions to short break
+    now[0] += 10
+    pomo._tick()
     assert pomo.state == PomoState.SHORT_BREAK
     assert pomo.completed_cycles == 1
     assert pomo.remaining_seconds == 5

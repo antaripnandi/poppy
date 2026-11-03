@@ -5,10 +5,13 @@
     "collapsed_width": 240,
     "collapsed_height": 30,
     "open_width": 960,
-    "open_height": 480,
-    "corner_radius": 16,
+    "open_height": 560,
+    "corner_radius": 22,
     "top_offset": 0,
-    "display": "Primary"
+    "display": "Primary",
+    "layout_version": 3,
+    "layout": "Classic",
+    "mode": "Dark"
   },
   "tabs": {
     "enabled": [
@@ -46,7 +49,9 @@
   },
   "media": {
     "spotify_sp_dc": "",
-    "auto_scroll_lyrics": true
+    "auto_scroll_lyrics": true,
+    "background": "theme",
+    "show_player_tiles": true
   },
   "weather": {
     "city": "chennai",

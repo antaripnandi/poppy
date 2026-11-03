@@ -4,7 +4,22 @@ Directly inspired by NotchX (by Navneet Kaur / Raho Osman) and macOS Dynamic Isl
 Features NotchX's 7 theme presets, frosted card styling, and clean sans-serif typography.
 """
 
+from poppy.ui.theme import LAYOUT_THEMES, home_order
+
+
 THEME_PRESETS = {
+    "Charcoal": {
+        "name": "Charcoal", "bg": "#1a1d1e", "gradient": "#1a1d1e",
+        "accent": "#b5c9bd", "desc": "Neutral dark gray",
+    },
+    "Sage": {
+        "name": "Sage", "bg": "#17201b", "gradient": "#17201b",
+        "accent": "#9db7a6", "desc": "Muted green",
+    },
+    "Slate": {
+        "name": "Slate", "bg": "#191e23", "gradient": "#191e23",
+        "accent": "#a8bbc7", "desc": "Muted blue gray",
+    },
     "Graphite": {
         "name": "Graphite",
         "bg": "#141418",
@@ -59,6 +74,25 @@ THEME_PRESETS = {
 DEFAULT_THEME = "Pure black"
 
 
+def normalize_appearance(appearance: dict) -> dict:
+    """Adopt compact defaults once, preserving explicitly customized dimensions."""
+    result = dict(appearance)
+    if result.get("layout_version", 1) < 3:
+        size = (result.get("open_width", 960), result.get("open_height", 480))
+        if size in ((600, 400), (960, 480)):
+            result.update(open_width=960, open_height=560)
+    result.setdefault("layout", "Classic")
+    if not isinstance(result["layout"], str) or result["layout"] not in LAYOUT_THEMES:
+        result["layout"] = "Classic"
+    orders = result.get("home_orders", {})
+    result["home_orders"] = {name: list(home_order(name, orders)) for name in LAYOUT_THEMES
+                             if isinstance(orders, dict) and name in orders}
+    result.setdefault("mode", "Dark")
+    result["layout_version"] = 3
+    return result
+
+
+
 def get_theme(theme_name: str) -> dict:
     return THEME_PRESETS.get(theme_name, THEME_PRESETS[DEFAULT_THEME])
 
@@ -69,10 +103,17 @@ def get_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
 
     return f"""
 * {{
-    font-family: 'Segoe UI Variable Display', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+    font-family: 'Segoe UI';
     color: #e2e8f0;
-    outline: none;
+    font-size: 12px;
 }}
+
+QMenu {{ background: #202223; border: 1px solid #3a3d3e; border-radius: 8px; padding: 5px; }}
+QMenu::item {{ padding: 7px 26px 7px 10px; border-radius: 5px; }}
+QMenu::item:selected {{ background: #343738; }}
+QMenu::item:disabled {{ color: #818687; }}
+QMenu::separator {{ height: 1px; background: #3a3d3e; margin: 5px; }}
+QDialog, QMessageBox {{ background: #1b2027; }}
 
 QToolTip {{
     background-color: #0f1219;
@@ -80,7 +121,7 @@ QToolTip {{
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 5px;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 QLineEdit {{
@@ -89,8 +130,9 @@ QLineEdit {{
     border-radius: 6px;
     padding: 5px 8px;
     color: #f8fafc;
-    font-size: 11px;
+    font-size: 12px;
     selection-background-color: {accent};
+    selection-color: #ffffff;
 }}
 
 QLineEdit:focus {{
@@ -104,9 +146,9 @@ QTextEdit {{
     border-radius: 6px;
     padding: 6px;
     color: #f1f5f9;
-    font-size: 11px;
-    line-height: 1.4;
+    font-size: 12px;
     selection-background-color: {accent};
+    selection-color: #ffffff;
 }}
 
 QTextEdit:focus {{
@@ -118,7 +160,7 @@ QPushButton {{
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 6px;
     padding: 4px 10px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: #cbd5e1;
 }}
@@ -128,6 +170,9 @@ QPushButton:hover {{
     border: 1px solid rgba(255, 255, 255, 0.12);
     color: #ffffff;
 }}
+
+QPushButton:focus {{ border: 1px solid #b5babe; }}
+QPushButton:disabled {{ color: #727779; background: rgba(255,255,255,0.025); }}
 
 QPushButton:pressed {{
     background-color: rgba(255, 255, 255, 0.18);
@@ -145,7 +190,7 @@ QSlider::sub-page:horizontal {{
 }}
 
 QSlider::handle:horizontal {{
-    background: #f8fafc;
+    background: #7f8b91;
     width: 12px;
     margin-top: -4px;
     margin-bottom: -4px;
@@ -153,7 +198,7 @@ QSlider::handle:horizontal {{
 }}
 
 QSlider::handle:horizontal:hover {{
-    background: #ffffff;
+    background: #647982;
 }}
 
 QScrollBar:vertical {{

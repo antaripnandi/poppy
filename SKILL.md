@@ -12,7 +12,7 @@ Use this skill when reading, developing, debugging, refactoring, or designing fo
 ## 1. Core Principles & Decision Ladder
 - **Follow the Ponytail Ladder:** Minimal, ultra-clean code. YAGNI (You Aren't Gonna Need It). Zero bloat, zero AI slop, no garish colored borders.
 - **Dependency Guardrail:** Pure Python stdlib + `PySide6` + `ctypes` Win32 API. Never introduce external packages unless strictly requested.
-- **Option 1 Aesthetic:** Apple Studio Bento + macOS Control Center + Obsidian frosted glass (`rgba(255, 255, 255, 0.032)`).
+- **Current aesthetic:** Compact daily utility. Follow DESIGNS.md for the dashboard, direct tabs, separate player/lyrics areas, and layout / Light / Dark themes.
 
 ---
 
@@ -20,12 +20,12 @@ Use this skill when reading, developing, debugging, refactoring, or designing fo
 
 | Domain | Key Files | Description |
 |---|---|---|
-| **App Lifecycle** | [`main.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/main.py) | Single-instance enforcement (`.poppy.pid`), system tray, DPI scaling, global startup |
+| **App Lifecycle** | [`main.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/main.py) | Single-instance enforcement (`QLockFile` + `QLocalServer`), system tray, DPI scaling, global startup |
 | **Window & Physics** | [`core/window.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/core/window.py) | `DynamicNotchWindow`, 4 states (`COLLAPSED`, `PEEK`, `ISLAND`, `EXPANDED`), symmetric center-pop |
 | **Design Components** | [`ui/components.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/ui/components.py) | `<RubberSegment />` (`AnimatedTabStrip`), `CapsuleSlider`, `SpotifyLyricsWidget`, `LyricLineWidget` |
-| **Tab Views** | [`ui/views.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/ui/views.py) | `HomeTabView` (Bento dashboard), `MusicTabView` (2-Card Studio), `Calendar`, `Shelf`, `Notes` |
+| **Tab Views** | [`ui/views.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/ui/views.py) | `HomeTabView` (Bento dashboard), `MusicTabView` (desktop player and lyrics columns), `Calendar`, `Shelf`, `Notes` |
 | **Extended Views** | [`ui/extended_views.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/ui/extended_views.py) | `ClipboardTabView`, `DocsTabView`, `DesktopsTabView`, `TimerTabView` |
-| **Settings App** | [`ui/settings_window.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/ui/settings_window.py) | Dedicated 840x580 window, 11 categories, `_make_scroll_area`, zero-artifact transparent corners |
+| **Settings App** | [`ui/settings_window.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/ui/settings_window.py) | Dedicated 860x640 window, 11 categories, `_make_scroll_area`, zero-artifact transparent corners |
 | **Digital Wellbeing** | [`core/screentime_manager.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/core/screentime_manager.py) | Foreground app tracking, idle/AFK detection, streaks, goal monitoring |
 | **Synchronized Lyrics** | [`core/lyrics_manager.py`](file:///c:/Users/banta/Desktop/Personal tests/poppy/core/lyrics_manager.py) | LRCLIB query, `parse_lrc`, fuzzy match, click-to-seek playback |
 | **Documentation** | [`AGENTS.md`](file:///c:/Users/banta/Desktop/Personal tests/poppy/AGENTS.md), [`DESIGNS.md`](file:///c:/Users/banta/Desktop/Personal tests/poppy/DESIGNS.md) | Architectural spec and design system documentation |
@@ -50,10 +50,7 @@ sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 and ensure `QScrollBar::corner { background: transparent; border: none; }` is applied.
 
 ### 4. Single-Instance & Process Cleanliness
-When running Poppy, ensure stale instances are terminated:
-```powershell
-python poppy/main.py # Automatically terminates old PID via .poppy.pid
-```
+A second launch activates the existing app through `core/instance.py`. Never kill a process using a PID file. For previews and tests, set `POPPY_DATA_DIR` and stub background integrations so personal data and running apps are untouched.
 
 ---
 
@@ -63,4 +60,4 @@ Always verify all changes using the workspace virtualenv:
 ```powershell
 C:\Users\banta\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe -m pytest poppy/tests/
 ```
-All **31 unit tests** must pass without errors.
+Run all tests. Live provider checks require `--live-services`.

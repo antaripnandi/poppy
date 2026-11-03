@@ -13,8 +13,11 @@ import ctypes
 from ctypes import wintypes
 from pathlib import Path
 import subprocess
+import uuid
+import threading
 
 from PySide6.QtCore import QObject, Signal, QTimer
+from poppy.core.storage import data_path, write_json
 
 
 class PrivacyMonitor(QObject):
@@ -110,19 +113,49 @@ class BluetoothManager(QObject):
     Sub-millisecond, zero subprocess overhead, 100% accurate real connection state.
     """
     devices_updated = Signal(list)
+    _scan_finished = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.devices = []
+        self._scanning = False
+        self._closed = False
+        self._scan_finished.connect(self._apply_scan)
         self._timer = QTimer(self)
         self._timer.setInterval(8000)  # Refresh every 8s
         self._timer.timeout.connect(self.refresh)
+        self._timer.start()
         QTimer.singleShot(200, self.refresh)
 
     def refresh(self):
-        devices = self._get_devices()
+        # Windows enumeration can block even without an inquiry. Keep a single
+        # daemon worker so a slow driver cannot freeze navigation or app exit.
+        if self._scanning or self._closed:
+            return
+        self._scanning = True
+
+        def scan():
+            try:
+                devices = self._get_devices()
+            except Exception:
+                devices = []
+            try:
+                self._scan_finished.emit(devices)
+            except RuntimeError:
+                pass  # The owning Qt window has already been deleted.
+
+        threading.Thread(target=scan, name="poppy-bluetooth", daemon=True).start()
+
+    def _apply_scan(self, devices):
+        self._scanning = False
+        if self._closed:
+            return
         self.devices = devices
         self.devices_updated.emit(devices)
+
+    def close(self):
+        self._closed = True
+        self._timer.stop()
 
     @staticmethod
     def _get_devices() -> list[dict]:
@@ -257,60 +290,90 @@ class AppLauncherIndexer:
 
 
 class ClipboardHistoryManager(QObject):
-    """
-    Persistent, searchable clipboard history manager with password masking.
-    Stores clips in ~/.poppy/clipboard_history.json.
-    """
+    """Text history with stable identities; pinned entries survive recopying."""
     history_updated = Signal()
+    save_failed = Signal(str)
+    MAX_RECENT = 40
+    MAX_TEXT_BYTES = 1024 * 1024
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.store_file = Path(os.path.expanduser("~/.poppy/clipboard_history.json"))
+        self.store_file = data_path("clipboard_history.json")
         self.store_file.parent.mkdir(parents=True, exist_ok=True)
         self.history: list[dict] = []
+        self.last_save_error = ""
         self._load()
 
     def _load(self):
         if self.store_file.exists():
             try:
-                self.history = json.loads(self.store_file.read_text(encoding="utf-8"))
+                raw = json.loads(self.store_file.read_text(encoding="utf-8"))
+                if not isinstance(raw, list):
+                    return
+                seen_ids = set()
+                for item in raw:
+                    if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+                        continue
+                    item_id = item.get("id")
+                    if not isinstance(item_id, str) or item_id in seen_ids:
+                        item_id = uuid.uuid4().hex
+                    seen_ids.add(item_id)
+                    self.history.append({**item, "id": item_id})
+                self._trim()
             except Exception:
                 self.history = []
 
     def _save(self):
         try:
-            self.store_file.write_text(json.dumps(self.history[:40], indent=2), encoding="utf-8")
-        except Exception:
-            pass
+            write_json(self.store_file, self.history)
+            self.last_save_error = ""
+            return True
+        except OSError as error:
+            self.last_save_error = str(error)
+            self.save_failed.emit(str(error))
+            return False
+
+    def _trim(self):
+        pinned = [c for c in self.history if c.get("pinned", False)]
+        recent = [c for c in self.history if not c.get("pinned", False)]
+        self.history = pinned + recent[:self.MAX_RECENT]
 
     def add_clip(self, text: str):
         if not text or not text.strip():
-            return
-        text = text.strip()
-        # Suppress single line texts with high entropy or passwords if detected
-        if len(text) > 4000:
-            text = text[:4000]
-
-        # Avoid immediate duplicates
+            return False
+        if len(text.encode("utf-8")) > self.MAX_TEXT_BYTES:
+            return False
+        existing = next((c for c in self.history if c["text"] == text), None)
+        if existing and self.history[0] is existing:
+            return True
         self.history = [c for c in self.history if c["text"] != text]
         item = {
+            "id": existing["id"] if existing else uuid.uuid4().hex,
             "text": text,
             "time": time.strftime("%I:%M %p"),
-            "pinned": False
+            "pinned": existing.get("pinned", False) if existing else False
         }
         self.history.insert(0, item)
+        self._trim()
         self._save()
         self.history_updated.emit()
+        return True
 
-    def toggle_pin(self, index: int):
+    def _index(self, identity: str | int) -> int:
+        if isinstance(identity, int):
+            return identity
+        return next((i for i, c in enumerate(self.history) if c.get("id") == identity), -1)
+
+    def toggle_pin(self, identity: str | int):
+        index = self._index(identity)
         if 0 <= index < len(self.history):
             self.history[index]["pinned"] = not self.history[index].get("pinned", False)
-            # Reorder: pinned items at the top
-            self.history.sort(key=lambda x: not x.get("pinned", False))
+            self._trim()
             self._save()
             self.history_updated.emit()
 
-    def delete_clip(self, index: int):
+    def delete_clip(self, identity: str | int):
+        index = self._index(identity)
         if 0 <= index < len(self.history):
             self.history.pop(index)
             self._save()
@@ -322,77 +385,117 @@ class ClipboardHistoryManager(QObject):
         self.history_updated.emit()
 
 
+def clipboard_allows_history() -> bool:
+    """Honor Windows clipboard exclusion formats, failing closed if busy."""
+    try:
+        import win32clipboard
+        win32clipboard.OpenClipboard()
+        try:
+            excluded = win32clipboard.RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing")
+            if win32clipboard.IsClipboardFormatAvailable(excluded):
+                return False
+            allowed = win32clipboard.RegisterClipboardFormat("CanIncludeInClipboardHistory")
+            if win32clipboard.IsClipboardFormatAvailable(allowed):
+                value = win32clipboard.GetClipboardData(allowed)
+                if isinstance(value, bytes) and len(value) >= 4:
+                    return int.from_bytes(value[:4], "little") != 0
+                return False
+            return True
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception:
+        return False
+
+
+class _CountedArray(ctypes.Structure):
+    _fields_ = [("count", wintypes.ULONG), ("elements", ctypes.c_void_p)]
+
+
+class _VariantValue(ctypes.Union):
+    _fields_ = [("pwszVal", ctypes.c_void_p), ("array", _CountedArray)]
+
+
+class PROPVARIANT(ctypes.Structure):
+    _anonymous_ = ("value",)
+    _fields_ = [("vt", wintypes.WORD), ("reserved1", wintypes.WORD),
+                ("reserved2", wintypes.WORD), ("reserved3", wintypes.WORD),
+                ("value", _VariantValue)]
+
+
 class AudioEndpointManager:
-    """
-    Sub-millisecond Windows Core Audio playback endpoint enumeration and management.
-    """
+    """Read playback endpoint names with checked COM calls and owned allocations."""
+
     @staticmethod
     def get_output_endpoints() -> list[dict]:
+        from poppy.core.system_controls import GUID
+
+        class PROPERTYKEY(ctypes.Structure):
+            _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
+
+        ole32 = ctypes.oledll.ole32
+        initialized = False
+        pointers = []
         devices = []
+
+        def release(pointer):
+            if pointer and pointer.value:
+                table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+                ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(table[2])(pointer)
+
+        def call(pointer, slot, types, *args):
+            table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            method = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, *types)(table[slot])
+            result = method(pointer, *args)
+            if result < 0:
+                raise OSError(f"Windows audio query failed ({result:#x})")
+
         try:
-            from poppy.core.system_controls import GUID
-            ole32 = ctypes.oledll.ole32
-            ole32.CoInitialize(None)
+            result = ole32.CoInitialize(None)
+            initialized = result in (0, 1)
+            ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+            ole32.CoTaskMemFree.restype = None
+            ole32.PropVariantClear.argtypes = [ctypes.POINTER(PROPVARIANT)]
+            ole32.PropVariantClear.restype = ctypes.HRESULT
             ole32.CLSIDFromString.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(GUID)]
-
-            class PROPERTYKEY(ctypes.Structure):
-                _fields_ = [('fmtid', GUID), ('pid', wintypes.DWORD)]
-
-            pkey = PROPERTYKEY()
-            ole32.CLSIDFromString('{A45C254E-DF1C-4EFD-8020-67D146A850E0}', ctypes.byref(pkey.fmtid))
-            pkey.pid = 14
-
-            class PROPVARIANT(ctypes.Structure):
-                _fields_ = [
-                    ('vt', ctypes.c_ushort),
-                    ('wReserved1', wintypes.WORD),
-                    ('wReserved2', wintypes.WORD),
-                    ('wReserved3', wintypes.WORD),
-                    ('pwszVal', wintypes.LPWSTR)
-                ]
-
-            clsid_enum = GUID()
-            iid_enum = GUID()
-            ole32.CLSIDFromString('{BCDE0395-E52F-467C-8E3D-C4579291692E}', ctypes.byref(clsid_enum))
-            ole32.CLSIDFromString('{A95664D2-9614-4F35-A746-DE8DB63617E6}', ctypes.byref(iid_enum))
-
-            pEnum = ctypes.c_void_p()
-            ole32.CoCreateInstance(ctypes.byref(clsid_enum), None, 1, ctypes.byref(iid_enum), ctypes.byref(pEnum))
-            vtable_enum = ctypes.cast(pEnum, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-            EnumAudioEndpoints = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))(vtable_enum[3])
-            pCol = ctypes.c_void_p()
-            EnumAudioEndpoints(pEnum, 0, 1, ctypes.byref(pCol))
-
-            vtable_col = ctypes.cast(pCol, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-            GetCount = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, ctypes.POINTER(wintypes.UINT))(vtable_col[3])
-            Item = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p))(vtable_col[4])
-
+            clsid, iid = GUID(), GUID()
+            ole32.CLSIDFromString('{BCDE0395-E52F-467C-8E3D-C4579291692E}', ctypes.byref(clsid))
+            ole32.CLSIDFromString('{A95664D2-9614-4F35-A746-DE8DB63617E6}', ctypes.byref(iid))
+            enumerator = ctypes.c_void_p()
+            result = ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(enumerator))
+            if result < 0 or not enumerator.value:
+                return []
+            pointers.append(enumerator)
+            collection = ctypes.c_void_p()
+            call(enumerator, 3, [wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)], 0, 1, ctypes.byref(collection))
+            pointers.append(collection)
             count = wintypes.UINT()
-            GetCount(pCol, ctypes.byref(count))
-
-            for i in range(count.value):
-                pDev = ctypes.c_void_p()
-                Item(pCol, i, ctypes.byref(pDev))
-                vtable_dev = ctypes.cast(pDev, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-                GetId = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR))(vtable_dev[5])
-                dev_id = wintypes.LPWSTR()
-                GetId(pDev, ctypes.byref(dev_id))
-
-                OpenPropertyStore = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))(vtable_dev[4])
-                pStore = ctypes.c_void_p()
-                OpenPropertyStore(pDev, 0, ctypes.byref(pStore))
-                vtable_store = ctypes.cast(pStore, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-                GetValue = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT))(vtable_store[5])
-                pv = PROPVARIANT()
-                GetValue(pStore, ctypes.byref(pkey), ctypes.byref(pv))
-
-                name = pv.pwszVal or "Audio Device"
-                devices.append({
-                    "name": name,
-                    "id": dev_id.value or ""
-                })
-        except Exception:
+            call(collection, 3, [ctypes.POINTER(wintypes.UINT)], ctypes.byref(count))
+            key = PROPERTYKEY()
+            ole32.CLSIDFromString('{A45C254E-DF1C-4EFD-8020-67D146A850E0}', ctypes.byref(key.fmtid))
+            key.pid = 14
+            for index in range(count.value):
+                device, store, device_id = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+                value = PROPVARIANT()
+                try:
+                    call(collection, 4, [wintypes.UINT, ctypes.POINTER(ctypes.c_void_p)], index, ctypes.byref(device))
+                    call(device, 5, [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(device_id))
+                    call(device, 4, [wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)], 0, ctypes.byref(store))
+                    call(store, 5, [ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT)], ctypes.byref(key), ctypes.byref(value))
+                    name = ctypes.wstring_at(value.pwszVal) if value.vt == 31 and value.pwszVal else "Audio device"
+                    devices.append({"name": name, "id": ctypes.wstring_at(device_id) if device_id.value else ""})
+                finally:
+                    ole32.PropVariantClear(ctypes.byref(value))
+                    if device_id.value:
+                        ole32.CoTaskMemFree(device_id)
+                    release(store)
+                    release(device)
+        except (OSError, ValueError, AttributeError):
             pass
+        finally:
+            for pointer in reversed(pointers):
+                release(pointer)
+            if initialized:
+                ole32.CoUninitialize()
         return devices
 
 

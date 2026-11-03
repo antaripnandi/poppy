@@ -6,6 +6,7 @@ Manages focus sessions, breaks, cycles, and completion chimes.
 import time
 import winsound
 import threading
+import math
 from enum import Enum
 from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -23,7 +24,7 @@ class PomodoroManager(QObject):
     state_changed = Signal(str, str)             # state_value, display_label
     cycle_completed = Signal(int, str)           # completed_cycles, just_finished_state
 
-    def __init__(self, work_duration=1500, break_duration=300, long_break_duration=900, cycles_before_long=4, parent=None):
+    def __init__(self, work_duration=1500, break_duration=300, long_break_duration=900, cycles_before_long=4, parent=None, clock=None):
         super().__init__(parent)
         self.work_duration = work_duration
         self.break_duration = break_duration
@@ -36,6 +37,10 @@ class PomodoroManager(QObject):
         self.completed_cycles = 0
         self.is_running = False
         self.sound_enabled = True
+        self._clock = clock or time.monotonic
+        self._deadline = None
+        self._paused_remaining = None
+        self.completed_focus_seconds = 0
 
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
@@ -43,28 +48,36 @@ class PomodoroManager(QObject):
 
     def start(self):
         """Start or resume the timer."""
+        if self.is_running:
+            return
         if self.state == PomoState.STOPPED:
             self.state = PomoState.WORKING
             self.remaining_seconds = self.work_duration
             self.total_seconds = self.work_duration
-            self.state_changed.emit(self.state.value, "Focus Sprint")
-
         self.is_running = True
+        remaining = self._paused_remaining if self._paused_remaining is not None else self.remaining_seconds
+        self._deadline = self._clock() + remaining
+        self._paused_remaining = None
         self._timer.start()
+        self.state_changed.emit(self.state.value, self._get_label())
         self._emit_update()
 
     def pause(self):
         """Pause the timer."""
+        if not self.is_running:
+            return
+        self._tick()
+        self._paused_remaining = max(0.0, self._deadline - self._clock())
         self.is_running = False
+        self._deadline = None
         self._timer.stop()
         self.state_changed.emit(self.state.value, f"Paused ({self._get_label()})")
+        self._emit_update()
 
     def resume(self):
         """Resume the paused timer."""
         if self.state != PomoState.STOPPED:
-            self.is_running = True
-            self._timer.start()
-            self.state_changed.emit(self.state.value, self._get_label())
+            self.start()
 
     def toggle(self):
         """Toggle play/pause."""
@@ -78,23 +91,29 @@ class PomodoroManager(QObject):
 
     def set_phase_focus(self):
         """Manually switch to Focus session."""
+        self._paused_remaining = None
         self.state = PomoState.WORKING
         self.total_seconds = self.work_duration
         self.remaining_seconds = self.work_duration
+        self._deadline = self._clock() + self.remaining_seconds if self.is_running else None
         self.state_changed.emit(self.state.value, "Focus Sprint")
         self._emit_update()
 
     def set_phase_break(self, is_long=False):
         """Manually switch to Break session."""
+        self._paused_remaining = None
         self.state = PomoState.LONG_BREAK if is_long else PomoState.SHORT_BREAK
         self.total_seconds = self.long_break_duration if is_long else self.break_duration
         self.remaining_seconds = self.total_seconds
+        self._deadline = self._clock() + self.remaining_seconds if self.is_running else None
         self.state_changed.emit(self.state.value, "Taking a Break" if not is_long else "Long Break")
         self._emit_update()
 
     def reset(self):
         """Reset back to stopped focus state."""
+        self._paused_remaining = None
         self.is_running = False
+        self._deadline = None
         self._timer.stop()
         self.state = PomoState.STOPPED
         self.remaining_seconds = self.work_duration
@@ -104,24 +123,29 @@ class PomodoroManager(QObject):
 
     def skip(self):
         """Skip to next phase."""
-        self._transition_next_phase()
+        if self.state != PomoState.STOPPED:
+            self._transition_next_phase(completed=False)
 
     def _tick(self):
-        if self.remaining_seconds > 0:
-            self.remaining_seconds -= 1
-            self._emit_update()
+        if not self.is_running or self._deadline is None:
+            return
+        self.remaining_seconds = max(0, math.ceil(self._deadline - self._clock()))
+        self._emit_update()
 
         if self.remaining_seconds <= 0:
             self._play_chime()
             self._transition_next_phase()
 
-    def _transition_next_phase(self):
+    def _transition_next_phase(self, completed=True):
+        self._paused_remaining = None
         old_state = self.state.value
         if self.state == PomoState.WORKING:
-            self.completed_cycles += 1
-            self.cycle_completed.emit(self.completed_cycles, old_state)
+            if completed:
+                self.completed_cycles += 1
+                self.completed_focus_seconds += self.total_seconds
+                self.cycle_completed.emit(self.completed_cycles, old_state)
 
-            if self.completed_cycles % self.cycles_before_long == 0:
+            if completed and self.completed_cycles % self.cycles_before_long == 0:
                 self.state = PomoState.LONG_BREAK
                 self.total_seconds = self.long_break_duration
             else:
@@ -129,11 +153,13 @@ class PomodoroManager(QObject):
                 self.total_seconds = self.break_duration
         else:
             # Completed break, back to work
-            self.cycle_completed.emit(self.completed_cycles, old_state)
+            if completed:
+                self.cycle_completed.emit(self.completed_cycles, old_state)
             self.state = PomoState.WORKING
             self.total_seconds = self.work_duration
 
         self.remaining_seconds = self.total_seconds
+        self._deadline = self._clock() + self.remaining_seconds if self.is_running else None
         self.state_changed.emit(self.state.value, self._get_label())
         self._emit_update()
 

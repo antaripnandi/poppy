@@ -40,6 +40,8 @@ Thumbs.db
 Desktop.ini
 *.tmp
 *.log
+.poppy.pid
+.pytest_cache/
 
 # Editor directories
 .vscode/

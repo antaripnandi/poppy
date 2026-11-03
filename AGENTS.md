@@ -5,7 +5,8 @@
 
 ## 1. Project Overview & Philosophy
 - **What Poppy Is:** A top-bezel Dynamic Notch and Productivity Island for Windows 11/10 built with Python 3.11 and Qt 6 (`PySide6`).
-- **Design Metaphor:** Option 1: Apple Studio Bento + macOS Control Center + Obsidian frosted glass.
+- **Design Metaphor:** Desktop dashboard with direct tabs, separate player/lyrics areas, and selectable layout and appearance modes. See DESIGNS.md.
+- **Appearance:** Preserve Classic, Minimal and Soft alongside Flat, Paper and Instrument. Home order is customizable per design through Settings' draggable preview and Alt + arrows; validate complete four-card permutations, save on Done and cancel on close. Reuse live widgets so rearranging never loses notes or media state.
 - **Senior Developer Decision Ladder (Ponytail Rules):**
   1. **YAGNI First:** Never add scaffolding, speculative abstractions, or unused features.
   2. **Zero Bloat / Zero AI Slop:** No garish border lines, no emojis in code, no bloated external dependencies. Pure stdlib + `PySide6` + `ctypes` Win32 API only.
@@ -17,7 +18,7 @@
 
 ```
 poppy/
-├── main.py                     # Entry point, single-instance enforcement (.poppy.pid), tray icon & app lifecycle
+├── main.py                     # Entry point, single-instance enforcement (QLockFile + QLocalServer), tray icon & app lifecycle
 ├── config.json                 # Persistent JSON settings (themes, notch geometry, enabled tabs, screentime)
 ├── requirements.txt           # Minimal dependencies (PySide6, requests, winsdk)
 ├── core/
@@ -50,29 +51,24 @@ poppy/
 
 ### Single-Instance Enforcement
 Multiple running Poppy processes cause invisible overlap, audio hook collisions, and stale UI rendering.
-- `poppy/main.py` enforces a single instance via `.poppy.pid` using Win32 API:
-  ```python
-  handle = ctypes.windll.kernel32.OpenProcess(0x0001, False, old_pid)
-  if handle:
-      ctypes.windll.kernel32.TerminateProcess(handle, 0)
-      ctypes.windll.kernel32.CloseHandle(handle)
-  ```
-- Always clean up `.poppy.pid` on application exit (`exit_app`).
+- `core/instance.py` uses a per-user `QLockFile` and `QLocalServer` in the app data folder.
+- A second launch activates the existing app. Never terminate an app based on a PID file.
+- Use `POPPY_DATA_DIR` for an isolated development profile and stub system services during tests.
 
 ### Development & Python Environment
 - **Workspace Interpreter:** `C:\Users\banta\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe`
 - **Run Poppy:** `python poppy/main.py`
-- **Run Tests:** `python -m pytest poppy/tests/` (All 31 unit tests must always pass).
+- **Run Tests:** `python -m pytest poppy/tests/` (Use `--live-services` to include provider checks).
 
 ---
 
 ## 4. State Machine & Window Geometry
 
 `DynamicNotchWindow` operates across 4 distinct states (`NotchState`):
-1. `COLLAPSED` (`240x30`): Compact top-bezel pill with live audio visualizer bars, tabular clock, battery readout.
-2. `PEEK` (`380x68`): Hover HUD showing now-playing track metadata and media transport controls.
+1. `COLLAPSED` (`240x30`): Compact top-bezel pill with live audio visualizer bars and clock. Battery is shown on Home only.
+2. `PEEK` (`420x72`): Minimal hover player with rounded artwork, pixel-elided metadata and grouped transport controls. Source switching sits beside the artist, below the title. Clicking artwork or metadata opens Music. Use hover intent, leave grace and a short opacity reveal; finish or cancel animation effects cleanly.
 3. `ISLAND` (`420x64`): Floating interactive notification or system prompt island.
-4. `EXPANDED` (`960x480`): Full productivity drawer containing the Bento tabbed suite.
+4. `EXPANDED` (`960x560` by default): Home shows music, time, hardware usage, battery, notes and shelf. All enabled tabs are directly visible. There is no More overflow. Clamp to the active display. Home fits all cards without an outer scroll area, growing to its required height and reducing padding on short screens.
 
 ### Smooth Center-Pop Animation
 When expanding or collapsing, the notch must animate symmetrically from the horizontal center:

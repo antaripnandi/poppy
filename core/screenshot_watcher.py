@@ -7,10 +7,13 @@ Zero-latency detection with hash debouncing, automatic staging, and chat format 
 
 import os
 import hashlib
+import uuid
 from datetime import datetime
-from PySide6.QtCore import QObject, Signal, QUrl, QMimeData, QFileSystemWatcher, QTimer
+from PySide6.QtCore import QObject, Signal, QUrl, QMimeData, QFileSystemWatcher, QTimer, QSaveFile, QIODevice
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
+from poppy.core.storage import data_dir
+from poppy.core.system_features import clipboard_allows_history
 
 
 class ScreenshotWatcher(QObject):
@@ -18,12 +21,12 @@ class ScreenshotWatcher(QObject):
 
     def __init__(self, shelf_dir: str = None, parent=None):
         super().__init__(parent)
-        self.shelf_dir = shelf_dir or os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "assets", "shelf")
-        )
+        self.shelf_dir = shelf_dir or str(data_dir() / "captures")
         os.makedirs(self.shelf_dir, exist_ok=True)
 
-        self.enabled: bool = True  # User opt-in flag for automated clipboard / snip capture
+        self.enabled: bool = False
+        self._started = False
+        self.protected_paths = lambda: set()
         self._last_image_hash: str | None = None
         self._ignore_clipboard: bool = False
         self._last_capture_time: float = 0.0
@@ -40,8 +43,11 @@ class ScreenshotWatcher(QObject):
 
     def start(self):
         """Connect clipboard and screenshot directory listeners."""
+        if self._started:
+            return
         cb = QApplication.clipboard()
         cb.dataChanged.connect(self._on_clipboard_data_changed)
+        self._started = True
 
         # Watch standard Windows screenshot locations
         possible_dirs = [
@@ -53,21 +59,26 @@ class ScreenshotWatcher(QObject):
                 self._fs_watcher.addPath(d)
 
     def stop(self):
-        try:
-            cb = QApplication.clipboard()
-            cb.dataChanged.disconnect(self._on_clipboard_data_changed)
-        except Exception:
-            pass
+        self._debounce_timer.stop()
+        if self._started:
+            QApplication.clipboard().dataChanged.disconnect(self._on_clipboard_data_changed)
+            self._started = False
+        paths = self._fs_watcher.directories()
+        if paths:
+            self._fs_watcher.removePaths(paths)
 
     def _clean_shelf_cap(self, max_items: int = 50):
         """Keep shelf storage bounded to prevent disk bloat."""
         try:
             if not os.path.exists(self.shelf_dir):
                 return
+            protected = {os.path.normcase(os.path.abspath(p)) for p in self.protected_paths()}
             files = [
                 os.path.join(self.shelf_dir, f)
                 for f in os.listdir(self.shelf_dir)
-                if os.path.isfile(os.path.join(self.shelf_dir, f))
+                if f.startswith("Screenshot_") and f.endswith(".png")
+                and os.path.isfile(os.path.join(self.shelf_dir, f))
+                and os.path.normcase(os.path.abspath(os.path.join(self.shelf_dir, f))) not in protected
             ]
             if len(files) > max_items:
                 files.sort(key=os.path.getmtime)
@@ -89,6 +100,8 @@ class ScreenshotWatcher(QObject):
     def _process_clipboard(self):
         if not self.enabled or self._ignore_clipboard:
             return
+        if not clipboard_allows_history():
+            return
 
         cb = QApplication.clipboard()
         mime = cb.mimeData()
@@ -107,17 +120,10 @@ class ScreenshotWatcher(QObject):
             img_hash = hashlib.md5(bytes(bits)).hexdigest()
             if img_hash == self._last_image_hash:
                 return
+            file_path = self._save_image(img)
             self._last_image_hash = img_hash
-
-            # Save the captured screenshot to Poppy's shelf directory
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            file_name = f"Screenshot_{stamp}.png"
-            file_path = os.path.join(self.shelf_dir, file_name)
-
-            saved = img.save(file_path, "PNG")
-            if saved:
-                self._clean_shelf_cap()
-                self.screenshot_captured.emit(file_path, img)
+            self.screenshot_captured.emit(file_path, img)
+            self._clean_shelf_cap()
         except Exception as e:
             print(f"[Poppy ScreenshotWatcher] Error reading clipboard image: {e}")
 
@@ -143,14 +149,10 @@ class ScreenshotWatcher(QObject):
                     bits = img.bits()
                     img_hash = hashlib.md5(bytes(bits)).hexdigest()
                     if img_hash != self._last_image_hash:
+                        file_path = self._save_image(img)
                         self._last_image_hash = img_hash
-                        # Copy to shelf folder for quick access
-                        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        file_name = f"Screenshot_{stamp}.png"
-                        file_path = os.path.join(self.shelf_dir, file_name)
-                        img.save(file_path, "PNG")
-                        self._clean_shelf_cap()
                         self.screenshot_captured.emit(file_path, img)
+                        self._clean_shelf_cap()
         except Exception as e:
             print(f"[Poppy ScreenshotWatcher] Dir watcher error: {e}")
 
@@ -170,16 +172,30 @@ class ScreenshotWatcher(QObject):
             img = QImage(file_path)
             if not img.isNull():
                 mime.setImageData(img)
+                self._last_image_hash = hashlib.md5(bytes(img.bits())).hexdigest()
             mime.setUrls([QUrl.fromLocalFile(file_path)])
             cb.setMimeData(mime)
 
-            # Re-enable clipboard watching after 1 second
-            QTimer.singleShot(1000, self._reset_ignore_flag)
             return True
         except Exception as e:
             self._ignore_clipboard = False
             print(f"[Poppy ScreenshotWatcher] Copy for chat failed: {e}")
             return False
+        finally:
+            self._ignore_clipboard = False
+
+    def _save_image(self, image: QImage) -> str:
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = os.path.join(self.shelf_dir, f"Screenshot_{stamp}_{uuid.uuid4().hex}.png")
+        output = QSaveFile(path)
+        if not output.open(QIODevice.OpenModeFlag.WriteOnly):
+            raise OSError(output.errorString())
+        if not image.save(output, "PNG"):
+            output.cancelWriting()
+            raise OSError("The image could not be encoded.")
+        if not output.commit():
+            raise OSError(output.errorString())
+        return path
 
     def _reset_ignore_flag(self):
         self._ignore_clipboard = False

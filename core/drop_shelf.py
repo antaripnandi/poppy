@@ -8,8 +8,19 @@ import json
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, QUrl, QMimeData, Qt, QFileInfo
-from PySide6.QtGui import QDrag, QPixmap
+from PySide6.QtGui import QDrag, QPixmap, QImageReader
 from PySide6.QtWidgets import QFileIconProvider
+from poppy.core.storage import data_path, write_json
+
+
+def load_thumbnail(path: str) -> QPixmap:
+    reader = QImageReader(path)
+    reader.setAutoTransform(True)
+    size = reader.size()
+    if size.isValid():
+        size.scale(96, 96, Qt.AspectRatioMode.KeepAspectRatio)
+        reader.setScaledSize(size)
+    return QPixmap.fromImage(reader.read())
 
 
 class StagedItem:
@@ -38,7 +49,7 @@ class DropShelfManager(QObject):
         self.staged_items: list[StagedItem] = []
         self.pinned_apps: list[str] = []
         self._icon_provider = QFileIconProvider()
-        self._state_file = Path(os.path.expanduser("~/.poppy/shelf_state.json"))
+        self._state_file = data_path("shelf_state.json")
         self._load_state()
 
     def _save_state(self):
@@ -48,8 +59,7 @@ class DropShelfManager(QObject):
                 "staged_paths": [item.path for item in self.staged_items if os.path.exists(item.path)],
                 "pinned_apps": [p for p in self.pinned_apps if os.path.exists(p)]
             }
-            with open(self._state_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+            write_json(self._state_file, data)
         except Exception:
             pass
 
@@ -68,7 +78,7 @@ class DropShelfManager(QObject):
                 if os.path.exists(p) and not any(it.path == p for it in self.staged_items):
                     item = StagedItem(p)
                     if item.is_image:
-                        item.thumbnail = QPixmap(p)
+                        item.thumbnail = load_thumbnail(p)
                     item.icon = self._icon_provider.icon(QFileInfo(p))
                     self.staged_items.append(item)
         except Exception:
@@ -78,6 +88,7 @@ class DropShelfManager(QObject):
         """Stage new files/directories into the shelf or pin apps."""
         changed = False
         for p in file_paths:
+            p = os.path.abspath(p)
             if not os.path.exists(p):
                 continue
             # Check if it's an executable/shortcut to prompt pinning or pin automatically
@@ -89,7 +100,7 @@ class DropShelfManager(QObject):
                 item = StagedItem(p)
                 # Cache thumbnail if image, else system file icon
                 if item.is_image:
-                    item.thumbnail = QPixmap(p)
+                    item.thumbnail = load_thumbnail(p)
                 item.icon = self._icon_provider.icon(QFileInfo(p))
                 self.staged_items.append(item)
                 changed = True

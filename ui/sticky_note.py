@@ -6,6 +6,9 @@ pin-to-top toggle, multi-color themes (Charcoal, Pastel Yellow, Mint, Lavender, 
 and persistent on-screen presence across desktops.
 """
 
+import json
+import uuid
+
 from PySide6.QtCore import Qt, QPoint, Signal, QSize, QTimer, QRectF
 from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QGuiApplication
 from PySide6.QtWidgets import (
@@ -13,17 +16,19 @@ from PySide6.QtWidgets import (
     QSizeGrip, QFrame, QApplication
 )
 
+from poppy.ui.theme import set_widget_style
 from poppy.ui.components import IconButton
 from poppy.ui.icons import Icons
+from poppy.core.storage import data_dir, write_json
 
 NOTE_THEMES = {
     "charcoal": {
         "name": "Charcoal",
-        "bg": "#181e2a",
-        "header_bg": "#131822",
+        "bg": "#1c201e",
+        "header_bg": "#1c201e",
         "text": "#f1f5f9",
         "border": "rgba(255, 255, 255, 0.12)",
-        "accent": "#6366f1",
+        "accent": "#476351",
         "btn_hover": "rgba(255, 255, 255, 0.1)",
     },
     "yellow": {
@@ -73,7 +78,7 @@ class NoteTitleBar(QWidget):
     def __init__(self, parent_note):
         super().__init__(parent_note)
         self.note = parent_note
-        self.setFixedHeight(32)
+        self.setFixedHeight(38)
         self._init_ui()
 
     def _init_ui(self):
@@ -84,7 +89,7 @@ class NoteTitleBar(QWidget):
         # Title Label (transparent for mouse events so dragging works anywhere on title bar)
         self.lbl_title = QLabel("Note", self)
         self.lbl_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.lbl_title.setStyleSheet("font-size: 11px; font-weight: 600; background: transparent; border: none;")
+        set_widget_style(self.lbl_title, "font-size: 11px; font-weight: 600; background: transparent; border: none;")
         layout.addWidget(self.lbl_title)
 
         layout.addStretch()
@@ -126,8 +131,17 @@ class FloatingStickyNote(QWidget):
     """
     closed = Signal(object)
 
-    def __init__(self, initial_text: str = "", theme_name: str = "charcoal", parent=None):
+    def __init__(self, initial_text: str = "", theme_name: str = "charcoal", parent=None, note_id: str = None):
         super().__init__(None)  # Top-level window independent of parent
+        if note_id is not None and (len(note_id) != 32 or any(c not in "0123456789abcdef" for c in note_id)):
+            raise ValueError("Invalid note identity")
+        self.note_id = note_id or uuid.uuid4().hex
+        self._note_file = data_dir() / "notes" / f"{self.note_id}.json"
+        saved = {}
+        if self._note_file.exists():
+            saved = json.loads(self._note_file.read_text(encoding="utf-8"))
+            initial_text = saved.get("text", initial_text)
+            theme_name = saved.get("theme", theme_name)
         self.is_pinned = True
         self._current_theme_key = theme_name if theme_name in NOTE_THEMES else "charcoal"
 
@@ -138,11 +152,54 @@ class FloatingStickyNote(QWidget):
             Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMinimumSize(200, 160)
-        self.resize(270, 230)
+        self.resize(320, 280)
 
         self._init_ui(initial_text)
         self._apply_theme()
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(600)
+        self._save_timer.timeout.connect(self.save_note)
+        self.editor.textChanged.connect(self._save_timer.start)
+        self._save_timer.start()
+        geometry = saved.get("geometry")
+        if isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry):
+            self.resize(max(200, geometry[2]), max(160, geometry[3]))
+            screen = QGuiApplication.screenAt(QPoint(geometry[0], geometry[1]))
+            if screen:
+                self.move(geometry[0], geometry[1])
+
+    @staticmethod
+    def saved_notes():
+        notes = []
+        for path in (data_dir() / "notes").glob("*.json"):
+            if len(path.stem) != 32 or any(c not in "0123456789abcdef" for c in path.stem):
+                continue
+            try:
+                note = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(note, dict) and isinstance(note.get("text"), str):
+                    note["id"] = path.stem
+                    notes.append(note)
+            except (OSError, ValueError):
+                continue
+        return notes
+
+    def save_note(self, is_open: bool = True):
+        try:
+            write_json(self._note_file, {
+                "id": self.note_id, "text": self.editor.toPlainText(),
+                "theme": self._current_theme_key, "open": is_open,
+                "geometry": list(self.geometry().getRect()),
+            })
+            self._update_footer_stats()
+            self.lbl_stats.setToolTip("")
+            return True
+        except OSError as error:
+            self.lbl_stats.setText("Not saved. Close and retry to save.")
+            self.lbl_stats.setToolTip(str(error))
+            return False
 
     def _init_ui(self, initial_text: str):
         # Outer layout
@@ -163,7 +220,9 @@ class FloatingStickyNote(QWidget):
 
         # 2. Text Editor
         self.editor = QTextEdit(self)
-        self.editor.setPlaceholderText("Type quick thought or paste text...")
+        self.editor.setPlaceholderText("Write a note…")
+        self.editor.setAcceptRichText(False)
+        self.editor.setAccessibleName("Floating note editor")
         self.editor.setPlainText(initial_text)
         self.editor.textChanged.connect(self._update_footer_stats)
         card_layout.addWidget(self.editor, stretch=1)
@@ -174,7 +233,7 @@ class FloatingStickyNote(QWidget):
         footer.setSpacing(6)
 
         self.lbl_stats = QLabel("0 words", self)
-        self.lbl_stats.setStyleSheet("font-size: 9.5px; opacity: 0.7; background: transparent; border: none;")
+        set_widget_style(self.lbl_stats, "font-size: 9.5px; opacity: 0.7; background: transparent; border: none;")
         footer.addWidget(self.lbl_stats)
 
         footer.addStretch()
@@ -182,7 +241,7 @@ class FloatingStickyNote(QWidget):
         # Native corner resize grip
         self.size_grip = QSizeGrip(self)
         self.size_grip.setFixedSize(16, 16)
-        self.size_grip.setStyleSheet("background: transparent;")
+        set_widget_style(self.size_grip, "background: transparent;")
         footer.addWidget(self.size_grip, 0, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
         card_layout.addLayout(footer)
@@ -199,7 +258,7 @@ class FloatingStickyNote(QWidget):
         btn_hover = theme["btn_hover"]
 
         # Container styling
-        self.container.setStyleSheet(f"""
+        set_widget_style(self.container, f"""
             QFrame#noteContainer {{
                 background-color: {bg_color};
                 border: 1px solid {border_color};
@@ -208,12 +267,12 @@ class FloatingStickyNote(QWidget):
         """)
 
         # Title bar styling
-        self.title_bar.setStyleSheet(f"""
+        set_widget_style(self.title_bar, f"""
             QWidget {{
                 background-color: {hdr_bg};
                 border-top-left-radius: 11px;
                 border-top-right-radius: 11px;
-                border-bottom: 1px solid {border_color};
+                border-bottom: none;
             }}
             QPushButton {{
                 background-color: transparent;
@@ -227,28 +286,28 @@ class FloatingStickyNote(QWidget):
                 background-color: {btn_hover};
             }}
         """)
-        self.title_bar.lbl_title.setStyleSheet(f"color: {text_color}; font-size: 11px; font-weight: 600; background: transparent; border: none;")
+        set_widget_style(self.title_bar.lbl_title, f"color: {text_color}; font-size: 11px; font-weight: 600; background: transparent; border: none;")
 
         # Editor styling
-        self.editor.setStyleSheet(f"""
+        set_widget_style(self.editor, f"""
             QTextEdit {{
                 background-color: transparent;
                 border: none;
                 color: {text_color};
-                font-family: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, sans-serif;
-                font-size: 12px;
-                line-height: 1.45;
-                padding: 8px 10px;
+                font-family: 'Segoe UI';
+                font-size: 14px;
+                padding: 12px 14px;
                 selection-background-color: {theme['accent']};
             }}
         """)
-        self.lbl_stats.setStyleSheet(f"color: {text_color}; font-size: 9.5px; opacity: 0.65; background: transparent; border: none;")
+        set_widget_style(self.lbl_stats, f"color: {text_color}; font-size: 9.5px; opacity: 0.65; background: transparent; border: none;")
 
     def cycle_theme(self):
         keys = list(NOTE_THEMES.keys())
         idx = (keys.index(self._current_theme_key) + 1) % len(keys)
         self._current_theme_key = keys[idx]
         self._apply_theme()
+        self._save_timer.start()
 
     def toggle_always_on_top(self):
         self.is_pinned = not self.is_pinned
@@ -288,6 +347,10 @@ class FloatingStickyNote(QWidget):
         self.lbl_stats.setText(f"{words} words · {chars} chars")
 
     def closeEvent(self, event):
+        self._save_timer.stop()
+        if not self.save_note(is_open=getattr(self, "_closing_with_app", False)):
+            event.ignore()
+            return
         self.closed.emit(self)
         super().closeEvent(event)
 
@@ -452,7 +515,7 @@ class FloatingStickyImage(QWidget):
 
         self.container = QFrame(self)
         self.container.setObjectName("imageContainer")
-        self.container.setStyleSheet("""
+        set_widget_style(self.container, """
             QFrame#imageContainer {
                 background-color: #12151c;
                 border: 1px solid rgba(255, 255, 255, 0.15);
@@ -466,7 +529,7 @@ class FloatingStickyImage(QWidget):
         # Header Bar
         self.header = QWidget(self)
         self.header.setFixedHeight(30)
-        self.header.setStyleSheet("""
+        set_widget_style(self.header, """
             QWidget {
                 background: #181d27;
                 border-top-left-radius: 11px;
@@ -495,7 +558,7 @@ class FloatingStickyImage(QWidget):
 
         lbl = QLabel("Pinned Screenshot", self)
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #e2e8f0; background: transparent; border: none;")
+        set_widget_style(lbl, "font-size: 11px; font-weight: 600; color: #e2e8f0; background: transparent; border: none;")
         h_layout.addWidget(lbl)
         h_layout.addStretch()
 
@@ -535,13 +598,13 @@ class FloatingStickyImage(QWidget):
         footer.setContentsMargins(10, 0, 4, 4)
         orig_dims = f"{self._pixmap.width()}×{self._pixmap.height()}" if not self._pixmap.isNull() else ""
         self.lbl_info = QLabel(f"{orig_dims} · 100%", self)
-        self.lbl_info.setStyleSheet("font-size: 9px; color: #64748b; background: transparent; border: none;")
+        set_widget_style(self.lbl_info, "font-size: 9px; color: #64748b; background: transparent; border: none;")
         footer.addWidget(self.lbl_info)
         footer.addStretch()
 
         self.size_grip = QSizeGrip(self)
         self.size_grip.setFixedSize(14, 14)
-        self.size_grip.setStyleSheet("background: transparent;")
+        set_widget_style(self.size_grip, "background: transparent;")
         footer.addWidget(self.size_grip)
         c_layout.addLayout(footer)
 

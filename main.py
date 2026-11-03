@@ -5,58 +5,51 @@ Main application entry point and lifecycle manager.
 
 import sys
 import os
-import time
 import json
 import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
 
 # Ensure poppy package is importable
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir.parent))
 
 from poppy.core.window import DynamicNotchWindow
+from poppy.ui.theme import set_widget_style
 from poppy.ui.styles import get_stylesheet, DEFAULT_THEME
-
-
-def _enforce_single_instance():
-    """Ensure only one Poppy instance is running; replace any existing stale background process."""
-    pid_file = current_dir / ".poppy.pid"
-    if pid_file.exists():
-        try:
-            old_pid = int(pid_file.read_text(encoding="utf-8").strip())
-            if old_pid != os.getpid():
-                import ctypes
-                PROCESS_TERMINATE = 0x0001
-                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, old_pid)
-                if handle:
-                    ctypes.windll.kernel32.TerminateProcess(handle, 0)
-                    ctypes.windll.kernel32.CloseHandle(handle)
-                    time.sleep(0.3)
-        except Exception:
-            pass
-    try:
-        pid_file.write_text(str(os.getpid()), encoding="utf-8")
-    except Exception:
-        pass
+from poppy.core.instance import SingleInstance
+from poppy.core.storage import data_path, write_json
 
 
 def load_config() -> dict:
-    config_file = current_dir / "config.json"
+    config_file = data_path("config.json")
+    if not config_file.exists():
+        config_file = current_dir / "config.json"
     if config_file.exists():
         try:
             with open(config_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+                if not isinstance(config, dict):
+                    raise ValueError("Settings must contain a JSON object")
+                if config_file != data_path("config.json"):
+                    try:
+                        write_json(data_path("config.json"), config)
+                    except OSError as error:
+                        print(f"[Poppy] Could not copy legacy settings: {error}")
+                return config
         except Exception as e:
             print(f"[Poppy] Config load warning: {e}")
     return {}
 
 
 def create_tray_icon() -> QIcon:
-    """Generate a clean vector-style tray icon programmatically."""
+    """Load Poppy's flower avatar, retaining a fallback for missing resources."""
+    icon = QIcon(str(current_dir / "assets" / "branding" / "poppy-avatar.png"))
+    if not icon.isNull():
+        return icon
     pix = QPixmap(32, 32)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
@@ -78,28 +71,41 @@ def create_tray_icon() -> QIcon:
 
 
 def main():
-    _enforce_single_instance()
-
     # Windows DPI awareness & rendering hints
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
     app = QApplication(sys.argv)
     app.setApplicationName("Poppy")
     app.setOrganizationName("PoppyNotch")
+    app.setWindowIcon(create_tray_icon())
     app.setQuitOnLastWindowClosed(False)  # Keep running in tray
+    try:
+        instance = SingleInstance(app)
+        if not instance.acquire():
+            return
+    except OSError as error:
+        QMessageBox.warning(None, "Poppy could not start", str(error))
+        return
+    app.aboutToQuit.connect(instance.close)
 
     # Load persistent settings
     config = load_config()
     active_theme = config.get("appearance", {}).get("theme", DEFAULT_THEME)
-    app.setStyleSheet(get_stylesheet(active_theme))
+    set_widget_style(app, get_stylesheet(active_theme))
 
     # Create & display dynamic notch window
     notch = DynamicNotchWindow(config=config)
     notch.show()
+    def activate_notch():
+        notch.show()
+        notch.raise_()
+        notch.activateWindow()
+    instance.activation_requested.connect(activate_notch)
 
     # System Tray Icon Setup
     tray_icon = QSystemTrayIcon(create_tray_icon(), app)
     tray_icon.setToolTip("Poppy - Dynamic Notch & Productivity Island")
+    notch.message_requested.connect(lambda title, message: tray_icon.showMessage(title, message))
 
     tray_menu = QMenu()
     act_show = QAction("Show Notch", tray_menu)
@@ -119,22 +125,19 @@ def main():
     tray_menu.addAction(act_settings)
 
     def restart_app():
+        if not notch.close():
+            return
         tray_icon.hide()
-        notch.close()
+        instance.close()
         main_script = str(Path(__file__).resolve())
-        args = [sys.executable, main_script] + sys.argv[1:]
+        args = [sys.executable] + ([] if getattr(sys, "frozen", False) else [main_script]) + sys.argv[1:]
         subprocess.Popen(args)
         app.quit()
 
     def exit_app():
+        if not notch.close():
+            return
         tray_icon.hide()
-        notch.close()
-        pid_file = current_dir / ".poppy.pid"
-        if pid_file.exists():
-            try:
-                pid_file.unlink()
-            except Exception:
-                pass
         app.quit()
 
     tray_menu.addSeparator()

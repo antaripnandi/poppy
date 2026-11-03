@@ -14,6 +14,7 @@ from pathlib import Path
 import ctypes
 from ctypes import wintypes
 from PySide6.QtCore import QObject, Signal, QTimer
+from poppy.core.storage import data_path, write_json
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -29,7 +30,7 @@ def _get_idle_seconds() -> float:
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
         if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
-            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            millis = (ctypes.windll.kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF
             return max(0.0, millis / 1000.0)
     except Exception:
         pass
@@ -41,6 +42,10 @@ def _get_active_app_name() -> str:
     try:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
 
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
@@ -111,7 +116,7 @@ class ScreenTimeManager(QObject):
     def __init__(self, config: dict = None, parent=None):
         super().__init__(parent)
         self.config = config or {}
-        self._cache_file = Path(os.path.expanduser("~/.poppy/screentime.json"))
+        self._cache_file = data_path("screentime.json")
 
         self._today_str = datetime.date.today().isoformat()
         self._today_seconds = 0
@@ -129,10 +134,16 @@ class ScreenTimeManager(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_tick)
-        self._timer.start()
+        if self.is_enabled():
+            self._timer.start()
 
     def update_config(self, config: dict):
+        self._save_data()
         self.config = config or {}
+        if self.is_enabled():
+            self._timer.start()
+        else:
+            self._timer.stop()
 
     def _cfg(self) -> dict:
         return self.config.get("screentime", {})
@@ -207,7 +218,7 @@ class ScreenTimeManager(QObject):
                 interval_min = int(self._cfg().get("break_interval_minutes", 60))
                 if interval_min > 0:
                     streak_min = self._continuous_seconds // 60
-                    if streak_min >= interval_min and streak_min > self._last_break_alert_minute:
+                    if streak_min >= self._last_break_alert_minute + interval_min:
                         self._last_break_alert_minute = streak_min
                         self.break_reminder_triggered.emit(streak_min)
 
@@ -270,8 +281,11 @@ class ScreenTimeManager(QObject):
                 for k in sorted_keys[:-14]:
                     del data[k]
 
-            with open(self._cache_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            write_json(self._cache_file, data)
         except Exception:
             pass
+
+    def close(self):
+        self._timer.stop()
+        self._save_data()
 

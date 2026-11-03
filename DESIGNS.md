@@ -1,108 +1,56 @@
-# Poppy Design System & Aesthetic Guide (`DESIGNS.md`)
-> Complete design specification, tokens, component anatomy, and layout principles for Poppy.
+# Poppy design guide
 
----
+Poppy is a small daily utility. Keep controls readable, show real state, and leave room for the user's work.
 
-## 1. Visual Philosophy: Option 1 (Apple Studio Bento)
+## References and their use
 
-Poppy rejects AI slop—garish gradient borders, saturated blue primary blocks, cluttered badges, and boxy Windows 95 scrollbars. Instead, it follows a calm, high-craft aesthetic inspired by:
-- **macOS Control Center & Dynamic Island:** Deep obsidian glass, tactile capsule sliders, and organic physics.
-- **Apple Studio Bento Grid:** Modular rounded cards (`CardFrame`) grouping telemetry, media, scratchpads, and drop staging with proportional hierarchy.
-- **React Bits Modern Craft:** Rubber segment animated tab navigation (`<RubberSegment />`) with dilation stretch and spring squash.
-- **Native Spotify Desktop:** Clean synchronized lyrics with bold high-contrast active typography, smooth auto-centering, and click-to-seek playback.
+- Keep Poppy's desktop dashboard and separate player/lyrics layout. The Android reference is a source of hierarchy ideas, not a layout to copy. Do not invent playlists, recommendations, favorites or unsupported controls.
+- [MediaMate](https://wouter01.github.io/MediaMate/) informs the compact media surface and system controls.
+- [NotchNook Classic](https://getnotchnook.com/classic/press/) informs temporary file staging and dragging files into another app.
+- [Raycast Notes](https://www.raycast.com/core-features/notes) informs the quiet editor and floating notes.
 
----
+## Navigation and sizing
 
-## 2. Design Tokens & Color Palette
+- Home is the default front page. Every enabled page has a directly visible tab; do not introduce a More overflow menu.
+- Keep-open, keep-awake, screen-capture exclusion, float-tab and annotation are direct buttons below the content. Settings stays in the header.
+- Default expanded size: 960 × 560 logical pixels. Respect custom dimensions. Earlier untouched defaults migrate once through `normalize_appearance`.
+- Clamp sizes to the display. Home must fit all four cards without an outer scroll area. Size the window to the loaded cards, including player buttons and shelf preview; tighten vertical padding on shorter screens. Music keeps player controls outside a dedicated lyrics viewport. Other pages keep static controls outside scrollable collections.
+- Use a short direct tab transition. Do not restore rubber stretching or decorative spring keyframes.
+- Hover preview uses a compact 420 × 72 player: 44px rounded artwork, one title row, a quieter artist/source row and tightly grouped previous/play/next controls. Keep the source selector out of the title. Elide by available pixels with full metadata in tooltips. Artwork and metadata open Music; transport buttons act without opening the drawer. Debounce hover entry, retain a leave grace period and use a short fade that stops cleanly when the state changes.
 
-### Surfaces & Backgrounds
-| Token | Value | Description |
-|---|---|---|
-| `bg-root` | `#07080c` to `#090d16` | Deep obsidian backdrop for notch and settings |
-| `card-surface` | `rgba(255, 255, 255, 0.032)` | Bento card background fill |
-| `card-border` | `1px solid rgba(255, 255, 255, 0.065)` | Whisper-thin card boundary |
-| `card-hover-bg` | `rgba(255, 255, 255, 0.045)` | Subtle interaction illumination |
-| `card-hover-border` | `1px solid rgba(255, 255, 255, 0.11)` | Interactive card focus |
-| `card-radius` | `16px` | Standard Bento corner radius |
+## Visual treatment
 
-### Typography Hierarchy
-| Role | Size / Weight | Color | Font Family |
-|---|---|---|---|
-| Active Lyric | `18px` / ExtraBold (800) | `#ffffff` | Segoe UI Variable / Segoe UI / SF Pro |
-| Inactive Lyric | `15px` / DemiBold (700) | `rgba(255, 255, 255, 0.35)` | Segoe UI Variable / Segoe UI / SF Pro |
-| Lyric Hover | `15px` / DemiBold (700) | `rgba(255, 255, 255, 0.85)` | Segoe UI Variable / Segoe UI / SF Pro |
-| Header / Title | `16px` / Bold (700) | `#f8fafc` | Segoe UI Variable Display |
-| Section Label | `12px` / SemiBold (600) | `#f1f5f9` | Segoe UI Variable Text |
-| Secondary / Subtitle | `11px` / Medium (500) | `#94a3b8` | Segoe UI Variable Text |
-| Caption / Telemetry | `10px` / SemiBold (600) | `#64748b` | Segoe UI Variable Text |
+- Flat dark surfaces, muted secondary text and restrained borders. Avoid ornamental badges, nested cards and large uppercase headings.
+- Segoe UI: 12px controls, 13px file titles, 14px notes, 20px track title. Keep long text bounded and provide full-text tooltips where it is truncated.
+- Home shows 48px artwork with the track title and artist. The dedicated Music page uses larger artwork and a separate lyrics column. Optional artwork tint adapts to Light and Dark modes.
+- Music centers artwork and metadata in vertical player layouts; Flat and Paper retain their horizontal identity. Center playback controls above a separate volume row. Use a borderless player surface, native Segoe UI typography, slim neutral timelines and quiet source buttons. Preserve keyboard focus indicators, seek behavior and full metadata in tooltips.
+- Use normal desktop transport buttons, elapsed/total timeline, volume control and an explicit Lyrics toggle. Avoid a phone widget silhouette.
+- Player buttons switch actual sessions; all sessions remain accessible through the player selector.
+- Keyboard focus must remain visible. Icon controls need accessible names and tooltips. Unsupported actions stay hidden or disabled.
 
-### Accent Lighting
-- **Default Accent:** Apple Blue `#0a84ff` (or selected theme preset: Midnight `#6e9bff`, Aurora `#3ddc97`, Ember `#ff9f0a`, Lime `#b4e61e`, Rose `#ff6b9a`).
-- **Pill Fills:** `rgba(accent, 0.20)` to `rgba(accent, 0.25)`.
-- **Pill Borders:** `rgba(accent, 0.45)` to `rgba(accent, 0.50)`.
-- **Text Highlights:** Full saturation `#0a84ff` or `#ffffff`.
+## Settings
 
----
+- No emoji in labels, descriptions or navigation. Use plain names and explain actual behavior.
+- Preserve existing settings and all seven original themes. Charcoal, Sage and Slate are additional flat, muted presets.
+- Appearance separates six layout themes (Classic / Minimal / Soft / Flat / Paper / Instrument), mode (Dark / Light / Follow Windows) and color palette. Keep style, display, dimensions, corner radius and offset controls. Music controls artwork tint and session buttons.
+- Layout themes change arrangements, not just color: Classic balances columns; Minimal uses a narrow summary/player column, smaller artwork and flat surfaces; Soft places notes beside the clock and uses rounded cards. Music always keeps the player on the left and lyrics on the right across all themes. Apply surface treatment and page spacing across the panel. Show a small Home arrangement preview in Settings because the main panel collapses while Settings is open.
+- Flat borrows alignment and low visual noise from Linear: divider lines, underline tabs and thin controls. Paper borrows Things' reading-focused treatment: an open page, serif clock, text actions and plain editors. Instrument borrows Ableton's functional controls: header strips, fixed-width readings and segmented meters. These designs change controls and surfaces, with reversible authored styles; do not reduce them to card reordering.
+- The Home preview is an arrangement editor: drag sections with a visible preview and drop target, or move the focused section with Alt + arrows. Keep all four sections present, retain a separate order per design, and reset only the selected design. Preview live, save on Done, cancel on close. Rearranging must preserve the actual editors, playback and shelf content.
+- Geometry previews are coalesced; they must not reapply global styles or rebuild Home. Release applies the final slider value. Wheel input over Settings fields scrolls the page without modifying values; numeric entries accept exact values.
+- Appearance previews live. Done saves atomically; closing cancels unsaved changes and restores the saved appearance. Preserve unknown configuration keys.
+- Wrap Settings descriptions and allow vertical scrolling. Use keyboard-accessible selectors. Preserve Qt pseudo-selectors when compiling Light styles and retain authored source styles for reversible mode changes. Artwork and user content must remain intact.
 
-## 3. Component Architecture
+## Files and notes
 
-### A. React Bits `<RubberSegment />` (AnimatedTabStrip)
-Native PySide6 implementation of React Bits segmented control:
-- **Track Well:** Dark rounded pill (`rgba(0, 0, 0, 0.45)`, border `1px solid rgba(255, 255, 255, 0.07)`, radius `14px`, height `32px`).
-- **Indicator Thumb:** Rubber capsule positioned directly beneath active button (`rgba(accent, 0.25)`, border `1px solid rgba(accent, 0.5)`, radius `11px`).
-- **Spring & Rubber Physics (240ms OutCubic):**
-  - Moving forward (left to right): Stretches leading edge forward across both slots (`+4px` dilation) at keyframe `0.38`, squashes into target (`+3px`) at `0.78`, and relaxes at `1.0`.
-  - Moving backward (right to left): Stretches trailing edge backwards across slots (`-4px` dilation) before squashing and relaxing.
+- Shelf rows use a preview, filename, size and relevant actions. Pin applies to images; Open applies to other files. Copy works for both. Removing an entry keeps the original file.
+- Notes use a spacious plain-text editor. Floating copy keeps the source text and creates a separately saved note. Saved notes remain reopenable.
+- Keep failure messages visible. Do not replace reliable saves with decorative status animations.
 
-### B. macOS Control Center Capsule Sliders (`CapsuleSlider`)
-Thick tactile sliders for volume and brightness:
-- **Dimensions:** Fixed height `30px`, border radius `15px`.
-- **Track Well:** `rgba(255, 255, 255, 0.08)` with subtle inner border.
-- **Fluid Fill:** Symmetrically rounded pill fill extending from 0 to current percentage in theme accent.
-- **Embedded Glyphs:** Icon (`Icons.VOLUME_HIGH`, `Icons.BRIGHTNESS`) painted directly inside the pill on the left.
-- **Numeric Readout:** Tabular readout (`100%`) aligned right.
-- **Interaction:** Draggable, clickable anywhere along the capsule track with instantaneous smooth visual response.
+## Rendering and verification
 
-### C. Bento 2-Card Studio Music View (`MusicTabView`)
-Divided into two balanced obsidian cards:
-1. **Left Bento Card (Player & Studio Controls):**
-   - **Artwork:** `144x144` square with 12px corner radius and smooth scaling.
-   - **Track Metadata:** Clean title (15px bold), artist (12px secondary).
-   - **Visualizer Source Pill:** Embedded capsule pill with active source name (`Spotify`, `Brave`) and 4-bar live audio equalizer (`AudioVisualizerBars`).
-   - **Scrubber:** Slimline timeline slider with elapsed timestamp on left and negative remaining timestamp (`-03:59`) on right.
-   - **Transport Deck:** Shuffle, Previous, 36px Accent Circular Play/Pause, Next, Repeat.
-2. **Right Bento Card (Expansive Spotify Synced Lyrics):**
-   - **Header:** Quiet "Lyrics" title label without any noisy "SYNCED" badge.
-   - **Auto-Scrolling:** Vertically centered active line with smooth easing animation (`OutCubic`).
-   - **Spacing Padding:** 60px top margin and 100px bottom margin so both opening and closing song verses can rest cleanly in the center of the viewport.
-   - **Interactive Scrubbing:** Clicking any lyric line jumps playback immediately to that timestamp.
-   - **Zero Baseline Clipping:** Layout uses `SetMinimumSize` constraint and `setMinimumHeight` rows so glyphs never get sliced.
-
-### D. Digital Wellbeing & Screen Time
-- **Home Tab Pill:** Minimalist 24px capsule on the Home clock card displaying today's active screen duration (`54m`), current active app (`• Python`), and a 2px micro-progress bar indicating progress toward daily goal.
-- **Settings Screen Time Page:**
-  - **Hero Bento Card:** Large typography readout (`54m`), Active Streak chip (`Active Streak: 22m`), and Goal Progress chip (`Goal: 15%`).
-  - **Controls Bento Card:** Smooth toggle switches for usage tracking, in-notch pill visibility, per-app breakdown, and AFK idle timeout dropdown.
-  - **Daily Goal Bento Card:** Capsule slider for daily goal hours (1h–14h) with alert toggles.
-
-### E. Settings Window ("Make it yours")
-- **Geometry:** `840x580` (minimum `780x520`) preventing squished controls.
-- **Sidebar:** Clean navigation list with Fluent icons (`🎨 Appearance`, `🗂️ Tabs Manager`, `⚡ Behavior & Gestures`, `🔔 Notifications`, `⏳ Screen Time`, `🎵 Media & Lyrics`, `⛅ Weather & Location`, `⏱️ Pomodoro`, `🎮 Discord RPC`, `📊 Hardware HUD`, `⚙️ About & System`) and frosted pill active indicators.
-- **Scroll Container:** Every page uses `_make_scroll_area()` with hidden horizontal scrollbar and `QScrollBar::corner { background: transparent; border: none; }` eliminating the checkered corner artifact.
-- **Actions:** Minimal frosted `Done` pill button (`_save_and_close`) replacing the harsh blue block button.
-
----
-
-## 4. Layout & Spacing Rules
-
-1. **Card Margins & Padding:**
-   - Bento Cards: `14px` content margins, `10px` spacing between cards.
-   - Card Corner Radius: Always `16px`.
-2. **Notch Drawer Dimensions:**
-   - Standard Open Width: `960px`.
-   - Standard Open Height: `480px`.
-   - Header Bar Height: `36px` containing `<RubberSegment />` and right-side system capsule.
-3. **Animations:**
-   - State Transitions: `320ms` with `OutCubic` or `OutQuint` easing.
-   - Hover Grace Period: `400ms` leave timer to prevent accidental collapses when mousing between controls.
-   - Notch Center Pop: Symmetrically scales width from horizontal screen center.
+- Collection scroll areas enforce their minimum content height, support pixel and wheel-notch input, and avoid horizontal overflow. Recent conversions, agenda, clipboard and shelf scroll within their lists.
+- Preserve `LyricLineWidget` and `SpotifyLyricsWidget` interfaces and minimum lyric row heights. Lyrics layouts use `SetMinimumSize` so scroll areas do not compress baselines.
+- Qt stylesheets do not support CSS `line-height`. Use real font metrics and adequate layout space.
+- Hidden stacked pages must not impose their minimum size on the window. Retain the rounded native click-through mask. No detached telemetry labels may be shown over the closed pill. Battery belongs only on Home.
+- Preview with Windows fonts loaded and an isolated data directory. Check long titles, multiple players, lyrics, an empty and populated shelf, each Settings page and display scaling.
+- Screen drawing must paint a nonzero-alpha input layer: Windows passes mouse input through fully transparent pixels. Keep the desktop visible, use the selected monitor's logical geometry, collapse the panel before drawing, and provide Escape and a visible close button. Closing must release the overlay and permit a clean reopen.

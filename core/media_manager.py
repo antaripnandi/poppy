@@ -22,13 +22,13 @@ def format_source_name(app_id: str, title: str = "") -> str:
     elif "applemusic" in app_lower:
         return "Apple Music"
     elif "brave" in app_lower:
-        if "music" in title_lower or "music.youtube" in title_lower:
+        if "youtube music" in title_lower or "music.youtube" in title_lower:
             return "YouTube Music"
         elif "youtube" in title_lower:
             return "YouTube"
         return "Brave"
     elif "chrome" in app_lower:
-        if "music" in title_lower or "music.youtube" in title_lower:
+        if "youtube music" in title_lower or "music.youtube" in title_lower:
             return "YouTube Music"
         elif "youtube" in title_lower:
             return "YouTube"
@@ -101,7 +101,7 @@ class MediaManager(QObject):
         self._thread = None
         self._running = False
         self._session_manager = None
-        self._thumb_cache: OrderedDict = OrderedDict()  # (app_id, title) -> bytes
+        self._thumb_cache: OrderedDict = OrderedDict()  # (app_id, title, artist, album) -> bytes
         self._max_cache_size = 30
         self._last_state_hash = None
 
@@ -173,12 +173,12 @@ class MediaManager(QObject):
                             pos_sec = min(dur_sec, raw_pos + elapsed)
                         else:
                             pos_sec = raw_pos
-                        can_seek = True
+                        can_seek = bool(pinfo and pinfo.controls.is_playback_position_enabled)
                 except Exception:
                     pass
 
                 # Cache and load thumbnail with bounded LRU eviction
-                cache_key = (app_id, title)
+                cache_key = (app_id, title, artist, album)
                 thumb_bytes = self._thumb_cache.get(cache_key)
                 if thumb_bytes is None and props and props.thumbnail:
                     thumb_bytes = await self._read_stream(props.thumbnail)
@@ -188,7 +188,7 @@ class MediaManager(QObject):
                         self._thumb_cache[cache_key] = thumb_bytes
 
                 data = SessionData(
-                    index=idx,
+                    index=len(new_sessions),
                     session_obj=s,
                     app_id=app_id,
                     title=title,
@@ -233,6 +233,9 @@ class MediaManager(QObject):
                 return
 
             # Clamp selected index
+            selected_app = self.sessions[self._selected_index].app_id if self.sessions and self._selected_index < len(self.sessions) else None
+            if selected_app:
+                self._selected_index = next((i for i, item in enumerate(new_sessions) if item.app_id == selected_app), self._selected_index)
             if self._selected_index >= len(new_sessions):
                 self._selected_index = 0
 
@@ -240,14 +243,7 @@ class MediaManager(QObject):
             curr = self.sessions[self._selected_index]
 
             # Compute fingerprint for track/session changes
-            state_fingerprint = (
-                len(self.sessions),
-                self._selected_index,
-                curr.app_id,
-                curr.title,
-                curr.artist,
-                curr.is_playing
-            )
+            state_fingerprint = self._fingerprint(curr)
 
             if state_fingerprint != self._last_state_hash:
                 self._last_state_hash = state_fingerprint
@@ -278,14 +274,20 @@ class MediaManager(QObject):
         """Switch active media session by index."""
         with self._lock:
             if 0 <= index < len(self.sessions):
+                if index == self._selected_index and self._last_state_hash == self._fingerprint(self.sessions[index]):
+                    return
                 self._selected_index = index
                 curr = self.sessions[index]
-                self._last_state_hash = None  # Force immediate refresh
+                self._last_state_hash = self._fingerprint(curr)
                 self.media_changed.emit(curr.to_dict())
                 self.playback_changed.emit(curr.is_playing)
                 self.timeline_changed.emit(curr.position_sec, curr.duration_sec, curr.is_playing)
                 sessions_summary = [s.to_dict() for s in self.sessions]
                 self.sessions_updated.emit(sessions_summary, self._selected_index)
+
+    def _fingerprint(self, session):
+        return (len(self.sessions), self._selected_index, session.app_id, session.title,
+                session.artist, session.album, session.thumbnail_bytes, session.is_playing, session.can_seek)
 
     def get_sessions(self) -> list[dict]:
         """Returns list of currently active media sessions as dicts."""
@@ -306,9 +308,7 @@ class MediaManager(QObject):
             pos = s.position_sec
             dur = s.duration_sec
             is_playing = s.is_playing
-            if is_playing and s.last_updated_ts > 0 and dur > 0:
-                elapsed = max(0.0, time.time() - s.last_updated_ts)
-                pos = min(dur, pos + elapsed)
+            # position_sec already includes extrapolation in _refresh_all_sessions.
             return (pos, dur, is_playing)
 
     def seek(self, position_seconds: float):
@@ -318,6 +318,9 @@ class MediaManager(QObject):
                 return
             target_session = self.sessions[self._selected_index].session_obj
             curr = self.sessions[self._selected_index]
+            if not curr.can_seek:
+                return
+            position_seconds = max(0.0, min(curr.duration_sec, position_seconds))
             curr.position_sec = position_seconds
             curr.last_updated_ts = time.time()
 
