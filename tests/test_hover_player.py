@@ -50,7 +50,7 @@ def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
     window.close()
 
 
-def test_playback_controls_do_not_open_drawer_but_artwork_does(audit_app, monkeypatch):
+def test_playback_controls_keep_peek_open_and_artwork_opens_home(audit_app, monkeypatch):
     calls = []
     monkeypatch.setattr(MediaManager, "toggle_play_pause", lambda self: calls.append("play"))
     monkeypatch.setattr(MediaManager, "next_track", lambda self: calls.append("next"))
@@ -68,7 +68,7 @@ def test_playback_controls_do_not_open_drawer_but_artwork_does(audit_app, monkey
     assert calls == ["play", "next", "previous"]
     QTest.mouseClick(window.peek_thumb, Qt.MouseButton.LeftButton)
     assert window.state == NotchState.EXPANDED
-    assert window.tab_stack.currentWidget() is window.tab_music
+    assert window.tab_stack.currentWidget() is window.tab_home
     assert not window._peek_opacity.isEnabled()
     window.close()
 
@@ -77,6 +77,7 @@ def test_hover_retries_during_collapse_and_does_not_dismiss_while_pressed(audit_
     import poppy.core.window as module
     window = DynamicNotchWindow()
     window.show()
+    window._on_media_changed({"title": "Track"})
     window._transition_to(NotchState.PEEK)
     settle(window, audit_app)
     window._collapse_to_pill()
@@ -95,4 +96,28 @@ def test_hover_retries_during_collapse_and_does_not_dismiss_while_pressed(audit_
     window._on_leave_timeout()
     assert window.state == NotchState.COLLAPSED
     assert not window._peek_opacity.isEnabled()
+    window.close()
+
+
+def test_idle_pill_shows_only_clock_before_and_after_a_media_session(audit_app, monkeypatch):
+    from poppy.core.window import QCursor
+    window = DynamicNotchWindow()
+    window.show()
+    monkeypatch.setattr(QCursor, "pos", lambda: window.geometry().center())
+    media_widgets = (window.coll_thumb, window.coll_visualizer, window.coll_status_dot)
+    assert all(widget.isHidden() for widget in media_widgets)
+    assert window.lbl_clock.isVisible()
+    window._on_hover_peek_timeout()
+    assert window.state == NotchState.COLLAPSED
+    window._on_media_changed({"title": "Video"})
+    assert all(widget.isVisible() for widget in media_widgets)
+    window._transition_to(NotchState.PEEK)
+    window._on_media_changed({"title": "No Media Playing"})
+    settle(window, audit_app)
+    assert window.state == NotchState.COLLAPSED
+    assert all(widget.isHidden() for widget in media_widgets)
+    assert window.lbl_clock.isVisible()
+    QTest.mouseClick(window.lbl_clock, Qt.MouseButton.LeftButton)
+    assert window.state == NotchState.EXPANDED
+    assert window.tab_stack.currentWidget() is window.tab_home
     window.close()

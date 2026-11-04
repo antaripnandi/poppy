@@ -865,7 +865,7 @@ class MusicTabView(QWidget):
         title_font.setPixelSize(18)
         title_font.setWeight(QFont.Weight.Medium)
         self.lbl_title.setFont(title_font)
-        set_widget_style(self.lbl_title, "color: #edf1f0;")
+        set_widget_style(self.lbl_title, "font-size: 18px; font-weight: 500; color: #edf1f0;")
         self.lbl_artist = QLabel("Play something in your music app")
         self.lbl_artist.setTextFormat(Qt.TextFormat.PlainText)
         self.lbl_artist.setAlignment(Qt.AlignmentFlag.AlignCenter)

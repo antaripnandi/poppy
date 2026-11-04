@@ -16,7 +16,7 @@ Poppy is a small daily utility. Keep controls readable, show real state, and lea
 - Default expanded size: 960 × 560 logical pixels. Respect custom dimensions. Earlier untouched defaults migrate once through `normalize_appearance`.
 - Clamp sizes to the display. Home must fit all four cards without an outer scroll area. Size the window to the loaded cards, including player buttons and shelf preview; tighten vertical padding on shorter screens. Music keeps player controls outside a dedicated lyrics viewport. Other pages keep static controls outside scrollable collections.
 - Use a short direct tab transition. Do not restore rubber stretching or decorative spring keyframes.
-- Hover preview uses a compact 420 × 72 player: 44px rounded artwork, one title row, a quieter artist/source row and tightly grouped previous/play/next controls. Keep the source selector out of the title. Elide by available pixels with full metadata in tooltips. Artwork and metadata open Music; transport buttons act without opening the drawer. Debounce hover entry, retain a leave grace period and use a short fade that stops cleanly when the state changes.
+- Hover preview uses a compact 420 × 72 player with 44px rounded artwork, one title row, a quieter artist/source row and tightly grouped previous/play/next controls. Keep the source selector out of the title. Elide by available pixels with full metadata in tooltips. Artwork and metadata open the default tab, which is Home unless configured otherwise. Transport buttons act without opening the drawer. Debounce hover entry, retain a leave grace period and use a short fade that stops cleanly when the state changes. With no media session, the idle pill shows the clock and skips the hover preview.
 
 ## Visual treatment
 

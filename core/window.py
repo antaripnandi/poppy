@@ -99,6 +99,7 @@ class DynamicNotchWindow(QWidget):
         super().__init__()
         self.config = config or {}
         self._current_media = {}
+        self._has_media = False
 
         # Frameless, Always on Top, Hidden from Alt+Tab / Taskbar
         self.setWindowFlags(
@@ -310,6 +311,8 @@ class DynamicNotchWindow(QWidget):
         set_widget_style(self.coll_status_dot, "color: rgba(255,255,255,0.25); font-size: 14px; background: transparent; border: none;")
         r_layout.addWidget(self.coll_status_dot)
         v_coll_layout.addWidget(right_box, 1)
+        for widget in (self.coll_thumb, self.coll_visualizer, self.coll_status_dot):
+            widget.hide()
 
         self.main_layout.addWidget(self.view_collapsed)
 
@@ -330,7 +333,7 @@ class DynamicNotchWindow(QWidget):
         self.peek_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.peek_thumb.setText(Icons.MUSIC)
         self.peek_thumb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.peek_thumb.setToolTip("Click to open Music")
+        self.peek_thumb.setToolTip("Open Poppy")
         v_peek_layout.addWidget(self.peek_thumb)
 
         # Metadata
@@ -391,10 +394,6 @@ class DynamicNotchWindow(QWidget):
             button.setEnabled(False)
             transport.addWidget(button)
         v_peek_layout.addLayout(transport)
-
-        self.btn_peek_expand = IconButton(Icons.TEAR_OFF, "Open Drawer", size=22, font_size=10, is_fluent=True)
-        self.btn_peek_expand.clicked.connect(lambda: self._transition_to(NotchState.EXPANDED, target_tab="Music"))
-        self.btn_peek_expand.hide()  # The artwork and metadata open Music directly.
 
         self.main_layout.addWidget(self.view_peek)
         self.view_peek.setVisible(False)
@@ -1368,6 +1367,11 @@ class DynamicNotchWindow(QWidget):
 
         # Fit metadata to actual pixels, leaving transport controls a stable width.
         available = title not in ("No Media Playing", "Unknown Title", "")
+        self._has_media = available
+        for widget in (self.coll_thumb, self.coll_visualizer, self.coll_status_dot):
+            widget.setVisible(available)
+        if not available and self.state == NotchState.PEEK:
+            self._collapse_to_pill()
         self.lbl_peek_title.setToolTip(title if available else "")
         self.lbl_peek_artist.setToolTip(artist if available else "")
         for button in (self.btn_peek_prev, self.btn_peek_play, self.btn_peek_next):
@@ -1805,7 +1809,7 @@ class DynamicNotchWindow(QWidget):
             super().enterEvent(event)
             return
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
-        if self.state == NotchState.COLLAPSED and auto_peek:
+        if self.state == NotchState.COLLAPSED and auto_peek and self._has_media:
             self._hover_peek_timer.start(140)
         super().enterEvent(event)
 
@@ -1826,7 +1830,7 @@ class DynamicNotchWindow(QWidget):
 
     def _on_hover_peek_timeout(self):
         from PySide6.QtGui import QCursor
-        if self.state == NotchState.COLLAPSED and self.geometry().contains(QCursor.pos()):
+        if self.state == NotchState.COLLAPSED and self._has_media and self.geometry().contains(QCursor.pos()):
             if self.anim.state() == QPropertyAnimation.State.Running:
                 self._hover_peek_timer.start(70)
                 return
@@ -1851,7 +1855,7 @@ class DynamicNotchWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.state in (NotchState.PEEK, NotchState.COLLAPSED):
                 self._leave_timer.stop()
-                self._transition_to(NotchState.EXPANDED, target_tab="Music" if self.state == NotchState.PEEK else None)
+                self._transition_to(NotchState.EXPANDED)
                 event.accept()
                 return
             elif self.state == NotchState.ISLAND:

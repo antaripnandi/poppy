@@ -18,7 +18,7 @@ Close any older running version from its tray menu before launching this update.
 ## Daily use
 
 - Click the pill to open the drawer. Escape closes it.
-- Hover opens compact media controls when hover peek is enabled.
+- Hover opens compact controls when a media session is available and hover peek is enabled. With no media, the idle pill shows the clock. Click the pill or hover preview to open Home by default. Use **Open to** in Settings to pick another starting tab.
 - Ctrl+1 through Ctrl+9 select header tabs while the drawer has keyboard focus.
 - Drop files on the pill to stage them on the shelf, then drag them into another application.
 - Start, pause, reset, or skip a focus timer. Skipped phases do not count as completed sprints.
