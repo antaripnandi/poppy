@@ -395,6 +395,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_peek_volume = IconButton(Icons.VOLUME, "Show volume slider", size=19, font_size=12, is_fluent=True)
         self.btn_peek_volume.clicked.connect(self._toggle_peek_volume)
         playback.addWidget(self.btn_peek_volume)
+        controls.setContentsMargins(0, 0, self.btn_peek_volume.width() + playback.spacing(), 0)
         player.addLayout(playback)
         layout.addLayout(player, 1)
 
@@ -969,12 +970,20 @@ class DynamicNotchWindow(QWidget):
             menu.hide()
             return
         self._sync_system_controls()
-        anchor = self.btn_peek_volume.mapToGlobal(self.btn_peek_volume.rect().center())
-        size = menu.sizeHint()
+        button = self.btn_peek_volume
+        anchor = button.mapToGlobal(QPoint(button.width() // 2, 0))
         screen = QGuiApplication.screenAt(anchor)
-        bounds = screen.availableGeometry() if screen else self._get_current_screen_geometry()
+        bounds = screen.geometry() if screen else self._get_current_screen_geometry()
+        bottom = anchor.y() - 4
+        # Keep the popup above its button even when the card hugs the bezel.
+        # The menu's size hint includes the percentage label, padding and rim.
+        chrome = menu.sizeHint().height() - self.peek_volume.height()
+        track_height = max(24, min(86, bottom - bounds.top() - chrome))
+        self.peek_volume.setFixedHeight(track_height)
+        menu.setFixedHeight(chrome + track_height)
+        size = menu.sizeHint()
         x = max(bounds.left(), min(anchor.x() - size.width() // 2, bounds.right() - size.width() + 1))
-        y = min(self.geometry().bottom() + 5, bounds.bottom() - size.height() + 1)
+        y = max(bounds.top(), bottom - menu.height())
         self._peek_volume_opacity.setOpacity(0.35)
         self._peek_volume_opacity.setEnabled(True)
         menu.popup(QPoint(x, y))

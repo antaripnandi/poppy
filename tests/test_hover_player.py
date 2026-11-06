@@ -177,14 +177,24 @@ def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monke
     assert not window.peek_volume_menu.isVisible()
     QTest.mouseClick(window.btn_peek_volume, Qt.MouseButton.LeftButton)
     assert window.peek_volume_menu.isVisible()
+    button = window.btn_peek_volume
+    popup = window.peek_volume_menu.geometry()
+    anchor = button.mapToGlobal(QPoint(button.width() // 2, 0))
+    assert popup.bottom() < anchor.y()
+    assert abs(popup.center().x() - anchor.x()) <= 1
+    assert popup.top() >= window._get_current_screen_geometry().top()
+    skip = window.btn_peek_next
+    assert not popup.intersects(QRect(skip.mapToGlobal(QPoint()), skip.size()))
     assert window.peek_volume.orientation() == Qt.Orientation.Vertical
     assert window.lbl_peek_volume.text() == "45%"
     slider = window.peek_volume
     x = slider.width() // 2
-    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=QPoint(x, 72))
-    QTest.mouseMove(slider, QPoint(x, 44))
-    QTest.mouseMove(slider, QPoint(x, 12))
-    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=QPoint(x, 12))
+    top = QPoint(x, round(slider.height() * 0.15))
+    bottom = QPoint(x, round(slider.height() * 0.85))
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=bottom)
+    QTest.mouseMove(slider, QPoint(x, slider.height() // 2))
+    QTest.mouseMove(slider, top)
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=top)
     assert len(levels) >= 3
     assert levels == sorted(levels)
     assert levels[0] < 25 and levels[-1] > 80
@@ -194,6 +204,7 @@ def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monke
     assert not window.peek_volume_menu.isVisible()
     window.btn_peek_volume.click()
     assert window.peek_volume_menu.isVisible()
+    assert window.peek_volume_menu.geometry() == popup
     window._collapse_to_pill()
     assert not window.peek_volume_menu.isVisible()
     window.close()
