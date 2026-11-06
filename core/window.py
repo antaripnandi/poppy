@@ -1689,14 +1689,15 @@ class DynamicNotchWindow(QWidget):
             QSlider:focus {{ border: 1px solid {muted}; }}
         """)
         self.peek_volume_menu.setStyleSheet(f"""
-            QMenu {{ background: {color.name()}; border: 1px solid rgba({rgb},0.16); border-radius: 8px; padding: 1px; }}
+            QMenu {{ background: {color.name()}; border: none; border-radius: 8px; padding: 2px; }}
         """)
         self.lbl_peek_volume.setStyleSheet(f"color: {ink}; font: 11px 'Segoe UI';")
         self.peek_volume.setStyleSheet(f"""
             QSlider::groove:vertical {{ width: 4px; background: rgba({rgb},0.23); border-radius: 2px; }}
             QSlider::add-page:vertical {{ background: {muted}; border-radius: 2px; }}
             QSlider::handle:vertical {{ height: 10px; margin: 0 -3px; background: {ink}; border-radius: 5px; }}
-            QSlider:focus {{ border: 1px solid rgba({rgb},0.25); border-radius: 4px; }}
+            QSlider:focus {{ border: none; outline: none; }}
+            QSlider::handle:vertical:focus {{ height: 14px; }}
         """)
         if self.state == NotchState.PEEK:
             self.update()
