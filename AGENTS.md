@@ -66,7 +66,7 @@ Multiple running Poppy processes cause invisible overlap, audio hook collisions,
 
 `DynamicNotchWindow` operates across 4 distinct states (`NotchState`):
 1. `COLLAPSED` (`240x30`): Compact clock with artwork and visualizer bars during a media session. An idle pill stays collapsed on hover. Battery is shown on Home only.
-2. `PEEK` (`408x125`): Hover player with rounded artwork, pixel-elided metadata, transport, a seek bar and system audio controls. Source switching sits on the artist row. Use artwork, a fixed color, or the layout surface with readable contrast. Pill and peek clicks open Home by default and respect the Open to setting. Use hover intent, leave grace and a short opacity reveal.
+2. `PEEK` (`316x108`): Compact hover player with artwork on the left and metadata, transport, and volume on the right. The context menu provides seeking, media source selection, and sound output. Use artwork, a fixed color, or the layout surface with readable contrast. Pill and peek clicks open Home by default and respect the Open to setting. Use hover intent, leave grace and a short opacity reveal.
 3. `ISLAND` (`420x64`): Floating interactive notification or system prompt island.
 4. `EXPANDED` (`1120x500` by default): Home supports a mini-player, four dashboard cards and a ranked Screen Time panel. Settings controls section visibility. All enabled tabs are directly visible. There is no More overflow. Clamp to the active display. Put Screen Time beside the cards on wide panels and below them on narrow panels. Scroll Home content when needed, keeping the mini-player above it.
 

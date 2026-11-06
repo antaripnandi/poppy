@@ -2,8 +2,9 @@
 
 import pytest
 from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtGui import QColor, QImage, QContextMenuEvent
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QMenu
 from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.core.media_manager import MediaManager
 from poppy.ui.theme import LAYOUT_THEMES
@@ -39,11 +40,17 @@ def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
             assert window.lbl_peek_artist.toolTip() == artist
             assert window.lbl_peek_title.fontMetrics().horizontalAdvance(window.lbl_peek_title.text()) <= window.lbl_peek_title.width()
             assert window.lbl_peek_artist.fontMetrics().horizontalAdvance(window.lbl_peek_artist.text()) <= window.lbl_peek_artist.width()
-            controls = (window.peek_thumb, window.lbl_peek_title, window.lbl_peek_artist,
-                        window.btn_peek_cycle, window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next)
+            controls = (window.peek_thumb, window.lbl_peek_title, window.lbl_peek_artist, window.peek_visualizer,
+                        window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next, window.peek_volume)
             for widget in controls:
                 assert window.view_peek.rect().contains(QRect(widget.mapTo(window.view_peek, QPoint()), widget.size()))
-            assert window.lbl_peek_title.mapTo(window.view_peek, QPoint()).y() < window.btn_peek_cycle.mapTo(window.view_peek, QPoint()).y()
+            assert window.peek_thumb.width() > window.btn_peek_play.width() * 2
+            assert window.peek_thumb.geometry().right() < window.lbl_peek_title.mapTo(window.view_peek, QPoint()).x()
+            buttons = (window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next)
+            centers = [button.mapTo(window.view_peek, button.rect().center()) for button in buttons]
+            assert centers[0].x() < centers[1].x() < centers[2].x()
+            assert len({point.y() for point in centers}) == 1
+            assert not window.peek_seek.isVisible()
     assert window.btn_peek_play.accessibleName() == "Pause"
     assert not window._peek_opacity.isEnabled()
     window._on_media_changed({"title": "No Media Playing"})
@@ -135,13 +142,27 @@ def test_peek_seeks_and_fixed_color_survives_layout_changes(audit_app, monkeypat
     settle(window, audit_app)
     assert window.peek_seek.value() == 25
     assert window.lbl_peek_elapsed.text() == "00:25"
+    point = window.rect().center()
+    event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, window.mapToGlobal(point))
+    window.contextMenuEvent(event)
+    menu = audit_app.activePopupWidget()
+    assert isinstance(menu, QMenu)
+    actions = {action.text(): action for action in menu.actions()}
+    assert actions["Playback position"].menu() is window.peek_timeline_menu
+    assert actions["Sound output"].menu() is not None
+    window.peek_timeline_menu.popup(event.globalPos())
+    audit_app.processEvents()
+    assert window.peek_seek.isVisible()
     QTest.mouseClick(window.peek_seek, Qt.MouseButton.LeftButton, pos=QPoint(window.peek_seek.width() // 2, 5))
+    window.peek_timeline_menu.hide()
+    menu.hide()
     assert 48 <= calls[-1] <= 52
     assert window.state == NotchState.PEEK
     for layout, mode in (("Deck", "Dark"), ("Daily", "Light"), ("Console", "Dark")):
         window._apply_live_appearance({"layout": layout, "mode": mode, "peek_color_source": "fixed", "peek_color": "#244f58"})
         assert window.grab().toImage().pixelColor(window.width() // 2, 6) == QColor("#244f58")
-        assert "background: #ffffff" in window.btn_peek_play.styleSheet()
+        assert "background: transparent" in window.btn_peek_play.styleSheet()
+        assert not window.btn_peek_play.icon().isNull()
     window.close()
 
 

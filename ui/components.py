@@ -590,6 +590,7 @@ class AudioVisualizerBars(QWidget):
         self.setFixedSize(18, 14)
         self._is_playing = False
         self._heights = [2.5, 2.5, 2.5, 2.5]
+        self._ink = None
         self._meter = None
         self._timer = QTimer(self)
         self._timer.setInterval(30)  # ~33 FPS fluid motion
@@ -682,12 +683,19 @@ class AudioVisualizerBars(QWidget):
         self._timer.stop()
         super().hideEvent(event)
 
+    def set_ink(self, color):
+        self._ink = color
+        self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         color = QColor(241, 245, 249, 235) if self._is_playing else QColor(148, 163, 184, 80)
         if is_light_theme():
             color = QColor(32, 40, 51, 235 if self._is_playing else 120)
+        if self._ink is not None:
+            color = QColor(self._ink)
+            color.setAlpha(210 if self._is_playing else 105)
         painter.setBrush(QBrush(color))
         painter.setPen(Qt.PenStyle.NoPen)
 
