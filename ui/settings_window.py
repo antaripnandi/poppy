@@ -715,39 +715,23 @@ class SettingsWindow(QWidget):
         stat_left = QVBoxLayout()
         stat_left.setSpacing(2)
         lbl_st_tag = QLabel("Today")
-        set_widget_style(lbl_st_tag, "font-size: 9.5px; font-weight: 700; color: #939a9c; letter-spacing: 0.5px; background: transparent; border: none;")
+        set_widget_style(lbl_st_tag, "font-size: 12px; font-weight: 500; color: #a7b2bf; background: transparent; border: none;")
         self.lbl_st_today_time = QLabel("0m")
-        set_widget_style(self.lbl_st_today_time, "font-size: 26px; font-weight: 700; color: #eef0f0; background: transparent; border: none;")
+        set_widget_style(self.lbl_st_today_time, "font-size: 26px; font-weight: 600; color: #eef0f0; background: transparent; border: none;")
         stat_left.addWidget(lbl_st_tag)
         stat_left.addWidget(self.lbl_st_today_time)
         row_top_stat.addLayout(stat_left)
         row_top_stat.addStretch()
 
-        badges_layout = QHBoxLayout()
-        badges_layout.setSpacing(8)
-        self.lbl_st_streak = QLabel("Active Streak: 0m")
-        set_widget_style(self.lbl_st_streak, """
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            padding: 4px 10px;
-            font-size: 12px;
-            color: #cbd5e1;
-            font-weight: 500;
-        """)
+        readings = QVBoxLayout()
+        readings.setSpacing(4)
+        self.lbl_st_streak = QLabel("Active streak: 0m")
         self.lbl_st_goal_pct = QLabel("Goal: 0%")
-        set_widget_style(self.lbl_st_goal_pct, """
-            background: rgba(130, 156, 142, 0.12);
-            border: 1px solid rgba(130, 156, 142, 0.28);
-            border-radius: 12px;
-            padding: 4px 10px;
-            font-size: 12px;
-            color: #38bdf8;
-            font-weight: 600;
-        """)
-        badges_layout.addWidget(self.lbl_st_streak)
-        badges_layout.addWidget(self.lbl_st_goal_pct)
-        row_top_stat.addLayout(badges_layout)
+        for label in (self.lbl_st_streak, self.lbl_st_goal_pct):
+            set_widget_style(label, "font-size: 12px; color: #cbd5e1; background: transparent; border: none;")
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            readings.addWidget(label)
+        row_top_stat.addLayout(readings)
         l_card_summary.addLayout(row_top_stat)
 
         # Micro progress bar
@@ -1559,7 +1543,7 @@ class SettingsWindow(QWidget):
         self.lbl_st_today_time.setText("0m")
         self.lbl_st_goal_pct.setText("Goal: 0%")
         self.bar_st_goal.setValue(0)
-        self.lbl_st_streak.setText("Active Streak: 0m")
+        self.lbl_st_streak.setText("Active streak: 0m")
         self.lbl_st_top_apps.setText("Reset complete.")
 
     def update_screentime_display(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str, goal_hours: float):
@@ -1573,7 +1557,7 @@ class SettingsWindow(QWidget):
         self.lbl_st_goal_pct.setText(f"Goal: {pct}% of {int(goal_hours)}h")
         self.bar_st_goal.setValue(pct)
 
-        self.lbl_st_streak.setText(f"Active Streak: {streak_sec // 60}m")
+        self.lbl_st_streak.setText(f"Active streak: {streak_sec // 60}m")
 
         if top_apps:
             app_text = "Top Apps: " + "  •  ".join(f"{name}: {fmt}" for name, sec, fmt in top_apps[:3])

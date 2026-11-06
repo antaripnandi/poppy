@@ -334,50 +334,24 @@ class HomeTabView(QWidget):
         meta_spf = QVBoxLayout()
         meta_spf.setSpacing(1)
         self.lbl_shelf_item_name = QLabel("Screenshot.png")
-        set_widget_style(self.lbl_shelf_item_name, "font-size: 10.5px; font-weight: 600; color: #f1f5f9; background: transparent; border: none;")
-        self.lbl_shelf_item_sub = QLabel("Drag to screen")
-        set_widget_style(self.lbl_shelf_item_sub, "font-size: 9.5px; color: #94a3b8; background: transparent; border: none;")
+        self.lbl_shelf_item_name.setTextFormat(Qt.TextFormat.PlainText)
+        self.lbl_shelf_item_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        set_widget_style(self.lbl_shelf_item_name, "font-size: 12px; font-weight: 500; color: #f1f5f9; background: transparent; border: none;")
+        self.lbl_shelf_item_sub = QLabel()
+        set_widget_style(self.lbl_shelf_item_sub, "font-size: 11px; color: #a7b2bf; background: transparent; border: none;")
         meta_spf.addWidget(self.lbl_shelf_item_name)
         meta_spf.addWidget(self.lbl_shelf_item_sub)
         spf_layout.addLayout(meta_spf, stretch=1)
 
         self.btn_home_shelf_chat = QPushButton("Copy")
         self.btn_home_shelf_chat.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_home_shelf_chat, """
-            QPushButton {
-                background: rgba(14, 165, 233, 0.2);
-                border: none;
-                border-radius: 5px;
-                color: #38bdf8;
-                font-size: 9.5px;
-                font-weight: 600;
-                padding: 2px 7px;
-            }
-            QPushButton:hover {
-                background: rgba(14, 165, 233, 0.35);
-                color: #ffffff;
-            }
-        """)
+        self.btn_home_shelf_chat.setToolTip("Copy image to clipboard")
+        self.btn_home_shelf_chat.setMinimumWidth(64)
         spf_layout.addWidget(self.btn_home_shelf_chat)
 
         self.btn_home_shelf_pin = QPushButton("Pin")
         self.btn_home_shelf_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_home_shelf_pin.setToolTip("Pin to screen as a floating sticky note")
-        set_widget_style(self.btn_home_shelf_pin, """
-            QPushButton {
-                background: rgba(234, 179, 8, 0.2);
-                border: none;
-                border-radius: 5px;
-                color: #facc15;
-                font-size: 9.5px;
-                font-weight: 600;
-                padding: 2px 7px;
-            }
-            QPushButton:hover {
-                background: rgba(234, 179, 8, 0.35);
-                color: #ffffff;
-            }
-        """)
         self.btn_home_shelf_pin.clicked.connect(lambda: self.pin_requested.emit(self._latest_shelf_path))
         spf_layout.addWidget(self.btn_home_shelf_pin)
         l_shelf.addWidget(self.shelf_preview_frame)
@@ -386,13 +360,14 @@ class HomeTabView(QWidget):
         # Empty hint
         self.lbl_shelf_empty = QLabel("Drop files here")
         self.lbl_shelf_empty.setToolTip("Drop files or use Windows + Shift + S to take a snip")
-        set_widget_style(self.lbl_shelf_empty, "font-size: 10px; color: #64748b; background: transparent; border: none;")
+        set_widget_style(self.lbl_shelf_empty, "font-size: 12px; color: #a7b2bf; background: transparent; border: none;")
         l_shelf.addWidget(self.lbl_shelf_empty)
 
         # Inline Calculator
         calc_row = QHBoxLayout()
         self.input_calc = QLineEdit()
         self.input_calc.setPlaceholderText("Calculate…")
+        self.input_calc.setAccessibleName("Calculator")
         set_widget_style(self.input_calc, """
             QLineEdit {
                 background: rgba(255, 255, 255, 0.04);
@@ -713,8 +688,9 @@ class HomeTabView(QWidget):
             name = latest.name
             trunc_name = (name[:20] + "..") if len(name) > 20 else name
             self.lbl_shelf_item_name.setText(trunc_name)
+            self.lbl_shelf_item_name.setToolTip(name)
             size_kb = max(1, latest.size_bytes // 1024)
-            self.lbl_shelf_item_sub.setText(f"{size_kb} KB · Pin / Copy / Drag")
+            self.lbl_shelf_item_sub.setText(f"{size_kb} KB")
             self.shelf_preview_frame.setVisible(True)
             self.lbl_shelf_empty.setVisible(False)
         else:

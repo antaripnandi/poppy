@@ -233,7 +233,7 @@ class FloatingStickyNote(QWidget):
         footer.setSpacing(6)
 
         self.lbl_stats = QLabel("0 words", self)
-        set_widget_style(self.lbl_stats, "font-size: 9.5px; opacity: 0.7; background: transparent; border: none;")
+        set_widget_style(self.lbl_stats, "font-size: 11px; background: transparent; border: none;")
         footer.addWidget(self.lbl_stats)
 
         footer.addStretch()
@@ -300,7 +300,7 @@ class FloatingStickyNote(QWidget):
                 selection-background-color: {theme['accent']};
             }}
         """)
-        set_widget_style(self.lbl_stats, f"color: {text_color}; font-size: 9.5px; opacity: 0.65; background: transparent; border: none;")
+        set_widget_style(self.lbl_stats, f"color: {text_color}; font-size: 11px; background: transparent; border: none;")
 
     def cycle_theme(self):
         keys = list(NOTE_THEMES.keys())
@@ -598,7 +598,7 @@ class FloatingStickyImage(QWidget):
         footer.setContentsMargins(10, 0, 4, 4)
         orig_dims = f"{self._pixmap.width()}×{self._pixmap.height()}" if not self._pixmap.isNull() else ""
         self.lbl_info = QLabel(f"{orig_dims} · 100%", self)
-        set_widget_style(self.lbl_info, "font-size: 9px; color: #64748b; background: transparent; border: none;")
+        set_widget_style(self.lbl_info, "font-size: 11px; color: #a7b2bf; background: transparent; border: none;")
         footer.addWidget(self.lbl_info)
         footer.addStretch()
 

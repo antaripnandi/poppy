@@ -147,6 +147,16 @@ def surface_colors():
     return {"root": "#111419", "card": "#1b2027", "text": "#edf1f7", "muted": "#9ca8b7"}
 
 
+def contrast_ink(color: QColor) -> str:
+    """Choose the foreground with the higher contrast on an opaque fill."""
+    def linear(channel):
+        return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+    luminance = sum(weight * linear(channel) for weight, channel in zip(
+        (0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
+    return "#000000" if luminance >= 0.179 else "#ffffff"
+
+
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\([^)]*\)|\b(?:white|black)\b")
 _DECLARATION = re.compile(r"([\w-]+)\s*:\s*([^;{}]+)")
 

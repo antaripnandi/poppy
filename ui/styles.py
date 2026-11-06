@@ -38,9 +38,9 @@ THEME_PRESETS = {
     "Aurora": {
         "name": "Aurora",
         "bg": "#0c1717",
-        "gradient": "#241534",
+        "gradient": "#0c1717",
         "accent": "#3ddc97",
-        "desc": "Teal-black into violet, with mint",
+        "desc": "Dark teal with a mint accent",
     },
     "Ember": {
         "name": "Ember",

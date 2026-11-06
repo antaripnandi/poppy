@@ -5,6 +5,7 @@ Tests for Synchronized Lyrics, Timeline Scrubber, and Auto-Dismiss features.
 import pytest
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from poppy.core.lyrics_manager import parse_lrc, LyricsManager
 from poppy.ui.components import ClickableSlider, SpotifyLyricsWidget
@@ -43,6 +44,35 @@ def test_parse_lrc_unsorted_and_empty():
     assert len(parsed) == 2
     assert parsed[0] == (30.0, "First line")
     assert parsed[1] == (60.0, "Second line")
+
+
+def test_synced_lyrics_keyboard_seek_and_tab_exit(qapp):
+    from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
+
+    window = QWidget()
+    layout = QVBoxLayout(window)
+    lyrics = SpotifyLyricsWidget()
+    layout.addWidget(lyrics)
+    after = QPushButton("After lyrics")
+    layout.addWidget(after)
+    lyrics.set_synced_lyrics([(i * 5.0, f"Line {i}") for i in range(30)])
+    seeks = []
+    lyrics.seek_requested.connect(seeks.append)
+    window.resize(420, 280)
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    first, second = lyrics._line_buttons[:2]
+    first.setFocus(Qt.FocusReason.TabFocusReason)
+    assert first.hasFocus()
+    QTest.keyClick(first, Qt.Key.Key_Down)
+    assert second.hasFocus()
+    lyrics.update_playback_time(60)
+    assert second.hasFocus()
+    QTest.keyClick(second, Qt.Key.Key_Return)
+    assert seeks == [5.0]
+    QTest.keyClick(second, Qt.Key.Key_Tab)
+    assert after.hasFocus()
 
 
 @pytest.mark.live_service
@@ -136,6 +166,14 @@ def test_audio_visualizer_bars_fluid_physics(qapp):
     for h in viz._heights:
         assert h == 2.5
 
+    class Meter:
+        peaks = (0.0, 0.0, 0.0)
+
+        def get_peaks(self):
+            return self.peaks
+
+    viz._meter = Meter()
+
     # Start playing
     viz.set_playing(True)
     assert viz._is_playing is True
@@ -143,6 +181,17 @@ def test_audio_visualizer_bars_fluid_physics(qapp):
 
     # Step simulation
     viz._animate_bars()
+    assert viz._heights == [2.5] * 4
+    viz._meter.peaks = (0.6, 0.4, 0.2)
+    viz._animate_bars()
+    assert all(h > 2.5 for h in viz._heights)
+    viz.set_muted(True)
+    for _ in range(30):
+        viz._animate_bars()
+    assert all(h < 2.51 for h in viz._heights)
+    viz.set_muted(False)
+    viz._animate_bars()
+    assert all(h > 2.51 for h in viz._heights)
     for h in viz._heights:
         assert 2.5 <= h <= 14.0
 

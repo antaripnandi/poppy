@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QPushButton, QFrame, QGraphicsOpacityEffect, QMenu, QLayout, QSizePolicy, QMessageBox, QDialog, QWidgetAction
 )
 
-from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, surface_colors, is_light_theme, resolve_light_mode, LAYOUT_THEMES, home_order
+from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, surface_colors, is_light_theme, resolve_light_mode, LAYOUT_THEMES, home_order, contrast_ink
 from poppy.ui.components import (
     IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail,
     AnimatedTabStrip, AnimatedStackedWidget, CardFrame, ClickableSlider
@@ -451,7 +451,7 @@ class DynamicNotchWindow(QWidget):
         self.view_island.setFixedSize(420, 64)
         v_isl_layout = QHBoxLayout(self.view_island)
         v_isl_layout.setContentsMargins(12, 6, 12, 8)
-        v_isl_layout.setSpacing(10)
+        v_isl_layout.setSpacing(8)
         v_isl_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Draggable Thumbnail Preview (44x44, rounded 8px)
@@ -474,79 +474,35 @@ class DynamicNotchWindow(QWidget):
         isl_title_row.setSpacing(6)
         lbl_isl_dot = QLabel("●")
         set_widget_style(lbl_isl_dot, "color: #3ddc97; font-size: 8px; background: transparent; border: none;")
-        self.lbl_isl_title = QLabel("Screenshot Staged")
-        set_widget_style(self.lbl_isl_title, "color: #f8fafc; font-size: 11.5px; font-weight: 600; background: transparent; border: none;")
+        self.lbl_isl_title = QLabel("Screenshot staged")
+        set_widget_style(self.lbl_isl_title, "color: #f8fafc; font-size: 12px; font-weight: 600; background: transparent; border: none;")
         isl_title_row.addWidget(lbl_isl_dot)
         isl_title_row.addWidget(self.lbl_isl_title)
         isl_title_row.addStretch()
         isl_meta.addLayout(isl_title_row)
 
-        self.lbl_isl_sub = QLabel("Drag to screen or paste in chat")
-        set_widget_style(self.lbl_isl_sub, "color: #94a3b8; font-size: 10px; background: transparent; border: none;")
+        self.lbl_isl_sub = QLabel()
+        set_widget_style(self.lbl_isl_sub, "color: #a7b2bf; font-size: 11px; background: transparent; border: none;")
         isl_meta.addWidget(self.lbl_isl_sub)
         v_isl_layout.addLayout(isl_meta, stretch=1)
 
         # Action Buttons
         self.btn_isl_chat = QPushButton("Copy")
         self.btn_isl_chat.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_isl_chat.setToolTip("Copy formatted image to paste directly into Discord, WhatsApp, Slack, etc.")
-        set_widget_style(self.btn_isl_chat, """
-            QPushButton {
-                background: rgba(14, 165, 233, 0.2);
-                border: none;
-                border-radius: 6px;
-                color: #38bdf8;
-                font-size: 10.5px;
-                font-weight: 600;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background: rgba(14, 165, 233, 0.35);
-                color: #ffffff;
-            }
-        """)
+        self.btn_isl_chat.setToolTip("Copy screenshot to clipboard")
+        self.btn_isl_chat.setMinimumWidth(64)
         self.btn_isl_chat.clicked.connect(self._copy_island_for_chat)
         v_isl_layout.addWidget(self.btn_isl_chat)
 
         self.btn_isl_pin = QPushButton("Pin")
         self.btn_isl_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_isl_pin.setToolTip("Pin screenshot as a floating sticky note on screen")
-        set_widget_style(self.btn_isl_pin, """
-            QPushButton {
-                background: rgba(234, 179, 8, 0.2);
-                border: none;
-                border-radius: 6px;
-                color: #facc15;
-                font-size: 10.5px;
-                font-weight: 600;
-                padding: 4px 9px;
-            }
-            QPushButton:hover {
-                background: rgba(234, 179, 8, 0.35);
-                color: #ffffff;
-            }
-        """)
         self.btn_isl_pin.clicked.connect(lambda: self._pin_screenshot_to_screen(self._last_screenshot_path))
         v_isl_layout.addWidget(self.btn_isl_pin)
 
         self.btn_isl_shelf = QPushButton("Shelf")
         self.btn_isl_shelf.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_isl_shelf.setToolTip("Open temporary file shelf")
-        set_widget_style(self.btn_isl_shelf, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.08);
-                border: none;
-                border-radius: 6px;
-                color: #cbd5e1;
-                font-size: 10.5px;
-                font-weight: 500;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.16);
-                color: #ffffff;
-            }
-        """)
         self.btn_isl_shelf.clicked.connect(self._open_shelf_from_island)
         v_isl_layout.addWidget(self.btn_isl_shelf)
 
@@ -680,11 +636,12 @@ class DynamicNotchWindow(QWidget):
         self.tab_stack.addWidget(self.tab_calendar)
 
         # 3: Clipboard Tab
-        self.tab_clipboard = ClipboardTabView(self.clip_mgr, parent=self)
+        self.tab_clipboard = ClipboardTabView(self.clip_mgr, parent=self,
+                                              recording_enabled=self.config.get("clipboard", {}).get("enabled", False))
         self.tab_stack.addWidget(self.tab_clipboard)
 
         # 4: Docs Tab
-        self.tab_docs = DocsTabView(self, accent=self._theme["accent"])
+        self.tab_docs = DocsTabView(self)
         self.tab_stack.addWidget(self.tab_docs)
 
         # 5: Desktops Tab
@@ -962,6 +919,8 @@ class DynamicNotchWindow(QWidget):
     def _show_volume(self, volume, muted):
         self.tab_home.set_volume_display(volume, muted)
         self.tab_music.set_volume_display(volume, muted)
+        self.coll_visualizer.set_muted(muted or volume == 0)
+        self.peek_visualizer.set_muted(muted or volume == 0)
         if not self.peek_volume.isSliderDown():
             self.peek_volume.blockSignals(True)
             self.peek_volume.setValue(volume)
@@ -1643,12 +1602,8 @@ class DynamicNotchWindow(QWidget):
             return
         self._styled_peek_bg = self._peek_bg = color
 
-        def linear(channel):
-            return channel / 12.92 if channel < 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
-        luminance = sum(weight * linear(channel) for weight, channel in zip(
-            (0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
-        dark_ink = luminance >= 0.179
-        ink = "#111315" if dark_ink else "#ffffff"
+        ink = contrast_ink(color)
+        dark_ink = ink == "#000000"
         rgb = "0,0,0" if dark_ink else "255,255,255"
         muted = f"rgba({rgb},0.78)"
         self.lbl_peek_title.setStyleSheet(f"color: {ink}; font-family: 'Segoe UI'; font-size: 13px; font-weight: 600;")
@@ -1743,23 +1698,9 @@ class DynamicNotchWindow(QWidget):
             control.show()
         pix = QPixmap.fromImage(qimage)
         self.island_thumb.set_image(file_path, pix)
-        self.lbl_isl_sub.setText(f"{qimage.width()} × {qimage.height()} · Ready to drop or copy")
+        self.lbl_isl_sub.setText(f"{qimage.width()} × {qimage.height()}")
+        self.lbl_isl_sub.setToolTip("Drag the preview to another app or use Copy")
         self.btn_isl_chat.setText("Copy")
-        set_widget_style(self.btn_isl_chat, """
-            QPushButton {
-                background: rgba(14, 165, 233, 0.2);
-                border: none;
-                border-radius: 6px;
-                color: #38bdf8;
-                font-size: 10.5px;
-                font-weight: 600;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background: rgba(14, 165, 233, 0.35);
-                color: #ffffff;
-            }
-        """)
 
         # Thumbnail flying / entrance animation
         self._thumb_opacity_fx.setOpacity(0.0)
@@ -1772,70 +1713,22 @@ class DynamicNotchWindow(QWidget):
         if self._last_screenshot_path:
             ok = self.screenshot_watcher.copy_image_for_chat(self._last_screenshot_path)
             if ok:
-                self.btn_isl_chat.setText("Copied!")
-                set_widget_style(self.btn_isl_chat, """
-                    QPushButton {
-                        background: rgba(34, 197, 94, 0.28);
-                        border: none;
-                        border-radius: 6px;
-                        color: #4ade80;
-                        font-size: 10.5px;
-                        font-weight: 700;
-                        padding: 4px 10px;
-                    }
-                """)
+                self.btn_isl_chat.setText("Copied")
                 QTimer.singleShot(1800, self._reset_island_chat_btn)
 
     def _reset_island_chat_btn(self):
         self.btn_isl_chat.setText("Copy")
-        set_widget_style(self.btn_isl_chat, """
-            QPushButton {
-                background: rgba(14, 165, 233, 0.2);
-                border: none;
-                border-radius: 6px;
-                color: #38bdf8;
-                font-size: 10.5px;
-                font-weight: 600;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background: rgba(14, 165, 233, 0.35);
-                color: #ffffff;
-            }
-        """)
 
     def _copy_latest_shelf_for_chat(self):
         if self.drop_shelf.staged_items:
             latest = self.drop_shelf.staged_items[-1]
             ok = self.screenshot_watcher.copy_image_for_chat(latest.path)
             if ok:
-                self.tab_home.btn_home_shelf_chat.setText("Copied!")
-                set_widget_style(self.tab_home.btn_home_shelf_chat, """
-                    QPushButton {
-                        background: rgba(34, 197, 94, 0.28);
-                        border: none;
-                        border-radius: 5px;
-                        color: #4ade80;
-                        font-size: 9.5px;
-                        font-weight: 700;
-                        padding: 2px 7px;
-                    }
-                """)
+                self.tab_home.btn_home_shelf_chat.setText("Copied")
                 QTimer.singleShot(1800, self._reset_home_shelf_chat_btn)
 
     def _reset_home_shelf_chat_btn(self):
         self.tab_home.btn_home_shelf_chat.setText("Copy")
-        set_widget_style(self.tab_home.btn_home_shelf_chat, """
-            QPushButton {
-                background: rgba(14, 165, 233, 0.2);
-                border: none;
-                border-radius: 5px;
-                color: #38bdf8;
-                font-size: 9.5px;
-                font-weight: 600;
-                padding: 2px 7px;
-            }
-        """)
 
     def _open_shelf_from_island(self):
         self._island_timer.stop()
@@ -1997,7 +1890,7 @@ class DynamicNotchWindow(QWidget):
             self.tab_strip.set_accent(accent)
             self.tab_music.set_accent(accent)
             self.tab_timer.set_accent(accent)
-            self.tab_docs.set_accent(accent)
+            self.tab_calendar.set_accent(accent)
             self.tab_home.slider_vol.set_accent(accent)
             self.tab_home.slider_bright.set_accent(accent)
         if palette_changed or layout_changed or light_changed or media_changed:
@@ -2027,6 +1920,7 @@ class DynamicNotchWindow(QWidget):
         self.config = new_config or {}
         self._apply_live_appearance(self.config.get("appearance", {}))
         self._rebuild_tabs()
+        self.tab_clipboard.set_recording_enabled(self.config.get("clipboard", {}).get("enabled", False))
 
         if hasattr(self, "weather_manager"):
             self.weather_manager.update_config(self.config)

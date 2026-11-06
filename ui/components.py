@@ -5,8 +5,6 @@ Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 """
 
 import os
-import math
-import time
 from functools import lru_cache
 from PySide6.QtCore import (
     Qt, QRect, QRectF, QSize, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
@@ -580,15 +578,12 @@ class CircularProgressRing(QWidget):
 
 
 class AudioVisualizerBars(QWidget):
-    """
-    NotchX pill-v2 style 4-bar sound wave equalizer with fluid physics.
-    Reacts dynamically to real Windows Core Audio peak levels and musical harmonics.
-    Butter-smooth 33 FPS subpixel rendering with fast attack and natural decay.
-    """
+    """Four compact bars driven by Windows Core Audio peak levels."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(18, 14)
         self._is_playing = False
+        self._muted = False
         self._heights = [2.5, 2.5, 2.5, 2.5]
         self._ink = None
         self._meter = None
@@ -612,6 +607,9 @@ class AudioVisualizerBars(QWidget):
                     self._timer.start()
             self.update()
 
+    def set_muted(self, muted):
+        self._muted = muted
+
     def _animate_bars(self):
         # If widget is not visible on screen, suspend animation updates to save CPU
         if not self.isVisible():
@@ -634,40 +632,15 @@ class AudioVisualizerBars(QWidget):
 
         # Query live system audio peak levels (master, left, right)
         master, left, right = 0.0, 0.0, 0.0
-        if self._meter:
+        if self._meter and not self._muted:
             try:
                 master, left, right = self._meter.get_peaks()
             except Exception:
                 pass
 
-        # Perceptual logarithmic energy (human hearing curve)
-        m_energy = pow(max(0.0, min(1.0, master)), 0.45) if master > 0.001 else 0.0
-        l_energy = pow(max(0.0, min(1.0, left)), 0.45) if left > 0.001 else 0.0
-        r_energy = pow(max(0.0, min(1.0, right)), 0.45) if right > 0.001 else 0.0
-
-        t = time.time()
-        # Multi-frequency musical harmonics for each of the 4 capsules
-        w0 = max(0.0, min(1.0, math.sin(t * 7.5) * 0.35 + math.sin(t * 3.8 + 0.4) * 0.35 + 0.5))
-        w1 = max(0.0, min(1.0, math.sin(t * 9.2 + 1.2) * 0.35 + math.cos(t * 4.6 + 0.8) * 0.35 + 0.5))
-        w2 = max(0.0, min(1.0, math.sin(t * 8.4 + 2.5) * 0.35 + math.sin(t * 5.7 + 1.6) * 0.35 + 0.5))
-        w3 = max(0.0, min(1.0, math.sin(t * 10.1 + 3.8) * 0.35 + math.cos(t * 6.9 + 2.2) * 0.35 + 0.5))
-
-        if master > 0.004:
-            # Active audio playback: bars pulse dynamically to the beat and loudness
-            t0 = 2.5 + 10.5 * (l_energy * 0.72 + w0 * 0.28)
-            t1 = 2.5 + 10.5 * (m_energy * 0.76 + w1 * 0.24)
-            t2 = 2.5 + 10.5 * (m_energy * 0.76 + w2 * 0.24)
-            t3 = 2.5 + 10.5 * (r_energy * 0.70 + w3 * 0.30)
-        else:
-            # Subtle rhythmic flow when playing soft/acoustic passages or muted output
-            t0 = 2.5 + 8.5 * (w0 * 0.80 + 0.10)
-            t1 = 2.5 + 10.5 * (w1 * 0.88 + 0.10)
-            t2 = 2.5 + 9.8 * (w2 * 0.85 + 0.10)
-            t3 = 2.5 + 8.0 * (w3 * 0.75 + 0.10)
-
-        targets = [t0, t1, t2, t3]
-        for i in range(4):
-            tgt = targets[i]
+        for i, peak in enumerate((left, master, master, right)):
+            energy = max(0.0, min(1.0, peak)) ** 0.45 if peak > 0.001 else 0.0
+            tgt = 2.5 + 10.5 * energy
             # Fast attack (0.45) for rhythmic snap, gentle decay (0.22) for analog fluidity
             rate = 0.45 if tgt > self._heights[i] else 0.22
             self._heights[i] += (tgt - self._heights[i]) * rate
@@ -1202,8 +1175,11 @@ class LyricLineWidget(QFrame):
         self._design = current_layout()
         self._is_active = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(text)
 
         self._lbl = QLabel(text, self)
+        self._lbl.setTextFormat(Qt.TextFormat.PlainText)
         self._lbl.setWordWrap(True)
         self._lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
@@ -1257,6 +1233,14 @@ class LyricLineWidget(QFrame):
             return
         super().mousePressEvent(event)
 
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if not event.isAutoRepeat():
+                self.clicked.emit(self.time_sec)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def set_active(self, active: bool):
         if self._is_active != active:
             self._is_active = active
@@ -1266,6 +1250,7 @@ class LyricLineWidget(QFrame):
             self.update_style()
 
     def update_style(self):
+        focus = "QFrame:focus { border: 1px solid rgba(255,255,255,0.65); }"
         if self._design in ("Deck", "Daily", "Console"):
             name = self._design
             family, size = {"Deck": ("Segoe UI", 15), "Daily": ("Georgia", 18), "Console": ("Consolas", 13)}[name]
@@ -1274,18 +1259,18 @@ class LyricLineWidget(QFrame):
             set_widget_style(self._lbl, f"QLabel {{ font-family: '{family}'; font-size: {size}px; font-weight: {weight}; color: {color}; background: transparent; }}")
             border = "border-left: 2px solid #b87557;" if name == "Daily" and self._is_active else ""
             fill = "rgba(171,206,153,0.12)" if self._is_active and name != "Daily" else "transparent"
-            set_widget_style(self, f"QFrame {{ background: {fill}; border: none; {border} }} QFrame:hover {{ background: rgba(255,255,255,0.06); }}")
+            set_widget_style(self, f"QFrame {{ background: {fill}; border: 1px solid transparent; {border} }} QFrame:hover {{ background: rgba(255,255,255,0.06); }} {focus}")
             return
         set_widget_style(self, """
             QFrame {
                 background: transparent;
-                border: none;
+                border: 1px solid transparent;
                 border-radius: 8px;
             }
             QFrame:hover {
                 background: rgba(255, 255, 255, 0.04);
             }
-        """)
+        """ + focus)
         if self._is_active:
             set_widget_style(self._lbl, """
                 QLabel {
@@ -1299,7 +1284,7 @@ class LyricLineWidget(QFrame):
         else:
             set_widget_style(self._lbl, """
                 QLabel {
-                    color: rgba(255, 255, 255, 0.35);
+                    color: rgba(255, 255, 255, 0.68);
                     font-size: 15px;
                     font-weight: 700;
                     background: transparent;
@@ -1424,7 +1409,7 @@ class SpotifyLyricsWidget(QFrame):
         self.lbl_status = QLabel("Play music to view lyrics", placeholder_wrap)
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setWordWrap(True)
-        set_widget_style(self.lbl_status, "QLabel { font-family: 'Segoe UI'; font-size: 12px; font-weight: 400; color: #64748b; background: transparent; border: none; }")
+        set_widget_style(self.lbl_status, "QLabel { font-family: 'Segoe UI'; font-size: 12px; font-weight: 400; color: #a7b2bf; background: transparent; border: none; }")
         p_layout.addWidget(self.lbl_status)
         self.content_stack.addWidget(placeholder_wrap)
 
@@ -1437,6 +1422,8 @@ class SpotifyLyricsWidget(QFrame):
 
         self._synced_lines: list[tuple[float, str]] = []
         self._line_buttons: list[LyricLineWidget] = []
+        self._lyric_tab_stop = None
+        self._keyboard_reading = False
         self._current_line_idx = -1
         self._user_scrolling = False
         self._auto_scroll_enabled = True
@@ -1460,7 +1447,35 @@ class SpotifyLyricsWidget(QFrame):
     def eventFilter(self, obj, event):
         if obj == self.scroll_area.viewport() and event.type() == QEvent.Type.Wheel:
             self._on_user_scroll()
+        elif isinstance(obj, LyricLineWidget):
+            if event.type() == QEvent.Type.FocusIn:
+                self._set_lyric_tab_stop(obj)
+                self._keyboard_reading = event.reason() != Qt.FocusReason.MouseFocusReason
+                if self._keyboard_reading:
+                    self._scroll_anim.stop()
+                    self.scroll_area.ensureWidgetVisible(obj, 0, 12)
+            elif event.type() == QEvent.Type.FocusOut:
+                if self._keyboard_reading:
+                    self._on_user_scroll()
+                self._keyboard_reading = False
+            elif event.type() == QEvent.Type.MouseButtonPress:
+                self._keyboard_reading = False
+            elif event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                offset = -1 if event.key() == Qt.Key.Key_Up else 1
+                index = self._line_buttons.index(obj) + offset
+                if 0 <= index < len(self._line_buttons):
+                    self._line_buttons[index].setFocus(Qt.FocusReason.OtherFocusReason)
+                return True
         return super().eventFilter(obj, event)
+
+    def _set_lyric_tab_stop(self, row):
+        if self._lyric_tab_stop is row:
+            return
+        if self._lyric_tab_stop is not None:
+            self._lyric_tab_stop.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        row.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        QWidget.setTabOrder(self.scroll_area, row)
+        self._lyric_tab_stop = row
 
     def set_playback_state(self, is_playing: bool):
         pass
@@ -1520,9 +1535,14 @@ class SpotifyLyricsWidget(QFrame):
         self.lines_layout.addSpacing(60)
         for time_sec, text in synced_lines:
             btn = LyricLineWidget(time_sec, text, self.lines_container)
+            btn.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+            btn.installEventFilter(self)
             btn.clicked.connect(lambda *args, t=time_sec: self.seek_requested.emit(t))
             self.lines_layout.addWidget(btn)
             self._line_buttons.append(btn)
+        if self._line_buttons:
+            self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self._set_lyric_tab_stop(self._line_buttons[0])
 
         self.lines_layout.addSpacing(100)
         self.lines_layout.addStretch()
@@ -1542,8 +1562,8 @@ class SpotifyLyricsWidget(QFrame):
             lbl = QLabel(clean, self.lines_container)
             set_widget_style(lbl, """
                 QLabel {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                    font-size: 13.5px;
+                    font-family: 'Segoe UI';
+                    font-size: 14px;
                     font-weight: 500;
                     color: rgba(255, 255, 255, 0.65);
                     background: transparent;
@@ -1551,6 +1571,7 @@ class SpotifyLyricsWidget(QFrame):
                     padding: 5px 4px;
                 }
             """)
+            lbl.setTextFormat(Qt.TextFormat.PlainText)
             lbl.setWordWrap(True)
             self.lines_layout.addWidget(lbl)
 
@@ -1580,12 +1601,15 @@ class SpotifyLyricsWidget(QFrame):
 
             # Set new
             if 0 <= active_idx < len(self._line_buttons):
-                self._line_buttons[active_idx].set_active(True)
+                active = self._line_buttons[active_idx]
+                active.set_active(True)
+                if not self._keyboard_reading:
+                    self._set_lyric_tab_stop(active)
                 if not self._user_scrolling:
                     self._scroll_to_line(active_idx)
 
     def _scroll_to_line(self, idx: int):
-        if not self._auto_scroll_enabled or not self.isVisible():
+        if not self._auto_scroll_enabled or not self.isVisible() or self._keyboard_reading:
             return
         if 0 <= idx < len(self._line_buttons):
             btn = self._line_buttons[idx]
@@ -1603,6 +1627,11 @@ class SpotifyLyricsWidget(QFrame):
         self._layout_scroll_timer.stop()
         self._scroll_anim.stop()
         self._synced_lines = []
+        self._lyric_tab_stop = None
+        self._keyboard_reading = False
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        for row in self._line_buttons:
+            row.removeEventFilter(self)
         self._line_buttons.clear()
         self._current_line_idx = -1
         while self.lines_layout.count() > 0:

@@ -15,7 +15,8 @@ import json
 import tempfile
 import pytest
 from pathlib import Path
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtGui import QPalette
 
 from poppy.ui.components import AnimatedTabStrip, AnimatedStackedWidget
 from poppy.ui.extended_views import (
@@ -129,6 +130,64 @@ def test_calendar_tab_view(qapp, tmp_path):
     assert view.current_month == init_month
     view.deleteLater()
     qapp.processEvents()
+
+
+def test_calendar_keeps_selected_day_when_switching_to_a_light_accent(qapp):
+    from datetime import date
+    from poppy.ui.theme import configure_theme, refresh_theme
+
+    calendar = CalendarTabView(accent="#0a84ff")
+    calendar.show()
+    today = calendar._day_buttons[date.today()]
+    other = next(button for button in calendar._day_buttons.values() if button is not today)
+    assert today.isChecked()
+    other.click()
+    assert other.isChecked() and not today.isChecked()
+    calendar.set_accent("#b4e61e")
+    for mode in ("Dark", "Light"):
+        configure_theme({"mode": mode})
+        refresh_theme()
+        assert other.isChecked()
+        assert today.font().underline()
+        for button in (other, calendar.btn_add):
+            assert button.palette().color(QPalette.ColorRole.ButtonText).name() == "#000000"
+
+
+def test_clipboard_empty_states_and_clear_unpinned(qapp):
+    manager = ClipboardHistoryManager()
+    view = ClipboardTabView(manager)
+    assert "recording is off" in view.items_layout.itemAt(0).widget().text()
+    view.set_recording_enabled(True)
+    assert view.items_layout.itemAt(0).widget().text() == "No clipboard items yet"
+
+    manager.add_clip("Keep this item")
+    manager.toggle_pin(0)
+    manager.add_clip("Remove this item")
+    view.input_search.setText("No results")
+    assert view.items_layout.itemAt(0).widget().text() == "No matching clipboard items"
+    view.btn_clear.click()
+    view.input_search.clear()
+    row = view.items_layout.itemAt(0).widget()
+    assert any(label.text() == "Keep this item" for label in row.findChildren(QLabel))
+    assert any(button.isChecked() and button.accessibleName() == "Unpin" for button in row.findChildren(QPushButton))
+    assert not view.btn_clear.isEnabled()
+
+
+def test_window_lists_use_readable_palette_in_both_modes(qapp):
+    from poppy.ui.theme import configure_theme, refresh_theme
+
+    desktops = DesktopsTabView()
+    desktops._show_windows([(1, "Project notes")])
+    commands = LauncherTabView(AppLauncherIndexer, commands=[("Open Home", lambda: None)])
+    for mode in ("Dark", "Light", "Dark"):
+        configure_theme({"mode": mode})
+        refresh_theme()
+        for listing in (desktops.windows, commands.results):
+            listing.ensurePolished()
+            base = listing.palette().color(QPalette.ColorRole.Base).lightness()
+            text = listing.palette().color(QPalette.ColorRole.Text).lightness()
+            difference = text - base if mode == "Dark" else base - text
+            assert difference > 125
 
 
 def test_docs_tab_view(qapp, tmp_path):

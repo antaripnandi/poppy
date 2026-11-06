@@ -6,6 +6,7 @@ import json
 import time
 import calendar
 from datetime import datetime, date
+from html import escape
 from pathlib import Path
 import subprocess
 import ctypes
@@ -26,12 +27,22 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QSaveFile, QIODevice
 from shiboken6 import isValid
 
-from poppy.ui.theme import set_widget_style
+from poppy.ui.theme import contrast_ink, set_widget_style
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
 from poppy.core.system_tools import lock_workstation
 from poppy.core.system_features import current_desktop_windows, activate_desktop_window
 from poppy.core.storage import data_path, write_json
+
+
+_WINDOW_LIST_STYLE = """
+    QListWidget { background: #1b2027; color: #f1f5f9;
+                  border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px; }
+    QListWidget:focus { border-color: rgba(255,255,255,0.55); }
+    QListWidget::item { padding: 6px 8px; border-radius: 4px; }
+    QListWidget::item:hover { background: rgba(255,255,255,0.08); }
+    QListWidget::item:selected { background: rgba(255,255,255,0.16); color: #f1f5f9; }
+"""
 
 
 # =====================================================================
@@ -50,6 +61,7 @@ class CalendarTabView(QWidget):
         self.current_year = today.year
         self.current_month = today.month
         self.selected_date = today
+        self._day_buttons = {}
 
         self.store_file = data_path("calendar_events.json")
         self.store_file.parent.mkdir(parents=True, exist_ok=True)
@@ -78,18 +90,18 @@ class CalendarTabView(QWidget):
 
         # Left Column: Interactive Month Calendar
         left_col = QVBoxLayout()
-        left_col.setSpacing(10)
+        left_col.setSpacing(8)
 
         # Header: Month & Navigation
         hdr_row = QHBoxLayout()
         hdr_row.setContentsMargins(4, 0, 4, 0)
         self.lbl_month_year = QLabel()
-        set_widget_style(self.lbl_month_year, "font-size: 15px; font-weight: 700; color: #f8fafc; border: none; background: transparent;")
+        set_widget_style(self.lbl_month_year, "font-size: 16px; font-weight: 600; color: #f8fafc; border: none; background: transparent;")
 
         btn_prev = IconButton(Icons.PREV, "Previous Month", size=24, font_size=11, is_fluent=True)
         btn_prev.clicked.connect(self._prev_month)
         btn_today = QPushButton("Today")
-        set_widget_style(btn_today, "font-size: 10px; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,0.06); color: #cbd5e1; border: none;")
+        btn_today.setMinimumHeight(24)
         btn_today.clicked.connect(self._go_today)
         btn_next = IconButton(Icons.NEXT, "Next Month", size=24, font_size=11, is_fluent=True)
         btn_next.clicked.connect(self._next_month)
@@ -107,6 +119,7 @@ class CalendarTabView(QWidget):
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.grid_layout.setSpacing(4)
         left_col.addWidget(self.grid_widget)
+        left_col.addStretch(1)
         main_layout.addLayout(left_col, stretch=3)
 
         # Right Column: Agenda & Selected Date Schedule
@@ -116,7 +129,7 @@ class CalendarTabView(QWidget):
         l_agenda.setSpacing(8)
 
         self.lbl_agenda_date = QLabel()
-        set_widget_style(self.lbl_agenda_date, "font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px; border: none; background: transparent;")
+        set_widget_style(self.lbl_agenda_date, "font-size: 12px; font-weight: 600; color: #e2e8f0; border: none; background: transparent;")
         l_agenda.addWidget(self.lbl_agenda_date)
 
         # Event List Scroll Area
@@ -134,53 +147,72 @@ class CalendarTabView(QWidget):
 
         # Add Event Row
         add_row = QHBoxLayout()
-        add_row.setSpacing(6)
+        add_row.setSpacing(8)
         self.input_event = QLineEdit()
-        self.input_event.setPlaceholderText("Add schedule / meeting...")
-        set_widget_style(self.input_event, """
-            QLineEdit {
-                background: rgba(255, 255, 255, 0.05);
-                border: none;
-                border-radius: 6px;
-                color: #f1f5f9;
-                font-size: 10.5px;
-                padding: 4px 8px;
-            }
-        """)
+        self.input_event.setPlaceholderText("Event title")
+        self.input_event.setAccessibleName("Event title")
+        self.input_event.setMinimumWidth(0)
         self.input_event.returnPressed.connect(self._add_event)
 
-        btn_add = QPushButton("+ Add")
-        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_add, f"""
-            QPushButton {{
-                background-color: {self._accent};
-                border: none;
-                border-radius: 6px;
-                color: #ffffff;
-                font-size: 10.5px;
-                font-weight: 600;
-                padding: 4px 10px;
-            }}
-            QPushButton:hover {{
-                opacity: 0.9;
-            }}
-        """)
-        btn_add.clicked.connect(self._add_event)
+        self.btn_add = QPushButton("Add event")
+        self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add.clicked.connect(self._add_event)
         add_row.addWidget(self.input_event, stretch=1)
-        add_row.addWidget(btn_add)
+        add_row.addWidget(self.btn_add)
         l_agenda.addLayout(add_row)
 
         main_layout.addWidget(card_agenda, stretch=2)
 
+        self.set_accent(self._accent)
         self._render_calendar()
         self._render_agenda()
+
+    def _accent_button_style(self, radius, padding):
+        # Author the fill and its ink together. Light mode must not recolor one independently.
+        ink = contrast_ink(QColor(self._accent))
+        return f"""
+            QPushButton {{ background: {self._accent}; color: {ink}; border: 2px solid transparent;
+                           border-radius: {radius}px; padding: {padding}; font-size: 12px; font-weight: 600; }}
+            QPushButton:hover, QPushButton:focus {{ border-color: {ink}; }}
+        """
+
+    def set_accent(self, accent):
+        self._accent = accent
+        self.btn_add.setStyleSheet(self._accent_button_style(6, "2px 8px"))
+        for day, button in self._day_buttons.items():
+            self._style_day(day, button)
+
+    def _style_day(self, day, button):
+        today = day == date.today()
+        selected = day == self.selected_date
+        events = bool(self.events.get(day.isoformat()))
+        button.setText(f"{day.day} ·" if events else str(day.day))
+        label = day.strftime("%A, %d %B %Y")
+        button.setAccessibleName(label + (", today" if today else "") + (", has events" if events else ""))
+        button.setToolTip(button.accessibleName())
+        button.setChecked(selected)
+        if selected:
+            button.setProperty("poppyStyleSource", None)
+            button.setStyleSheet(self._accent_button_style(8, "0"))
+        else:
+            set_widget_style(button, """
+                QPushButton { background: rgba(255,255,255,0.04); color: #e2e8f0;
+                              border: 2px solid transparent; border-radius: 8px; padding: 0; }
+                QPushButton:hover { background: rgba(255,255,255,0.12); }
+                QPushButton:focus { border-color: rgba(255,255,255,0.65); }
+            """)
+        font = button.font()
+        font.setUnderline(today)
+        button.setFont(font)
 
     def _render_calendar(self):
         # Clear existing grid
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
+        self._day_buttons.clear()
 
         month_name = calendar.month_name[self.current_month]
         self.lbl_month_year.setText(f"{month_name} {self.current_year}")
@@ -190,79 +222,48 @@ class CalendarTabView(QWidget):
         for col, d in enumerate(days):
             lbl_d = QLabel(d)
             lbl_d.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            set_widget_style(lbl_d, "font-size: 10px; font-weight: 600; color: #64748b; border: none; background: transparent;")
+            set_widget_style(lbl_d, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
             self.grid_layout.addWidget(lbl_d, 0, col)
 
         # Days cells
         month_cal = calendar.monthcalendar(self.current_year, self.current_month)
-        today = date.today()
-
         for row_idx, week in enumerate(month_cal, start=1):
             for col_idx, day_num in enumerate(week):
                 if day_num == 0:
                     continue
                 cell_date = date(self.current_year, self.current_month, day_num)
-                is_today = (cell_date == today)
-                is_selected = (cell_date == self.selected_date)
-
-                date_str = cell_date.isoformat()
-                has_events = bool(self.events.get(date_str))
-
-                btn_day = QPushButton(str(day_num))
+                btn_day = QPushButton()
                 btn_day.setFixedSize(36, 32)
+                btn_day.setCheckable(True)
                 btn_day.setCursor(Qt.CursorShape.PointingHandCursor)
-
-                # Style computation
-                if is_selected:
-                    bg = self._accent
-                    color = "#ffffff"
-                    font_w = "700"
-                elif is_today:
-                    bg = "rgba(255, 255, 255, 0.14)"
-                    color = "#38bdf8"
-                    font_w = "700"
-                else:
-                    bg = "rgba(255, 255, 255, 0.03)"
-                    color = "#cbd5e1"
-                    font_w = "500"
-
-                dot_sub = " ·" if has_events and not is_selected else ""
-                btn_day.setText(f"{day_num}{dot_sub}")
-                set_widget_style(btn_day, f"""
-                    QPushButton {{
-                        background: {bg};
-                        border: none;
-                        border-radius: 8px;
-                        color: {color};
-                        font-size: 11px;
-                        font-weight: {font_w};
-                    }}
-                    QPushButton:hover {{
-                        background: rgba(255, 255, 255, 0.18);
-                    }}
-                """)
                 btn_day.clicked.connect(lambda checked=False, cd=cell_date: self._select_date(cd))
-                self.grid_layout.addWidget(btn_day, row_idx, col_idx)
+                self._day_buttons[cell_date] = btn_day
+                self._style_day(cell_date, btn_day)
+                self.grid_layout.addWidget(btn_day, row_idx, col_idx, Qt.AlignmentFlag.AlignHCenter)
 
     def _select_date(self, dt: date):
+        previous = self.selected_date
         self.selected_date = dt
-        self._render_calendar()
+        for day in {previous, dt}:
+            if day in self._day_buttons:
+                self._style_day(day, self._day_buttons[day])
         self._render_agenda()
 
     def _render_agenda(self):
         while self.events_layout.count():
             item = self.events_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
         date_str = self.selected_date.isoformat()
         pretty_date = self.selected_date.strftime("%A, %d %B")
-        self.lbl_agenda_date.setText(pretty_date.upper())
+        self.lbl_agenda_date.setText(pretty_date)
 
         day_events = self.events.get(date_str, [])
         if not day_events:
-            lbl_empty = QLabel("No events scheduled for this day.")
-            set_widget_style(lbl_empty, "font-size: 10.5px; color: #64748b; border: none; background: transparent; padding: 10px 0;")
+            lbl_empty = QLabel("No events for this day")
+            set_widget_style(lbl_empty, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
             self.events_layout.addWidget(lbl_empty)
         else:
             for idx, ev in enumerate(day_events):
@@ -273,12 +274,13 @@ class CalendarTabView(QWidget):
                 r_l.setSpacing(6)
 
                 lbl_text = QLabel(ev.get("title", ""))
+                lbl_text.setTextFormat(Qt.TextFormat.PlainText)
                 lbl_text.setWordWrap(True)
                 lbl_text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-                set_widget_style(lbl_text, "font-size: 11px; color: #f1f5f9; border: none; background: transparent;")
+                set_widget_style(lbl_text, "font-size: 12px; color: #f1f5f9; border: none; background: transparent;")
                 r_l.addWidget(lbl_text, stretch=1)
 
-                btn_del = IconButton(Icons.CLOSE, "Delete Event", size=18, font_size=8, is_fluent=True)
+                btn_del = IconButton(Icons.CLOSE, "Delete event", size=24, font_size=12, is_fluent=True)
                 btn_del.clicked.connect(lambda checked=False, i=idx: self._delete_event(i))
                 r_l.addWidget(btn_del)
                 self.events_layout.addWidget(row)
@@ -339,11 +341,17 @@ class CalendarTabView(QWidget):
 
 class ClipboardTabView(QWidget):
     """Search saved text, copy it, and manage pinned entries."""
-    def __init__(self, clip_mgr, parent=None):
+    def __init__(self, clip_mgr, parent=None, *, recording_enabled=False):
         super().__init__(parent)
         self.clip_mgr = clip_mgr
+        self._recording_enabled = recording_enabled
         self._init_ui()
         self.clip_mgr.history_updated.connect(self._render_clips)
+
+    def set_recording_enabled(self, enabled):
+        if enabled != self._recording_enabled:
+            self._recording_enabled = enabled
+            self._render_clips()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -355,39 +363,15 @@ class ClipboardTabView(QWidget):
         hdr.setSpacing(8)
 
         self.input_search = QLineEdit()
-        self.input_search.setPlaceholderText("Search clipboard history...")
-        set_widget_style(self.input_search, """
-            QLineEdit {
-                background: rgba(255, 255, 255, 0.05);
-                border: none;
-                border-radius: 8px;
-                color: #f1f5f9;
-                font-size: 11px;
-                padding: 6px 12px;
-            }
-        """)
+        self.input_search.setPlaceholderText("Search clipboard history")
+        self.input_search.setAccessibleName("Search clipboard history")
         self.input_search.textChanged.connect(self._render_clips)
         hdr.addWidget(self.input_search, stretch=1)
 
-        btn_clear = QPushButton("Clear All")
-        btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_clear, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.06);
-                border: none;
-                border-radius: 8px;
-                color: #cbd5e1;
-                font-size: 10px;
-                font-weight: 500;
-                padding: 6px 12px;
-            }
-            QPushButton:hover {
-                background: rgba(239, 68, 68, 0.25);
-                color: #f87171;
-            }
-        """)
-        btn_clear.clicked.connect(self.clip_mgr.clear_all)
-        hdr.addWidget(btn_clear)
+        self.btn_clear = QPushButton("Clear unpinned")
+        self.btn_clear.setToolTip("Remove unpinned entries from clipboard history")
+        self.btn_clear.clicked.connect(self.clip_mgr.clear_all)
+        hdr.addWidget(self.btn_clear)
         layout.addLayout(hdr)
         self.lbl_save_error = QLabel("")
         self.lbl_save_error.setWordWrap(True)
@@ -402,7 +386,7 @@ class ClipboardTabView(QWidget):
         self.items_layout = QVBoxLayout(self.container)
         self.items_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.items_layout.setContentsMargins(0, 0, 0, 0)
-        self.items_layout.setSpacing(6)
+        self.items_layout.setSpacing(8)
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll, stretch=1)
 
@@ -411,22 +395,32 @@ class ClipboardTabView(QWidget):
     def _render_clips(self):
         error = self.clip_mgr.last_save_error
         self.lbl_save_error.setText("Clipboard history is not saved. Check the data folder and try again." if error else "")
+        self.lbl_save_error.setVisible(bool(error))
         self.lbl_save_error.setToolTip(error)
         while self.items_layout.count():
             item = self.items_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
         filter_q = self.input_search.text().lower().strip()
         clips = self.clip_mgr.history
+        self.btn_clear.setEnabled(any(not clip.get("pinned") for clip in clips))
 
         if filter_q:
             clips = [c for c in clips if filter_q in c["text"].lower()]
 
         if not clips:
-            lbl_empty = QLabel("No matching clipboard items.")
+            if self.clip_mgr.history:
+                message = "No matching clipboard items"
+            elif self._recording_enabled:
+                message = "No clipboard items yet"
+            else:
+                message = "Clipboard recording is off. Enable it in Settings > Tools."
+            lbl_empty = QLabel(message)
+            lbl_empty.setWordWrap(True)
             lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            set_widget_style(lbl_empty, "color: #64748b; font-size: 11px; padding: 24px 0; border: none; background: transparent;")
+            set_widget_style(lbl_empty, "color: #a7b2bf; font-size: 12px; padding: 24px 0; border: none; background: transparent;")
             self.items_layout.addWidget(lbl_empty)
             return
 
@@ -444,7 +438,7 @@ class ClipboardTabView(QWidget):
             """)
             r_l = QHBoxLayout(row)
             r_l.setContentsMargins(12, 8, 12, 8)
-            r_l.setSpacing(10)
+            r_l.setSpacing(8)
 
             # Text Preview (Max 2 lines)
             txt = clip["text"]
@@ -454,46 +448,38 @@ class ClipboardTabView(QWidget):
 
             lbl_txt = QLabel(disp)
             lbl_txt.setTextFormat(Qt.TextFormat.PlainText)
-            set_widget_style(lbl_txt, "font-size: 11px; color: #f1f5f9; border: none; background: transparent;")
+            if txt != disp:
+                lbl_txt.setToolTip(f"<p style='white-space: pre-wrap'>{escape(txt)}</p>")
+            set_widget_style(lbl_txt, "font-size: 12px; color: #f1f5f9; border: none; background: transparent;")
             lbl_txt.setWordWrap(True)
             lbl_txt.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             r_l.addWidget(lbl_txt, stretch=1)
 
             lbl_time = QLabel(clip.get("time", ""))
-            set_widget_style(lbl_time, "font-size: 9.5px; color: #94a3b8; border: none; background: transparent;")
+            set_widget_style(lbl_time, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
             r_l.addWidget(lbl_time)
 
             # Copy Button
             btn_copy = QPushButton("Copy")
             btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
-            set_widget_style(btn_copy, """
-                QPushButton {
-                    background: rgba(14, 165, 233, 0.2);
-                    border: none;
-                    border-radius: 5px;
-                    color: #38bdf8;
-                    font-size: 10px;
-                    font-weight: 600;
-                    padding: 3px 8px;
-                }
-                QPushButton:hover {
-                    background: rgba(14, 165, 233, 0.35);
-                    color: #ffffff;
-                }
-            """)
+            btn_copy.setMinimumWidth(64)
             btn_copy.clicked.connect(lambda checked=False, t=txt, b=btn_copy: self._copy_clip(t, b))
             r_l.addWidget(btn_copy)
 
             # Pin Button
             is_pinned = clip.get("pinned", False)
-            btn_pin = IconButton(Icons.PIN, "Unpin" if is_pinned else "Pin to top", size=20, font_size=10, is_fluent=True)
-            if is_pinned:
-                set_widget_style(btn_pin, "color: #38bdf8; background: rgba(56, 189, 248, 0.2); border: none; border-radius: 4px;")
+            btn_pin = IconButton(Icons.UNPIN if is_pinned else Icons.PIN,
+                                 "Unpin" if is_pinned else "Pin to top", size=24, font_size=12, is_fluent=True)
+            set_widget_style(btn_pin, btn_pin.property("poppyStyleSource") + """
+                QPushButton:checked { background: rgba(255,255,255,0.15); color: #f1f5f9; }
+            """)
+            btn_pin.setCheckable(True)
+            btn_pin.setChecked(is_pinned)
             btn_pin.clicked.connect(lambda checked=False, key=clip["id"]: self.clip_mgr.toggle_pin(key))
             r_l.addWidget(btn_pin)
 
             # Delete Button
-            btn_del = IconButton(Icons.CLOSE, "Delete Clip", size=20, font_size=9, is_fluent=True)
+            btn_del = IconButton(Icons.CLOSE, "Delete Clip", size=24, font_size=12, is_fluent=True)
             btn_del.clicked.connect(lambda checked=False, key=clip["id"]: self.clip_mgr.delete_clip(key))
             r_l.addWidget(btn_del)
 
@@ -504,15 +490,13 @@ class ClipboardTabView(QWidget):
     def _copy_clip(self, text: str, btn: QPushButton):
         cb = QApplication.clipboard()
         cb.setText(text)
-        btn.setText("Copied!")
-        set_widget_style(btn, "background: rgba(34, 197, 94, 0.28); color: #4ade80; border: none; border-radius: 5px; font-size: 10px; font-weight: 700; padding: 3px 8px;")
+        btn.setText("Copied")
         QTimer.singleShot(1500, lambda: self._reset_copy_btn(btn))
 
     def _reset_copy_btn(self, btn: QPushButton):
         if not isValid(btn):
             return
         btn.setText("Copy")
-        set_widget_style(btn, "background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: none; border-radius: 5px; font-size: 10px; font-weight: 600; padding: 3px 8px;")
 
 
 # =====================================================================
@@ -524,9 +508,8 @@ class DocsTabView(QWidget):
 
     doc_finished = Signal(object, str)
 
-    def __init__(self, parent=None, accent="#6e9bff"):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._accent = accent
         self._recent_files: list[str] = []
         self._doc_busy = False
         self._init_ui()
@@ -540,86 +523,46 @@ class DocsTabView(QWidget):
         cards_row = self.action_cards = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         cards_row.setSpacing(12)
 
-        # Card 1: Word / Text -> PDF
-        card_w2p = CardFrame(self)
-        l_w2p = QBoxLayout(QBoxLayout.Direction.TopToBottom, card_w2p)
-        l_w2p.setContentsMargins(16, 16, 16, 16)
-        l_w2p.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        l_w2p.setSpacing(6)
-
-        lbl_i1 = QLabel(Icons.DOCS)
-        set_widget_style(lbl_i1, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 26px; color: #f1f5f9; border: none; background: transparent;")
-        lbl_i1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_t1 = QLabel("Text → PDF")
-        set_widget_style(lbl_t1, "font-size: 13px; font-weight: 700; color: #f8fafc; border: none; background: transparent;")
-        lbl_t1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_s1 = QLabel("Print a text file as a PDF")
-        set_widget_style(lbl_s1, "font-size: 10px; color: #94a3b8; border: none; background: transparent;")
-        lbl_s1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        btn_act1 = QPushButton("Select File to Convert")
-        btn_act1.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_act1.clicked.connect(self._convert_to_pdf)
-
-        l_w2p.addWidget(lbl_i1)
-        text1 = QVBoxLayout()
-        text1.setSpacing(3)
-        text1.addWidget(lbl_t1)
-        text1.addWidget(lbl_s1)
-        l_w2p.addLayout(text1, 1)
-        l_w2p.addWidget(btn_act1)
-        cards_row.addWidget(card_w2p)
-
-        # Card 2: PDF Info & Text Extract
-        card_p2w = CardFrame(self)
-        l_p2w = QBoxLayout(QBoxLayout.Direction.TopToBottom, card_p2w)
-        l_p2w.setContentsMargins(16, 16, 16, 16)
-        l_p2w.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        l_p2w.setSpacing(6)
-
-        lbl_i2 = QLabel(Icons.PENCIL)
-        set_widget_style(lbl_i2, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 26px; color: #f1f5f9; border: none; background: transparent;")
-        lbl_i2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_t2 = QLabel("Inspect PDF Metadata")
-        set_widget_style(lbl_t2, "font-size: 13px; font-weight: 700; color: #f8fafc; border: none; background: transparent;")
-        lbl_t2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_s2 = QLabel("Check page count and document info")
-        set_widget_style(lbl_s2, "font-size: 10px; color: #94a3b8; border: none; background: transparent;")
-        lbl_s2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        btn_act2 = QPushButton("Select PDF")
-        btn_act2.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_act2, "background: rgba(255,255,255,0.08); border: none; border-radius: 6px; color: #f1f5f9; font-size: 10px; font-weight: 600; padding: 4px 12px; margin-top: 4px;")
-        btn_act2.clicked.connect(self._inspect_pdf)
-
-        l_p2w.addWidget(lbl_i2)
-        text2 = QVBoxLayout()
-        text2.setSpacing(3)
-        text2.addWidget(lbl_t2)
-        text2.addWidget(lbl_s2)
-        l_p2w.addLayout(text2, 1)
-        l_p2w.addWidget(btn_act2)
-        cards_row.addWidget(card_p2w)
-
+        self._doc_buttons = []
+        self._action_rows = []
+        for title, description, action, callback in (
+            ("Text to PDF", "Save a text file as a PDF", "Choose text file", self._convert_to_pdf),
+            ("PDF details", "Check the page count and document information", "Choose PDF", self._inspect_pdf),
+        ):
+            card = CardFrame(self)
+            row = QBoxLayout(QBoxLayout.Direction.TopToBottom, card)
+            row.setContentsMargins(16, 16, 16, 16)
+            row.setSpacing(8)
+            text = QVBoxLayout()
+            text.setSpacing(4)
+            heading = QLabel(title)
+            set_widget_style(heading, "font-size: 14px; font-weight: 600; color: #f8fafc; border: none; background: transparent;")
+            detail = QLabel(description)
+            detail.setWordWrap(True)
+            set_widget_style(detail, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
+            text.addWidget(heading)
+            text.addWidget(detail)
+            row.addLayout(text, 1)
+            button = QPushButton(action)
+            button.clicked.connect(callback)
+            row.addWidget(button, alignment=Qt.AlignmentFlag.AlignLeft)
+            cards_row.addWidget(card, 1)
+            self._doc_buttons.append(button)
+            self._action_rows.append(row)
         main_layout.addLayout(cards_row)
 
-        # Info line
-        self._doc_buttons = (btn_act1, btn_act2)
-        self._action_rows = ((l_w2p, lbl_t1, lbl_s1), (l_p2w, lbl_t2, lbl_s2))
-        self.set_accent(self._accent)
         self.doc_status = QLabel("Files are processed locally.")
         self.doc_status.setTextFormat(Qt.TextFormat.PlainText)
         self.doc_status.setWordWrap(True)
-        set_widget_style(self.doc_status, "font-size: 10.5px; color: #64748b; border: none; background: transparent;")
+        set_widget_style(self.doc_status, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
         main_layout.addWidget(self.doc_status)
 
         # Recent Files Tray
         recent_hdr = QHBoxLayout()
-        lbl_r = QLabel("RECENT CONVERSIONS")
-        set_widget_style(lbl_r, "font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px; border: none; background: transparent;")
+        lbl_r = QLabel("Recent conversions")
+        set_widget_style(lbl_r, "font-size: 12px; font-weight: 600; color: #e2e8f0; border: none; background: transparent;")
         btn_clear = QPushButton("Clear")
         btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_clear, "font-size: 9.5px; padding: 2px 8px; border: none; border-radius: 4px; background: rgba(255,255,255,0.06); color: #cbd5e1;")
         btn_clear.clicked.connect(self._clear_recent)
         recent_hdr.addWidget(lbl_r)
         recent_hdr.addStretch()
@@ -630,7 +573,8 @@ class DocsTabView(QWidget):
         self.recent_layout = QVBoxLayout(self.recent_container)
         self.recent_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.recent_layout.setContentsMargins(0, 0, 0, 0)
-        self.recent_layout.setSpacing(6)
+        self.recent_layout.setSpacing(8)
+        self.recent_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.recent_scroll = ScrollArea()
         self.recent_scroll.setWidgetResizable(True)
         self.recent_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -639,23 +583,16 @@ class DocsTabView(QWidget):
         self.recent_scroll.setWidget(self.recent_container)
         main_layout.addWidget(self.recent_scroll, stretch=1)
 
-        self.lbl_empty_recent = QLabel("Converted and generated files show up here. Drag them anywhere.")
-        set_widget_style(self.lbl_empty_recent, "font-size: 10.5px; color: #64748b; border: none; background: transparent;")
+        self.lbl_empty_recent = QLabel("No recent conversions")
+        set_widget_style(self.lbl_empty_recent, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
         self.recent_layout.addWidget(self.lbl_empty_recent)
-
-    def set_accent(self, accent):
-        self._accent = accent
-        set_widget_style(self._doc_buttons[0], f"QPushButton {{ background: rgba(255,255,255,0.07); border: 1px solid {accent}; border-radius: 6px; color: #edf1f0; font-size: 11px; font-weight: 600; padding: 4px 12px; }} QPushButton:hover {{ background: rgba(255,255,255,0.15); }} QPushButton:focus {{ border: 2px solid {accent}; }}")
 
     def apply_layout(self, name):
         list_view = name in ("Daily", "Console")
         self.action_cards.setDirection(QBoxLayout.Direction.TopToBottom if list_view else QBoxLayout.Direction.LeftToRight)
-        for row, title, description in self._action_rows:
+        for row in self._action_rows:
             row.setDirection(QBoxLayout.Direction.LeftToRight if list_view else QBoxLayout.Direction.TopToBottom)
-            row.setSpacing(12 if list_view else 6)
-            for label in (title, description):
-                label.setAlignment(Qt.AlignmentFlag.AlignVCenter |
-                                   (Qt.AlignmentFlag.AlignLeft if list_view else Qt.AlignmentFlag.AlignHCenter))
+            row.setSpacing(12 if list_view else 8)
 
     def _convert_to_pdf(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select text file to convert to PDF", "", "Text files (*.txt *.md *.py *.json *.html)")
@@ -733,8 +670,8 @@ class DocsTabView(QWidget):
         row = QFrame()
         set_widget_style(row, "background: rgba(255, 255, 255, 0.04); border-radius: 8px; border: none;")
         r_l = QHBoxLayout(row)
-        r_l.setContentsMargins(10, 8, 10, 8)
-        r_l.setSpacing(10)
+        r_l.setContentsMargins(12, 8, 12, 8)
+        r_l.setSpacing(8)
 
         thumb = DraggableThumbnail(size=32, border_radius=6, parent=self)
         thumb.file_path = file_path
@@ -744,18 +681,18 @@ class DocsTabView(QWidget):
         meta.setSpacing(2)
         lbl_n = QLabel(Path(file_path).name)
         lbl_n.setWordWrap(True)
+        lbl_n.setTextFormat(Qt.TextFormat.PlainText)
         lbl_n.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         lbl_n.setToolTip(file_path)
-        set_widget_style(lbl_n, "font-size: 11px; font-weight: 600; color: #f1f5f9; border: none; background: transparent;")
-        lbl_s = QLabel(f"{extra_info} · Drag into chat, Discord, or desktop")
-        set_widget_style(lbl_s, "font-size: 9.5px; color: #94a3b8; border: none; background: transparent;")
+        set_widget_style(lbl_n, "font-size: 13px; font-weight: 500; color: #f1f5f9; border: none; background: transparent;")
+        lbl_s = QLabel(extra_info)
+        set_widget_style(lbl_s, "font-size: 12px; color: #a7b2bf; border: none; background: transparent;")
         meta.addWidget(lbl_n)
         meta.addWidget(lbl_s)
         r_l.addLayout(meta, stretch=1)
 
         btn_open = QPushButton("Open")
         btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_open, "background: rgba(14, 165, 233, 0.2); border: none; border-radius: 5px; color: #38bdf8; font-size: 10px; font-weight: 600; padding: 3px 8px;")
         btn_open.clicked.connect(lambda: os.startfile(file_path))
         r_l.addWidget(btn_open)
 
@@ -766,6 +703,7 @@ class DocsTabView(QWidget):
         while self.recent_layout.count():
             item = self.recent_layout.takeAt(0)
             if item.widget() and item.widget() is not self.lbl_empty_recent:
+                item.widget().hide()
                 item.widget().deleteLater()
         self.lbl_empty_recent.setVisible(True)
         self.recent_layout.addWidget(self.lbl_empty_recent)
@@ -795,7 +733,9 @@ class LauncherTabView(QWidget):
         self.input_search.returnPressed.connect(self._launch_current)
         layout.addWidget(self.input_search)
         self.results = QListWidget()
+        set_widget_style(self.results, _WINDOW_LIST_STYLE)
         self.results.setAccessibleName("Matching commands")
+        self.results.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.results.itemActivated.connect(lambda item: self._launch_current())
         layout.addWidget(self.results, 1)
         self.status = QLabel("Enter to open · Esc to close")
@@ -894,6 +834,7 @@ class DesktopsTabView(QWidget):
         layout.addLayout(header)
 
         self.windows = QListWidget()
+        set_widget_style(self.windows, _WINDOW_LIST_STYLE)
         self.windows.setAccessibleName("Windows on the current desktop")
         self.windows.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.windows.itemActivated.connect(self._activate_window)
