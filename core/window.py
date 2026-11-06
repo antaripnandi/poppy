@@ -382,27 +382,8 @@ class DynamicNotchWindow(QWidget):
             controls.addWidget(button, 1, Qt.AlignmentFlag.AlignCenter)
         player.addLayout(controls)
 
-        volume = QHBoxLayout()
-        volume.setSpacing(5)
-        self.btn_peek_mute = IconButton(Icons.VOLUME, "Mute system audio", size=18, font_size=11, is_fluent=True)
-        self.btn_peek_mute.clicked.connect(self._on_mute_clicked)
-        self.peek_volume = ClickableSlider(Qt.Orientation.Horizontal)
-        self.peek_volume.setAccessibleName("System volume")
-        self.peek_volume.setRange(0, 100)
-        self.peek_volume.setFixedHeight(15)
-        self.peek_volume.valueChanged.connect(self._on_volume_slider_changed)
-        volume.addWidget(self.btn_peek_mute)
-        volume.addWidget(self.peek_volume, 1)
-        player.addLayout(volume)
-        layout.addLayout(player, 1)
-
-        self.peek_timeline_menu = QMenu("Playback position", self)
-        timeline_action = QWidgetAction(self.peek_timeline_menu)
-        timeline = QWidget()
-        timeline.setMinimumWidth(205)
-        timeline_layout = QVBoxLayout(timeline)
-        timeline_layout.setContentsMargins(10, 6, 10, 6)
-        timeline_layout.setSpacing(3)
+        playback = QHBoxLayout()
+        playback.setSpacing(7)
         self.peek_seek = ClickableSlider(Qt.Orientation.Horizontal)
         self.peek_seek.setAccessibleName("Playback position")
         self.peek_seek.setFixedHeight(16)
@@ -410,20 +391,46 @@ class DynamicNotchWindow(QWidget):
         self.peek_seek.seek_clicked.connect(self.media_manager.seek)
         self.peek_seek.sliderReleased.connect(lambda: self.media_manager.seek(self.peek_seek.value()))
         self.peek_seek.sliderMoved.connect(self._set_peek_elapsed)
-        timeline_layout.addWidget(self.peek_seek)
-        times = QHBoxLayout()
-        self.lbl_peek_elapsed, self.lbl_peek_duration = QLabel("--:--"), QLabel("--:--")
-        times.addWidget(self.lbl_peek_elapsed)
-        times.addStretch()
-        times.addWidget(self.lbl_peek_duration)
-        timeline_layout.addLayout(times)
-        timeline_action.setDefaultWidget(timeline)
-        self.peek_timeline_menu.addAction(timeline_action)
+        playback.addWidget(self.peek_seek, 1)
+        self.btn_peek_volume = IconButton(Icons.VOLUME, "Show volume slider", size=19, font_size=12, is_fluent=True)
+        self.btn_peek_volume.clicked.connect(self._toggle_peek_volume)
+        playback.addWidget(self.btn_peek_volume)
+        player.addLayout(playback)
+        layout.addLayout(player, 1)
 
-        self.main_layout.addWidget(self.view_peek)
+        self.peek_volume_menu = QMenu(self)
+        self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
+        volume_action = QWidgetAction(self.peek_volume_menu)
+        volume = QWidget()
+        volume.setFixedWidth(42)
+        volume_layout = QVBoxLayout(volume)
+        volume_layout.setContentsMargins(5, 6, 5, 6)
+        volume_layout.setSpacing(4)
+        self.lbl_peek_volume = QLabel("0%")
+        self.lbl_peek_volume.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        volume_layout.addWidget(self.lbl_peek_volume)
+        self.peek_volume = ClickableSlider(Qt.Orientation.Vertical)
+        self.peek_volume.setAccessibleName("System volume")
+        self.peek_volume.setRange(0, 100)
+        self.peek_volume.setFixedSize(22, 86)
+        self.peek_volume.valueChanged.connect(self._on_volume_slider_changed)
+        volume_layout.addWidget(self.peek_volume, 0, Qt.AlignmentFlag.AlignHCenter)
+        volume_action.setDefaultWidget(volume)
+        self.peek_volume_menu.addAction(volume_action)
+        self._peek_volume_opacity = QGraphicsOpacityEffect(self.peek_volume_menu)
+        self._peek_volume_opacity.setEnabled(False)
+        self.peek_volume_menu.setGraphicsEffect(self._peek_volume_opacity)
+        self._peek_volume_fade = QPropertyAnimation(self._peek_volume_opacity, b"opacity", self)
+        self._peek_volume_fade.setDuration(110)
+        self._peek_volume_fade.setStartValue(0.35)
+        self._peek_volume_fade.setEndValue(1.0)
+        self._peek_volume_fade.finished.connect(lambda: self._peek_volume_opacity.setEnabled(False))
+        self.peek_volume_menu.aboutToHide.connect(self._finish_peek_volume)
+
+        # Position the full-size child explicitly so it can be clipped equally
+        # on both sides while the native window is narrower during the reveal.
         self.view_peek.hide()
-
-
         self._peek_opacity = QGraphicsOpacityEffect(self.view_peek)
         self.view_peek.setGraphicsEffect(self._peek_opacity)
         self._peek_opacity.setEnabled(False)
@@ -953,10 +960,31 @@ class DynamicNotchWindow(QWidget):
             self.peek_volume.blockSignals(True)
             self.peek_volume.setValue(volume)
             self.peek_volume.blockSignals(False)
-        self.btn_peek_mute.setText(Icons.MUTE if muted else Icons.VOLUME)
-        label = "Unmute system audio" if muted else "Mute system audio"
-        self.btn_peek_mute.setToolTip(label)
-        self.btn_peek_mute.setAccessibleName(label)
+        self.lbl_peek_volume.setText(f"{volume}%")
+        self.btn_peek_volume.setText(Icons.MUTE if muted else Icons.VOLUME)
+
+    def _toggle_peek_volume(self):
+        menu = self.peek_volume_menu
+        if menu.isVisible():
+            menu.hide()
+            return
+        self._sync_system_controls()
+        anchor = self.btn_peek_volume.mapToGlobal(self.btn_peek_volume.rect().center())
+        size = menu.sizeHint()
+        screen = QGuiApplication.screenAt(anchor)
+        bounds = screen.availableGeometry() if screen else self._get_current_screen_geometry()
+        x = max(bounds.left(), min(anchor.x() - size.width() // 2, bounds.right() - size.width() + 1))
+        y = min(self.geometry().bottom() + 5, bounds.bottom() - size.height() + 1)
+        self._peek_volume_opacity.setOpacity(0.35)
+        self._peek_volume_opacity.setEnabled(True)
+        menu.popup(QPoint(x, y))
+        self.peek_volume.setFocus(Qt.FocusReason.PopupFocusReason)
+        self._peek_volume_fade.start()
+
+    def _finish_peek_volume(self):
+        self._peek_volume_fade.stop()
+        self._peek_volume_opacity.setEnabled(False)
+        self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
 
     def _on_brightness_slider_changed(self, value: int):
         self.bright_ctrl.set_brightness(value)
@@ -1074,8 +1102,7 @@ class DynamicNotchWindow(QWidget):
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         if self.state == NotchState.PEEK:
-            self._show_peek_timeline()
-            menu.addMenu(self.peek_timeline_menu)
+            menu.addAction("Toggle mute", self._on_mute_clicked)
             if len(self.media_manager.get_sessions()) > 1:
                 self._add_media_session_actions(menu.addMenu("Media player"))
             outputs = menu.addMenu("Sound output")
@@ -1580,10 +1607,15 @@ class DynamicNotchWindow(QWidget):
         self.peek_seek.setRange(0, max(1, round(duration)))
         self.peek_seek.setValue(round(position) if duration > 0 else 0)
         self._set_peek_elapsed(position if duration > 0 else None)
-        self.lbl_peek_duration.setText(self.tab_music._format_time(duration) if duration > 0 else "--:--")
 
     def _set_peek_elapsed(self, position):
-        self.lbl_peek_elapsed.setText(self.tab_music._format_time(position) if position is not None else "--:--")
+        duration = self._peek_timeline[1]
+        if position is None:
+            text = "Playback position unavailable"
+        else:
+            text = f"{self.tab_music._format_time(position)} / {self.tab_music._format_time(duration)}"
+        self.peek_seek.setToolTip(text)
+        self.peek_seek.setAccessibleDescription(text)
 
     def _refresh_peek_surface(self):
         source = self._appearance["peek_color_source"]
@@ -1619,7 +1651,7 @@ class DynamicNotchWindow(QWidget):
         self.btn_peek_prev.setIcon(self._peek_transport_icons["Previous"])
         self.btn_peek_play.setIcon(self._peek_transport_icons["Pause" if self._current_media.get("is_playing") else "Play"])
         self.btn_peek_next.setIcon(self._peek_transport_icons["Next"])
-        for button in (self.btn_peek_prev, self.btn_peek_next, self.btn_peek_mute, self.btn_peek_play):
+        for button in (self.btn_peek_prev, self.btn_peek_next, self.btn_peek_volume, self.btn_peek_play):
             size = 18 if button is self.btn_peek_play else 14
             button.setIconSize(QSize(size, size))
             button.setProperty("poppyStyleSource", None)
@@ -1637,11 +1669,22 @@ class DynamicNotchWindow(QWidget):
                 QPushButton:focus {{ border-color: {muted}; }}
                 QPushButton:disabled {{ color: {muted}; }}
             """)
-        self.peek_volume.setStyleSheet(f"""
+        self.peek_seek.setStyleSheet(f"""
             QSlider::groove:horizontal {{ height: 2px; background: rgba({rgb},0.23); }}
             QSlider::sub-page:horizontal {{ background: {muted}; }}
             QSlider::handle:horizontal {{ background: {ink}; width: 6px; margin: -2px 0; border-radius: 3px; }}
+            QSlider::handle:horizontal:disabled {{ background: transparent; }}
             QSlider:focus {{ border: 1px solid {muted}; }}
+        """)
+        self.peek_volume_menu.setStyleSheet(f"""
+            QMenu {{ background: {color.name()}; border: 1px solid rgba({rgb},0.16); border-radius: 8px; padding: 1px; }}
+        """)
+        self.lbl_peek_volume.setStyleSheet(f"color: {ink}; font: 11px 'Segoe UI';")
+        self.peek_volume.setStyleSheet(f"""
+            QSlider::groove:vertical {{ width: 3px; background: rgba({rgb},0.23); border-radius: 1px; }}
+            QSlider::add-page:vertical {{ background: {muted}; border-radius: 1px; }}
+            QSlider::handle:vertical {{ height: 8px; margin: 0 -2px; background: {ink}; border-radius: 3px; }}
+            QSlider:focus {{ border: 1px solid rgba({rgb},0.25); border-radius: 4px; }}
         """)
         if self.state == NotchState.PEEK:
             self.update()
@@ -2187,6 +2230,7 @@ class DynamicNotchWindow(QWidget):
             return
 
         old_state = self.state
+        self.peek_volume_menu.hide()
         self._peek_fade.stop()
         self._peek_opacity.setEnabled(False)
         self.state = new_state
@@ -2208,6 +2252,7 @@ class DynamicNotchWindow(QWidget):
             self._target_size = self.PEEK_SIZE
             self.view_collapsed.setVisible(False)
             self.view_peek.setVisible(True)
+            self._position_peek_view()
             self.view_peek.setFocus(Qt.FocusReason.OtherFocusReason)
             self.view_island.setVisible(False)
             self.view_expanded.setVisible(False)
@@ -2381,10 +2426,15 @@ class DynamicNotchWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if self.state == NotchState.PEEK:
+            self._position_peek_view()
         # NEVER call SetWindowRgn during a live animation frame
         if not (self.anim and self.anim.state() == QPropertyAnimation.State.Running):
             self._recenter_window()
             self._update_clickthrough_mask()
+
+    def _position_peek_view(self):
+        self.view_peek.move((self.width() - self.view_peek.width()) // 2, 0)
 
     def _update_clickthrough_mask(self):
         self.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))

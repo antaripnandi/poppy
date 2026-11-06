@@ -41,7 +41,8 @@ def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
             assert window.lbl_peek_title.fontMetrics().horizontalAdvance(window.lbl_peek_title.text()) <= window.lbl_peek_title.width()
             assert window.lbl_peek_artist.fontMetrics().horizontalAdvance(window.lbl_peek_artist.text()) <= window.lbl_peek_artist.width()
             controls = (window.peek_thumb, window.lbl_peek_title, window.lbl_peek_artist, window.peek_visualizer,
-                        window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next, window.peek_volume)
+                        window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next,
+                        window.peek_seek, window.btn_peek_volume)
             for widget in controls:
                 assert window.view_peek.rect().contains(QRect(widget.mapTo(window.view_peek, QPoint()), widget.size()))
             assert window.peek_thumb.width() > window.btn_peek_play.width() * 2
@@ -49,8 +50,8 @@ def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
             buttons = (window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next)
             centers = [button.mapTo(window.view_peek, button.rect().center()) for button in buttons]
             assert centers[0].x() < centers[1].x() < centers[2].x()
-            assert len({point.y() for point in centers}) == 1
-            assert not window.peek_seek.isVisible()
+            assert max(point.y() for point in centers) - min(point.y() for point in centers) <= 1
+            assert not window.peek_volume.isVisible()
     assert window.btn_peek_play.accessibleName() == "Pause"
     assert not window._peek_opacity.isEnabled()
     window._on_media_changed({"title": "No Media Playing"})
@@ -141,28 +142,78 @@ def test_peek_seeks_and_fixed_color_survives_layout_changes(audit_app, monkeypat
     window._transition_to(NotchState.PEEK)
     settle(window, audit_app)
     assert window.peek_seek.value() == 25
-    assert window.lbl_peek_elapsed.text() == "00:25"
+    assert window.peek_seek.toolTip() == "00:25 / 01:40"
+    assert window.peek_seek.isVisible()
+    QTest.mouseClick(window.peek_seek, Qt.MouseButton.LeftButton, pos=window.peek_seek.rect().center())
+    assert 48 <= calls[-1] <= 52
+    assert window.state == NotchState.PEEK
     point = window.rect().center()
     event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, window.mapToGlobal(point))
     window.contextMenuEvent(event)
     menu = audit_app.activePopupWidget()
     assert isinstance(menu, QMenu)
     actions = {action.text(): action for action in menu.actions()}
-    assert actions["Playback position"].menu() is window.peek_timeline_menu
     assert actions["Sound output"].menu() is not None
-    window.peek_timeline_menu.popup(event.globalPos())
-    audit_app.processEvents()
-    assert window.peek_seek.isVisible()
-    QTest.mouseClick(window.peek_seek, Qt.MouseButton.LeftButton, pos=QPoint(window.peek_seek.width() // 2, 5))
-    window.peek_timeline_menu.hide()
+    assert "Toggle mute" in actions
     menu.hide()
-    assert 48 <= calls[-1] <= 52
-    assert window.state == NotchState.PEEK
     for layout, mode in (("Deck", "Dark"), ("Daily", "Light"), ("Console", "Dark")):
         window._apply_live_appearance({"layout": layout, "mode": mode, "peek_color_source": "fixed", "peek_color": "#244f58"})
         assert window.grab().toImage().pixelColor(window.width() // 2, 6) == QColor("#244f58")
         assert "background: transparent" in window.btn_peek_play.styleSheet()
         assert not window.btn_peek_play.icon().isNull()
+    window.close()
+
+
+def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monkeypatch):
+    window = DynamicNotchWindow()
+    levels = []
+    monkeypatch.setattr(window.audio_ctrl, "set_volume", levels.append)
+    monkeypatch.setattr(window.audio_ctrl, "get_mute", lambda: False)
+    window.show()
+    window._on_media_changed({"title": "Track"})
+    window._transition_to(NotchState.PEEK)
+    settle(window, audit_app)
+    window._show_volume(45, False)
+    assert not window.peek_volume_menu.isVisible()
+    QTest.mouseClick(window.btn_peek_volume, Qt.MouseButton.LeftButton)
+    assert window.peek_volume_menu.isVisible()
+    assert window.peek_volume.orientation() == Qt.Orientation.Vertical
+    assert window.lbl_peek_volume.text() == "45%"
+    slider = window.peek_volume
+    x = slider.width() // 2
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=QPoint(x, 72))
+    QTest.mouseMove(slider, QPoint(x, 44))
+    QTest.mouseMove(slider, QPoint(x, 12))
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=QPoint(x, 12))
+    assert len(levels) >= 3
+    assert levels == sorted(levels)
+    assert levels[0] < 25 and levels[-1] > 80
+    assert window.lbl_peek_volume.text() == f"{levels[-1]}%"
+    assert window.state == NotchState.PEEK
+    QTest.keyClick(slider, Qt.Key.Key_Escape)
+    assert not window.peek_volume_menu.isVisible()
+    window.btn_peek_volume.click()
+    assert window.peek_volume_menu.isVisible()
+    window._collapse_to_pill()
+    assert not window.peek_volume_menu.isVisible()
+    window.close()
+
+
+@pytest.mark.parametrize("style", ["Notch", "Pill"])
+def test_hover_reveal_keeps_window_and_content_centered(audit_app, style):
+    window = DynamicNotchWindow({"appearance": {"style": style, "collapsed_width": 239}})
+    window.show()
+    window._on_media_changed({"title": "Track"})
+    center = window.x() + window.width() / 2
+    window._transition_to(NotchState.PEEK)
+    widths = []
+    for fraction in (0, 0.15, 0.35, 0.6, 1):
+        window.anim.setCurrentTime(round(window.anim.duration() * fraction))
+        audit_app.processEvents()
+        widths.append(window.width())
+        assert abs(window.x() + window.width() / 2 - center) <= 1
+        assert abs(window.view_peek.x() + window.view_peek.width() / 2 - window.width() / 2) <= 1
+    assert widths[0] < widths[1] < widths[-1]
     window.close()
 
 

@@ -1104,9 +1104,13 @@ class ClickableSlider(QSlider):
         style = self.style()
         groove = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
         handle = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
-        span = max(1, groove.width() - handle.width())
-        position = round(point.x() - groove.x() - handle.width() / 2)
-        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), position, span, option.upsideDown)
+        if self.orientation() == Qt.Orientation.Vertical:
+            span = groove.height() - handle.height()
+            position = point.y() - groove.y() - handle.height() / 2
+        else:
+            span = groove.width() - handle.width()
+            position = point.x() - groove.x() - handle.width() / 2
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), round(position), max(1, span), option.upsideDown)
 
     def _move_to(self, point):
         self.setValue(self._value_at(point))
