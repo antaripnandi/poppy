@@ -181,6 +181,11 @@ class DynamicNotchWindow(QWidget):
         self._leave_timer.setInterval(350)
         self._leave_timer.timeout.connect(self._on_leave_timeout)
 
+        # Native popups and a moving window can suppress the final Leave event.
+        self._peek_presence_timer = QTimer(self)
+        self._peek_presence_timer.setInterval(120)
+        self._peek_presence_timer.timeout.connect(self._check_peek_presence)
+
         # Hover intent debounce timer (120ms hysteresis to avoid accidental Peek bloom)
         self._hover_peek_timer = QTimer(self)
         self._hover_peek_timer.setSingleShot(True)
@@ -404,7 +409,7 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
         volume_action = QWidgetAction(self.peek_volume_menu)
         volume = QWidget()
-        volume.setFixedWidth(42)
+        volume.setFixedWidth(48)
         volume_layout = QVBoxLayout(volume)
         volume_layout.setContentsMargins(5, 6, 5, 6)
         volume_layout.setSpacing(4)
@@ -414,7 +419,7 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume = ClickableSlider(Qt.Orientation.Vertical)
         self.peek_volume.setAccessibleName("System volume")
         self.peek_volume.setRange(0, 100)
-        self.peek_volume.setFixedSize(22, 86)
+        self.peek_volume.setFixedSize(30, 144)
         self.peek_volume.valueChanged.connect(self._on_volume_slider_changed)
         volume_layout.addWidget(self.peek_volume, 0, Qt.AlignmentFlag.AlignHCenter)
         volume_action.setDefaultWidget(volume)
@@ -971,19 +976,17 @@ class DynamicNotchWindow(QWidget):
             return
         self._sync_system_controls()
         button = self.btn_peek_volume
-        anchor = button.mapToGlobal(QPoint(button.width() // 2, 0))
+        anchor = button.mapToGlobal(button.rect().center())
         screen = QGuiApplication.screenAt(anchor)
-        bounds = screen.geometry() if screen else self._get_current_screen_geometry()
-        bottom = anchor.y() - 4
-        # Keep the popup above its button even when the card hugs the bezel.
-        # The menu's size hint includes the percentage label, padding and rim.
+        bounds = screen.availableGeometry() if screen else self._get_current_screen_geometry()
+        y = self.geometry().bottom() + 5
         chrome = menu.sizeHint().height() - self.peek_volume.height()
-        track_height = max(24, min(86, bottom - bounds.top() - chrome))
+        track_height = max(30, min(144, bounds.bottom() + 1 - y - chrome))
         self.peek_volume.setFixedHeight(track_height)
         menu.setFixedHeight(chrome + track_height)
         size = menu.sizeHint()
         x = max(bounds.left(), min(anchor.x() - size.width() // 2, bounds.right() - size.width() + 1))
-        y = max(bounds.top(), bottom - menu.height())
+        y = max(bounds.top(), min(y, bounds.bottom() - menu.height() + 1))
         self._peek_volume_opacity.setOpacity(0.35)
         self._peek_volume_opacity.setEnabled(True)
         menu.popup(QPoint(x, y))
@@ -1690,9 +1693,9 @@ class DynamicNotchWindow(QWidget):
         """)
         self.lbl_peek_volume.setStyleSheet(f"color: {ink}; font: 11px 'Segoe UI';")
         self.peek_volume.setStyleSheet(f"""
-            QSlider::groove:vertical {{ width: 3px; background: rgba({rgb},0.23); border-radius: 1px; }}
-            QSlider::add-page:vertical {{ background: {muted}; border-radius: 1px; }}
-            QSlider::handle:vertical {{ height: 8px; margin: 0 -2px; background: {ink}; border-radius: 3px; }}
+            QSlider::groove:vertical {{ width: 4px; background: rgba({rgb},0.23); border-radius: 2px; }}
+            QSlider::add-page:vertical {{ background: {muted}; border-radius: 2px; }}
+            QSlider::handle:vertical {{ height: 10px; margin: 0 -3px; background: {ink}; border-radius: 5px; }}
             QSlider:focus {{ border: 1px solid rgba({rgb},0.25); border-radius: 4px; }}
         """)
         if self.state == NotchState.PEEK:
@@ -2094,13 +2097,31 @@ class DynamicNotchWindow(QWidget):
             self._transition_to(NotchState.PEEK)
 
     def _on_leave_timeout(self):
-        from PySide6.QtGui import QCursor
-        if self.state == NotchState.PEEK:
-            if QApplication.mouseButtons() != Qt.MouseButton.NoButton or QApplication.activePopupWidget():
-                self._leave_timer.start()
-                return
-            if not self.geometry().contains(QCursor.pos()):
-                self._transition_to(NotchState.COLLAPSED)
+        if self.state == NotchState.PEEK and not self._peek_should_stay_open():
+            self._transition_to(NotchState.COLLAPSED)
+
+    def _check_peek_presence(self):
+        if self.state != NotchState.PEEK:
+            return
+        if self._peek_should_stay_open():
+            self._leave_timer.stop()
+        elif not self._leave_timer.isActive():
+            self._leave_timer.start()
+
+    def _peek_should_stay_open(self):
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            return True
+        pointer = QCursor.pos()
+        local = self.mapFromGlobal(pointer)
+        mask = self.mask()
+        if self.rect().contains(local) and (mask.isEmpty() or mask.contains(local)):
+            return True
+        if self.peek_volume_menu.isVisible() and self.peek_volume_menu.geometry().contains(pointer):
+            return True
+        # Leave context menus open until the user dismisses them. The speaker
+        # popup is part of the hover surface and follows its leave grace period.
+        popup = QApplication.activePopupWidget()
+        return popup is not None and popup is not self.peek_volume_menu
 
     def mousePressEvent(self, event):
         pos = event.position().toPoint()
@@ -2239,6 +2260,8 @@ class DynamicNotchWindow(QWidget):
             return
 
         old_state = self.state
+        self._peek_presence_timer.stop()
+        self._leave_timer.stop()
         self.peek_volume_menu.hide()
         self._peek_fade.stop()
         self._peek_opacity.setEnabled(False)
@@ -2300,6 +2323,7 @@ class DynamicNotchWindow(QWidget):
 
         self._apply_geometry_for_state(new_state, animate=True, start_rect=start_rect)
         if new_state == NotchState.PEEK:
+            self._peek_presence_timer.start()
             self._show_peek_timeline()
             self._sync_system_controls()
             self.view_peek.layout().activate()

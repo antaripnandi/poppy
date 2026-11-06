@@ -21,6 +21,7 @@ def settle(window, app):
 def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
     window = DynamicNotchWindow()
     monkeypatch.setattr(window.lyrics_manager, "request_lyrics", lambda *args: None)
+    monkeypatch.setattr("poppy.core.window.QCursor.pos", lambda: window.geometry().center())
     window.show()
     title = "A long track title with <literal text> " * 8
     artist = "An artist with a long name " * 6
@@ -101,11 +102,40 @@ def test_hover_retries_during_collapse_and_does_not_dismiss_while_pressed(audit_
     monkeypatch.setattr(module.QApplication, "mouseButtons", lambda: Qt.MouseButton.LeftButton)
     window._on_leave_timeout()
     assert window.state == NotchState.PEEK
-    assert window._leave_timer.isActive()
+    assert window._peek_presence_timer.isActive()
     monkeypatch.setattr(module.QApplication, "mouseButtons", lambda: Qt.MouseButton.NoButton)
     window._on_leave_timeout()
     assert window.state == NotchState.COLLAPSED
     assert not window._peek_opacity.isEnabled()
+    window.close()
+
+
+@pytest.mark.parametrize("volume_popup", [False, True])
+def test_peek_collapses_if_windows_misses_the_leave_event(audit_app, monkeypatch, volume_popup):
+    from poppy.core.window import QCursor
+    window = DynamicNotchWindow()
+    window.show()
+    window._on_media_changed({"title": "Track"})
+    window._transition_to(NotchState.PEEK)
+    settle(window, audit_app)
+    pointer = window.geometry().center()
+    monkeypatch.setattr(QCursor, "pos", lambda: pointer)
+    if volume_popup:
+        window.btn_peek_volume.click()
+        pointer = window.peek_volume_menu.geometry().center()
+        QTest.qWait(500)
+        assert window.state == NotchState.PEEK
+        assert window.peek_volume_menu.isVisible()
+
+    # Only the cursor position changes. Qt never receives a Leave event.
+    pointer = window.geometry().topLeft() - QPoint(80, 80)
+    for _ in range(20):
+        if window.state == NotchState.COLLAPSED:
+            break
+        QTest.qWait(40)
+    assert window.state == NotchState.COLLAPSED
+    assert not window.peek_volume_menu.isVisible()
+    assert not window._peek_presence_timer.isActive()
     window.close()
 
 
@@ -179,8 +209,8 @@ def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monke
     assert window.peek_volume_menu.isVisible()
     button = window.btn_peek_volume
     popup = window.peek_volume_menu.geometry()
-    anchor = button.mapToGlobal(QPoint(button.width() // 2, 0))
-    assert popup.bottom() < anchor.y()
+    anchor = button.mapToGlobal(button.rect().center())
+    assert popup.top() > window.geometry().bottom()
     assert abs(popup.center().x() - anchor.x()) <= 1
     assert popup.top() >= window._get_current_screen_geometry().top()
     skip = window.btn_peek_next
@@ -188,6 +218,7 @@ def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monke
     assert window.peek_volume.orientation() == Qt.Orientation.Vertical
     assert window.lbl_peek_volume.text() == "45%"
     slider = window.peek_volume
+    assert slider.height() >= 128
     x = slider.width() // 2
     top = QPoint(x, round(slider.height() * 0.15))
     bottom = QPoint(x, round(slider.height() * 0.85))
