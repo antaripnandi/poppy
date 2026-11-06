@@ -242,7 +242,7 @@ class ScreenTimeManager(QObject):
 
         # Emit stats update every 2 seconds
         if self._save_counter % 2 == 0:
-            top_apps = self.get_top_apps(4)
+            top_apps = self.get_top_apps(5) if self._cfg().get("track_apps", True) else []
             self.stats_updated.emit(self._today_seconds, self._continuous_seconds, top_apps, self._current_app)
 
     def _load_data(self):

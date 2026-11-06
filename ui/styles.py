@@ -4,7 +4,8 @@ Directly inspired by NotchX (by Navneet Kaur / Raho Osman) and macOS Dynamic Isl
 Features NotchX's 7 theme presets, frosted card styling, and clean sans-serif typography.
 """
 
-from poppy.ui.theme import LAYOUT_THEMES, home_order
+from PySide6.QtGui import QColor
+from poppy.ui.theme import DESIGN_PALETTES, LAYOUT_THEMES, home_order
 
 
 THEME_PRESETS = {
@@ -72,15 +73,21 @@ THEME_PRESETS = {
 }
 
 DEFAULT_THEME = "Pure black"
+DEFAULT_PANEL_WIDTH = 1120
+DEFAULT_PANEL_HEIGHT = 500
+APPEARANCE_LAYOUT_VERSION = 4
 
 
 def normalize_appearance(appearance: dict) -> dict:
     """Adopt compact defaults once, preserving explicitly customized dimensions."""
     result = dict(appearance)
-    if result.get("layout_version", 1) < 3:
-        size = (result.get("open_width", 960), result.get("open_height", 480))
-        if size in ((600, 400), (960, 480)):
-            result.update(open_width=960, open_height=560)
+    version = result.get("layout_version", 1)
+    size = (result.get("open_width"), result.get("open_height"))
+    legacy_default = version < 3 and size in ((600, 400), (960, 480))
+    if version < APPEARANCE_LAYOUT_VERSION and (legacy_default or size == (960, 560)):
+        result.update(open_width=DEFAULT_PANEL_WIDTH, open_height=DEFAULT_PANEL_HEIGHT)
+    result.setdefault("open_width", DEFAULT_PANEL_WIDTH)
+    result.setdefault("open_height", DEFAULT_PANEL_HEIGHT)
     result.setdefault("layout", "Classic")
     if not isinstance(result["layout"], str) or result["layout"] not in LAYOUT_THEMES:
         result["layout"] = "Classic"
@@ -88,17 +95,26 @@ def normalize_appearance(appearance: dict) -> dict:
     result["home_orders"] = {name: list(home_order(name, orders)) for name in LAYOUT_THEMES
                              if isinstance(orders, dict) and name in orders}
     result.setdefault("mode", "Dark")
-    result["layout_version"] = 3
+    if result.get("peek_color_source") not in ("artwork", "fixed", "theme"):
+        result["peek_color_source"] = "artwork"
+    color = result.get("peek_color")
+    result["peek_color"] = QColor(color).name() if isinstance(color, str) and QColor(color).isValid() else "#242f4a"
+    result["layout_version"] = APPEARANCE_LAYOUT_VERSION
     return result
 
 
 
-def get_theme(theme_name: str) -> dict:
-    return THEME_PRESETS.get(theme_name, THEME_PRESETS[DEFAULT_THEME])
+def get_theme(theme_name: str, layout="Classic") -> dict:
+    palette = THEME_PRESETS.get(theme_name if isinstance(theme_name, str) else DEFAULT_THEME, THEME_PRESETS[DEFAULT_THEME])
+    if isinstance(layout, str) and layout in DESIGN_PALETTES:
+        root, card, _, _, accent = DESIGN_PALETTES[layout][0]
+        return {**palette, "bg": root, "gradient": card if layout == "Deck" else root,
+                "accent": accent if palette["name"] == DEFAULT_THEME else palette["accent"]}
+    return palette
 
 
-def get_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
-    theme = get_theme(theme_name)
+def get_stylesheet(theme_name: str = DEFAULT_THEME, layout="Classic") -> str:
+    theme = get_theme(theme_name, layout)
     accent = theme["accent"]
 
     return f"""

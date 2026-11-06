@@ -1,13 +1,16 @@
 """
 Poppy System Hardware Controls
 Zero-bloat native Windows hardware integration for Master Volume and Screen Brightness.
-Uses Windows Core Audio COM API (IAudioEndpointVolume) via ctypes and WMI / DXVA2 for brightness.
+Uses Windows Core Audio COM API (IAudioEndpointVolume) via ctypes and WMI for brightness.
 """
 
 import ctypes
 from ctypes import wintypes, HRESULT, POINTER, c_void_p, c_float, byref
 import threading
 import time
+
+
+from PySide6.QtCore import QObject, Signal
 
 
 class GUID(ctypes.Structure):
@@ -209,83 +212,84 @@ class SystemAudioController:
         return not curr
 
 
-class SystemBrightnessController:
-    """
-    Hardware screen brightness controller.
-    Uses in-process WMI COM for laptop panels with an asynchronous throttle worker so
-    scrubbing the slider at 144Hz remains completely stutter-free.
-    """
+class SystemBrightnessController(QObject):
+    """Coalesce WMI reads and writes off the Qt event thread."""
+
+    brightness_changed = Signal(object)
+
     def __init__(self):
+        super().__init__()
         self._target_brightness = None
+        self._read_pending = False
         self._lock = threading.Lock()
         self._worker_thread = None
-        self._cached_brightness = 75
+        self._closed = False
 
-    def get_brightness(self) -> int:
-        """Queries and returns the current screen brightness (0-100)."""
-        try:
-            import pythoncom
-            import win32com.client
-            pythoncom.CoInitialize()
-            wmi = win32com.client.GetObject('winmgmts:\\\\.\\root\\wmi')
-            bright_objs = wmi.InstancesOf('WmiMonitorBrightness')
-            for b in bright_objs:
-                val = int(b.CurrentBrightness)
-                self._cached_brightness = val
-                return val
-        except Exception:
-            pass
-        return self._cached_brightness
-
-    def set_brightness(self, level: int):
-        """Asynchronously updates screen brightness with hardware command coalescing."""
-        level = max(0, min(100, int(level)))
-        self._cached_brightness = level
+    def request_brightness(self):
         with self._lock:
-            self._target_brightness = level
-            if self._worker_thread is None or not self._worker_thread.is_alive():
-                self._worker_thread = threading.Thread(target=self._apply_worker, daemon=True)
-                self._worker_thread.start()
+            if not self._closed:
+                self._read_pending = True
+                self._start_worker()
+
+    def set_brightness(self, level):
+        with self._lock:
+            if not self._closed:
+                self._target_brightness = max(0, min(100, int(level)))
+                self._start_worker()
+
+    def _start_worker(self):
+        if self._worker_thread is None:
+            self._worker_thread = threading.Thread(target=self._apply_worker, daemon=True, name="poppy-brightness")
+            self._worker_thread.start()
 
     def _apply_worker(self):
+        initialized = False
         try:
-            import pythoncom
-            import win32com.client
-            pythoncom.CoInitialize()
-            wmi = win32com.client.GetObject('winmgmts:\\\\.\\root\\wmi')
-        except Exception:
-            return
-
-        while True:
-            target = None
-            with self._lock:
-                target = self._target_brightness
-                self._target_brightness = None
-            if target is None:
-                break
             try:
-                methods = wmi.InstancesOf('WmiMonitorBrightnessMethods')
-                for m in methods:
-                    in_params = m.Methods_('WmiSetBrightness').InParameters.SpawnInstance_()
-                    in_params.Properties_.Item('Timeout').Value = 1
-                    in_params.Properties_.Item('Brightness').Value = int(target)
-                    m.ExecMethod_('WmiSetBrightness', in_params)
+                import pythoncom
+                import win32com.client
+                pythoncom.CoInitialize()
+                initialized = True
+                wmi = win32com.client.GetObject(r"winmgmts:\\.\root\wmi")
             except Exception:
-                pass
-            time.sleep(0.04)  # 25 updates/sec throttle to prevent DDC/CI bus flooding
+                wmi = None
+            while True:
+                with self._lock:
+                    target, read = self._target_brightness, self._read_pending
+                    self._target_brightness, self._read_pending = None, False
+                    if self._closed or (target is None and not read):
+                        self._worker_thread = None
+                        return
+                value = None
+                try:
+                    if wmi is not None:
+                        if target is not None:
+                            for monitor in wmi.InstancesOf("WmiMonitorBrightnessMethods"):
+                                params = monitor.Methods_("WmiSetBrightness").InParameters.SpawnInstance_()
+                                params.Properties_.Item("Timeout").Value = 1
+                                params.Properties_.Item("Brightness").Value = target
+                                monitor.ExecMethod_("WmiSetBrightness", params)
+                        value = next((int(m.CurrentBrightness) for m in wmi.InstancesOf("WmiMonitorBrightness")), None)
+                except Exception:
+                    pass
+                with self._lock:
+                    pending = self._target_brightness is not None
+                    closed = self._closed
+                if not (pending or closed):
+                    try:
+                        self.brightness_changed.emit(value)
+                    except RuntimeError:
+                        return
+                if target is not None:
+                    time.sleep(0.04)
+        finally:
+            if initialized:
+                wmi = None
+                pythoncom.CoUninitialize()
 
-    def cycle_brightness(self) -> int:
-        """Cycles brightness between 25% -> 50% -> 75% -> 100%."""
-        curr = self.get_brightness()
-        presets = [25, 50, 75, 100]
-        # find closest preset
-        next_val = presets[0]
-        for p in presets:
-            if p > curr + 5:
-                next_val = p
-                break
-        self.set_brightness(next_val)
-        return next_val
+    def close(self):
+        with self._lock:
+            self._closed = True
 
 
 class AudioPeakMeter:

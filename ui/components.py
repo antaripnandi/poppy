@@ -7,18 +7,19 @@ Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 import os
 import math
 import time
+from functools import lru_cache
 from PySide6.QtCore import (
     Qt, QRect, QRectF, QSize, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap, QFont
+    QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap, QFont, QIcon
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
     QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
 )
 
-from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout
+from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.core.system_controls import AudioPeakMeter
 
@@ -241,6 +242,7 @@ class AnimatedTabStrip(QWidget):
         for idx, (name, icon) in enumerate(tab_items):
             label = f"{icon}  {name}" if icon else name
             btn = QPushButton(label, self)
+            btn.setProperty("tabLabel", label)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(28)
             btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i, animate=True))
@@ -259,6 +261,7 @@ class AnimatedTabStrip(QWidget):
         for idx, (name, icon) in enumerate(tab_items):
             label = f"{icon}  {name}" if icon else name
             btn = QPushButton(label, self)
+            btn.setProperty("tabLabel", label)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(28)
             btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i, animate=True))
@@ -277,12 +280,15 @@ class AnimatedTabStrip(QWidget):
 
     def _update_indicator_style(self):
         name = current_layout()
-        if name == "Flat":
+        if name in ("Flat", "Daily"):
             source = "background: transparent; border: none; border-bottom: 2px solid #b5c9bd;"
         elif name == "Paper":
             source = "background: transparent; border: none;"
-        elif name == "Instrument":
-            source = "background: #343c3b; border: 1px solid #67766e; border-radius: 2px;"
+        elif name in ("Instrument", "Console"):
+            source = ("background: rgba(170,211,115,0.24); border: none;"
+                      if name == "Console" else "background: #343c3b; border: 1px solid #67766e; border-radius: 2px;")
+        elif name == "Deck":
+            source = "background: rgba(118,163,245,0.26); border: 1px solid rgba(163,197,255,0.25); border-radius: 10px;"
         else:
             source = "background: #2b2e2f; border: none; border-radius: 8px;"
         set_widget_style(self.indicator, source)
@@ -298,25 +304,48 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_buttons_style(self):
+        name = current_layout()
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
             font_weight = "600" if is_active else "500"
+            btn.setFixedHeight(34 if name == "Deck" else 28)
+            label = btn.property("tabLabel")
+            btn.setText(label.upper() if name == "Console" else label)
+            btn.setIcon(self._tab_icon(label, is_light_theme()) if name == "Deck" else QIcon())
+            btn.setIconSize(QSize(15, 15))
+            family = {"Daily": "Georgia", "Console": "Consolas"}.get(name, "Segoe UI")
             set_widget_style(btn, f"""
                 QPushButton {{
                     background-color: transparent;
                     border: none;
                     border-radius: 11px;
                     color: {color};
-                    font-family: 'Segoe UI';
+                    font-family: '{family}';
                     font-size: 12px;
                     font-weight: {font_weight};
-                    padding: 3px 9px;
+                    padding: 3px {6 if name == "Deck" else 9}px;
                 }}
                 QPushButton:hover {{
                     color: #ffffff;
                 }}
+                QPushButton:focus {{ border: 1px solid rgba(190,211,242,0.65); }}
             """)
+
+    @staticmethod
+    @lru_cache(maxsize=20)
+    def _tab_icon(name, light):
+        pixmap = QPixmap(30, 30)
+        pixmap.setDevicePixelRatio(2)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        font = QFont(get_fluent_font_family())
+        font.setPixelSize(13)
+        painter.setFont(font)
+        painter.setPen(QColor("#354e7a" if light else "#c1d5fa"))
+        painter.drawText(QRect(0, 0, 15, 15), Qt.AlignmentFlag.AlignCenter, getattr(Icons, name.upper(), ""))
+        painter.end()
+        return QIcon(pixmap)
 
     def set_current_index(self, index: int, animate: bool = True, emit_signal: bool = True):
         if not (0 <= index < len(self.buttons)):
@@ -491,16 +520,20 @@ class CardFrame(QFrame):
         self.setObjectName("cardFrame")
         self.apply_layout(current_layout())
 
-    def apply_layout(self, name):
+    def apply_layout(self, name, *, outline=True):
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
         self.setProperty("layoutTheme", name)
-        border = "none" if name == "Minimal" else "1px solid rgba(255,255,255,0.08)"
+        border = "1px solid rgba(255,255,255,0.08)" if outline and name != "Minimal" else "none"
         if name == "Flat":
             border = "none; border-top: 1px solid rgba(255,255,255,0.13)"
         elif name == "Paper":
             border = "none"
-        elif name == "Instrument":
+        elif name == "Daily":
+            border = "none; border-top: 1px solid rgba(236,222,194,0.25)"
+        elif name in ("Instrument", "Console"):
             border = "1px solid rgba(255,255,255,0.16)"
+        elif name == "Deck":
+            border = "1px solid rgba(172,199,247,0.22)"
         set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255,255,255,{spec['fill']}); border: {border}; border-radius: {spec['radius']}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
@@ -676,14 +709,12 @@ class MetricLabel(QLabel):
         self.setText(f"{tag} {val}")
         self._default_style = """
             QLabel {
-                background: rgba(255, 255, 255, 0.05);
+                background: transparent;
                 border: none;
-                border-radius: 6px;
-                color: #94a3b8;
-                font-family: 'Segoe UI Variable Display', -apple-system, sans-serif;
-                font-size: 10px;
-                font-weight: 600;
-                padding: 3px 8px;
+                color: #a7adab;
+                font-family: 'Segoe UI';
+                font-size: 11px;
+                padding: 3px 2px;
             }
         """
         self.apply_design(current_layout())
@@ -727,101 +758,81 @@ class MetricLabel(QLabel):
                     painter.fillRect(rect, fill)
 
 
-class ScreenTimeHomeWidget(QFrame):
-    """
-    Minimalist interactive Screen Time pill for the Home dashboard.
-    Displays today's active screen duration, percentage of daily goal,
-    and active foreground application with an organic micro-progress bar.
-    """
+class ScreenTimeHomeWidget(CardFrame):
+    """Today's active time and five ranked apps, updated in place."""
+
     clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(24)
-        self._progress = 0.0
-        self._accent = "#6e9bff"
-
-        set_widget_style(self, """
-            QFrame#screenTimeWidget {
-                background: rgba(255, 255, 255, 0.05);
-                border: none;
-                border-radius: 6px;
-            }
-            QFrame#screenTimeWidget:hover {
-                background: rgba(255, 255, 255, 0.09);
-            }
-        """)
-        self.setObjectName("screenTimeWidget")
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(6)
-
-        self.lbl_icon = QLabel(Icons.TIMER)
-        set_widget_style(self.lbl_icon, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 11px; color: #94a3b8; background: transparent; border: none;")
-        layout.addWidget(self.lbl_icon)
-
+        layout = QVBoxLayout(self)
+        layout.setSpacing(5)
+        heading = QHBoxLayout()
+        title = self.title = QLabel("Screen time today")
+        set_widget_style(title, "font-size: 14px; font-weight: 500; color: #edf1f0;")
+        heading.addWidget(title)
         self.lbl_time = QLabel("0m")
-        set_widget_style(self.lbl_time, "font-size: 11px; font-weight: 600; color: #f1f5f9; background: transparent; border: none;")
-        layout.addWidget(self.lbl_time)
+        set_widget_style(self.lbl_time, "font-size: 14px; font-weight: 500; color: #edf1f0;")
+        heading.addWidget(self.lbl_time)
+        heading.addStretch()
+        settings = QPushButton("Settings")
+        settings.setAccessibleName("Open Screen Time settings")
+        set_widget_style(settings, """
+            QPushButton { background: transparent; border: none; color: #b9bfbd; padding: 4px 6px; }
+            QPushButton:hover { color: #edf1f0; }
+            QPushButton:focus { border: 1px solid #a7adab; }
+        """)
+        settings.clicked.connect(self.clicked.emit)
+        heading.addWidget(settings)
+        layout.addLayout(heading)
 
-        self.lbl_sub = QLabel("• Screen Time")
-        set_widget_style(self.lbl_sub, "font-size: 10px; color: #94a3b8; background: transparent; border: none;")
-        layout.addWidget(self.lbl_sub)
+        self.empty = QLabel("App usage will appear here.")
+        set_widget_style(self.empty, "font-size: 12px; color: #a7adab;")
+        layout.addWidget(self.empty)
+        self.rows = []
+        for rank in range(1, 6):
+            row = QWidget(self)
+            row.setMinimumHeight(20)
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            rank_label = QLabel(str(rank))
+            rank_label.setFixedWidth(20)
+            name = QLabel()
+            name.setTextFormat(Qt.TextFormat.PlainText)
+            name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            duration = QLabel()
+            for label in (rank_label, duration):
+                set_widget_style(label, "font-size: 12px; color: #a7adab;")
+            set_widget_style(name, "font-size: 12px; color: #edf1f0;")
+            line.addWidget(rank_label)
+            line.addWidget(name, 1)
+            line.addWidget(duration)
+            layout.addWidget(row)
+            row.hide()
+            self.rows.append((row, name, duration))
+        self._row_count = 0
 
-        layout.addStretch()
+    def update_stats(self, total_sec, top_apps, track_apps=True):
+        hours, minutes = divmod(total_sec // 60, 60)
+        self.lbl_time.setText(f"{hours}h {minutes:02d}m" if hours else f"{minutes}m")
+        apps = top_apps[:5] if track_apps else []
+        for index, (row, name, duration) in enumerate(self.rows):
+            row.setVisible(index < len(apps))
+            if index < len(apps):
+                app, _, formatted = apps[index]
+                name.setText(app)
+                name.setToolTip(app)
+                duration.setText(formatted)
+        self.empty.setText("App usage will appear here." if track_apps else "Per-app tracking is off.")
+        self.empty.setVisible(not apps)
+        changed = self._row_count != len(apps)
+        self._row_count = len(apps)
+        return changed
 
-        self.lbl_arrow = QLabel("›")
-        set_widget_style(self.lbl_arrow, "font-size: 12px; color: #64748b; background: transparent; border: none;")
-        layout.addWidget(self.lbl_arrow)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-    def update_stats(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str, goal_hours: float = 6.0):
-        h = total_sec // 3600
-        m = (total_sec % 3600) // 60
-        time_str = f"{h}h {m:02d}m" if h > 0 else f"{m}m"
-        self.lbl_time.setText(time_str)
-
-        goal_sec = max(1.0, goal_hours * 3600.0)
-        self._progress = min(1.0, max(0.0, total_sec / goal_sec))
-        pct = int(self._progress * 100)
-
-        if active_app and active_app not in ("System", "Desktop"):
-            self.lbl_sub.setText(f"• {active_app}")
-        else:
-            self.lbl_sub.setText(f"• {pct}% of {int(goal_hours)}h")
-
-        lines = [
-            f"Screen Time Today: {time_str}",
-            f"Daily Goal: {int(goal_hours)}h ({pct}%)",
-            f"Current Active Streak: {streak_sec // 60}m"
-        ]
-        if top_apps:
-            lines.append("\nTop Applications:")
-            for name, sec, fmt in top_apps[:4]:
-                lines.append(f"  • {name}: {fmt}")
-        lines.append("\nClick to open Screen Time settings & goals")
-        self.setToolTip("\n".join(lines))
-        self.update()
-
-    def set_accent(self, accent: str):
-        self._accent = accent
-        self.update()
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self._progress > 0:
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            bar_w = float(self.width()) * self._progress
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(self._accent)))
-            painter.drawRoundedRect(QRectF(0, self.height() - 2.0, bar_w, 2.0), 1.0, 1.0)
+    def apply_layout(self, name, *, outline=True):
+        super().apply_layout(name, outline=outline)
+        if hasattr(self, "title"):
+            self.title.setText("Screen time" if name == "Console" else "Screen time today")
 
 
 class DraggableThumbnail(QLabel):
@@ -969,7 +980,7 @@ class CapsuleSlider(QSlider):
 
     def _update_val_from_x(self, x: float):
         w = max(1.0, float(self.width()))
-        if current_layout() in ("Flat", "Paper", "Instrument"):
+        if current_layout() in TRACK_LAYOUTS:
             x -= 32
             w = max(1.0, w - 80)
         pct = max(0.0, min(1.0, x / w))
@@ -981,7 +992,7 @@ class CapsuleSlider(QSlider):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = float(self.width()), float(self.height())
-        if current_layout() in ("Flat", "Paper", "Instrument"):
+        if current_layout() in TRACK_LAYOUTS:
             self._paint_track_control(painter, w, h)
             return
         r = h / 2.0
@@ -995,7 +1006,7 @@ class CapsuleSlider(QSlider):
         # 2. Filled progress chunk
         val_range = max(1, self.maximum() - self.minimum())
         pct = max(0.0, min(1.0, (self.value() - self.minimum()) / float(val_range)))
-        fill_w = max(0.0, w * pct)
+        fill_w = max(0.0, w * pct) if self.isEnabled() else 0.0
 
         if fill_w > 0:
             fill_rect = QRectF(0, 0, fill_w, h)
@@ -1022,7 +1033,7 @@ class CapsuleSlider(QSlider):
             painter.drawText(icon_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._icon)
 
         # 4. Percentage text on the right
-        val_str = f"{self.value()}%"
+        val_str = f"{self.value()}%" if self.isEnabled() else "N/A"
         font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
         painter.setFont(font_val)
         painter.setPen(QColor(241, 245, 249, 210))
@@ -1030,6 +1041,10 @@ class CapsuleSlider(QSlider):
             painter.setPen(QColor("#202833"))
         txt_rect = QRectF(w - 44, 0, 36, h)
         painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
+        if self.hasFocus():
+            painter.setPen(QColor("#526c60" if is_light_theme() else "#b7c5bc"))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(track_rect.adjusted(0.5, 0.5, -0.5, -0.5), r, r)
 
     def _paint_track_control(self, painter, w, h):
         name = current_layout()
@@ -1039,23 +1054,28 @@ class CapsuleSlider(QSlider):
             accent = accent.darker(175)
         track = QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 35)
         left, width = 32.0, max(1.0, w - 80)
-        pct = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
+        pct = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum()) if self.isEnabled() else 0
         painter.setPen(Qt.PenStyle.NoPen)
-        if name == "Instrument":
+        if name in ("Instrument", "Console"):
             count = max(1, int(width / 10))
             for index in range(count):
                 painter.fillRect(QRectF(left + index * width / count, h / 2 - 5, width / count - 2, 10),
                                  accent if (index + 1) / count <= pct else track)
         else:
-            thickness = 2 if name == "Paper" else 3
+            thickness = 2 if name in ("Paper", "Daily") else 4 if name == "Deck" else 3
             painter.fillRect(QRectF(left, h / 2, width, thickness), track)
             painter.fillRect(QRectF(left, h / 2, width * pct, thickness), accent)
-        painter.fillRect(QRectF(left + width * pct - 1, h / 2 - 7, 2, 14), foreground)
+        if name == "Deck":
+            painter.setBrush(foreground)
+            painter.drawEllipse(QRectF(left + width * pct - 5, h / 2 - 3, 10, 10))
+        else:
+            painter.fillRect(QRectF(left + width * pct - 1, h / 2 - 7, 2, 14), foreground)
         painter.setPen(foreground)
         painter.setFont(QFont(get_fluent_font_family(), 10))
         painter.drawText(QRectF(5, 0, 24, h), Qt.AlignmentFlag.AlignVCenter, self._icon)
-        painter.setFont(QFont("Consolas" if name == "Instrument" else "Segoe UI", 9))
-        painter.drawText(QRectF(w - 45, 0, 40, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, f"{self.value()}%")
+        painter.setFont(QFont("Consolas" if name in ("Instrument", "Console") else "Segoe UI", 9))
+        value = f"{self.value()}%" if self.isEnabled() else "N/A"
+        painter.drawText(QRectF(w - 45, 0, 40, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, value)
         if self.hasFocus():
             painter.setPen(QPen(accent, 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1126,6 +1146,39 @@ class ClickableSlider(QSlider):
             self.seek_clicked.emit(self.value())
 
 
+class PlaybackSlider(ClickableSlider):
+    """A time ruler in Console with the same native slider interaction."""
+
+    def paintEvent(self, event):
+        if current_layout() != "Console":
+            super().paintEvent(event)
+            return
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
+        start = groove.x() + handle.width() / 2
+        span = max(1, groove.width() - handle.width())
+        pct = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
+        colors = surface_colors()
+        painter = QPainter(self)
+        painter.setPen(Qt.PenStyle.NoPen)
+        muted = QColor(colors["muted"])
+        muted.setAlphaF(0.45)
+        count = max(2, int(span // 7))
+        for tick in range(count + 1):
+            fraction = tick / count
+            height = 11 if tick % 5 == 0 else 5
+            x = start + span * (1 - fraction if option.upsideDown else fraction)
+            painter.fillRect(QRectF(x - 1, (self.height() - height) / 2, 2, height),
+                             QColor(colors["accent"]) if fraction <= pct and self.isEnabled() else muted)
+        if self.hasFocus():
+            painter.setPen(QColor(colors["accent"]))
+            painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        painter.end()
+
+
 class LyricLineWidget(QFrame):
     """Clean, high-craft lyric row matching native Spotify desktop typography."""
     clicked = Signal(float)
@@ -1134,6 +1187,7 @@ class LyricLineWidget(QFrame):
         super().__init__(parent)
         self.time_sec = time_sec
         self._raw_text = text
+        self._design = current_layout()
         self._is_active = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -1158,7 +1212,14 @@ class LyricLineWidget(QFrame):
         layout.setSpacing(0)
         layout.addWidget(self._lbl)
 
+        self.apply_design(self._design)
+
+    def apply_design(self, name):
+        self._design = name
+        seconds = max(0, int(self.time_sec))
+        self._lbl.setText(f"{seconds // 60:02d}:{seconds % 60:02d}   {self._raw_text}" if name == "Console" else self._raw_text)
         self.update_style()
+        self.updateGeometry()
 
     def hasHeightForWidth(self) -> bool:
         return True
@@ -1193,6 +1254,16 @@ class LyricLineWidget(QFrame):
             self.update_style()
 
     def update_style(self):
+        if self._design in ("Deck", "Daily", "Console"):
+            name = self._design
+            family, size = {"Deck": ("Segoe UI", 15), "Daily": ("Georgia", 18), "Console": ("Consolas", 13)}[name]
+            color = "#edf1f0" if self._is_active else "#a7adab"
+            weight = 800 if self._is_active else 700
+            set_widget_style(self._lbl, f"QLabel {{ font-family: '{family}'; font-size: {size}px; font-weight: {weight}; color: {color}; background: transparent; }}")
+            border = "border-left: 2px solid #b87557;" if name == "Daily" and self._is_active else ""
+            fill = "rgba(171,206,153,0.12)" if self._is_active and name != "Daily" else "transparent"
+            set_widget_style(self, f"QFrame {{ background: {fill}; border: none; {border} }} QFrame:hover {{ background: rgba(255,255,255,0.06); }}")
+            return
         set_widget_style(self, """
             QFrame {
                 background: transparent;
@@ -1226,7 +1297,7 @@ class LyricLineWidget(QFrame):
 
     def enterEvent(self, event):
         super().enterEvent(event)
-        if not self._is_active:
+        if not self._is_active and self._design not in ("Deck", "Daily", "Console"):
             set_widget_style(self._lbl, """
                 QLabel {
                     color: rgba(255, 255, 255, 0.85);
@@ -1251,6 +1322,16 @@ class SpotifyLyricsWidget(QFrame):
     Allows clicking any line to jump to that timestamp.
     """
     seek_requested = Signal(float)
+
+    def apply_design(self, name):
+        background = "rgba(162,191,240,0.09)" if name == "Deck" else "transparent"
+        border = ("border-left: 1px solid rgba(200,183,156,0.32);" if name == "Daily"
+                  else "border-top: 1px solid rgba(170,192,158,0.24);" if name == "Console" else "")
+        set_widget_style(self, f"QFrame#lyricsWidgetFrame {{ background: {background}; border: none; {border} border-radius: 14px; }}")
+        margins = (14, 8, 12, 8) if name in ("Deck", "Daily", "Console") else (6, 2, 6, 6)
+        self.layout().setContentsMargins(*margins)
+        for line in self._line_buttons:
+            line.apply_design(name)
 
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -4,14 +4,16 @@
     "style": "Notch",
     "collapsed_width": 240,
     "collapsed_height": 30,
-    "open_width": 960,
-    "open_height": 560,
+    "open_width": 1120,
+    "open_height": 500,
     "corner_radius": 22,
     "top_offset": 0,
     "display": "Primary",
-    "layout_version": 3,
+    "layout_version": 4,
     "layout": "Classic",
-    "mode": "Dark"
+    "mode": "Dark",
+    "peek_color_source": "artwork",
+    "peek_color": "#242f4a"
   },
   "tabs": {
     "enabled": [

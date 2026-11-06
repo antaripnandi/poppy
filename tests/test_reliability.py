@@ -9,10 +9,11 @@ from PySide6.QtWidgets import QPushButton
 
 from poppy.core.instance import SingleInstance
 from poppy.core.pomodoro import PomodoroManager, PomoState
-from poppy.core.storage import data_dir, write_text
+from poppy.core.storage import data_dir, spotify_cookie, write_json, write_text
 from poppy.core.system_features import ClipboardHistoryManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.window import DynamicNotchWindow, NotchState
+from poppy.main import load_config
 from poppy.ui.components import ClickableSlider, ToggleSwitch
 from poppy.ui.extended_views import ClipboardTabView, DocsTabView
 from poppy.ui.sticky_note import FloatingStickyNote
@@ -118,6 +119,15 @@ def test_clipboard_preserves_whitespace_long_text_and_pins():
     assert ClipboardHistoryManager().history == manager.history
 
 
+def test_legacy_spotify_cookie_is_migrated_in_place():
+    path = data_dir() / "config.json"
+    write_json(path, {"media": {"spotify_sp_dc": "synthetic-cookie"}})
+    load_config()
+    media = json.loads(path.read_text())["media"]
+    assert "spotify_sp_dc" not in media
+    assert spotify_cookie(media) == "synthetic-cookie"
+
+
 def test_capture_paths_are_unique_and_pixels_survive(tmp_path):
     watcher = ScreenshotWatcher(shelf_dir=str(tmp_path))
     paths = []
@@ -142,6 +152,27 @@ def test_capture_cleanup_keeps_staged_files(tmp_path):
     assert len(list(tmp_path.glob("*.png"))) == 2
 
 
+def test_capture_worker_stages_without_showing_disabled_alerts(tmp_path):
+    window = DynamicNotchWindow()
+    window.config["notifications"] = {"enabled": False}
+    window.screenshot_watcher.enabled = True
+    image = QImage(32, 32, QImage.Format.Format_ARGB32)
+    image.fill(QColor("red"))
+    window.screenshot_watcher._enqueue_capture("clipboard", image)
+    for _ in range(100):
+        if window.drop_shelf.staged_items:
+            break
+        QTest.qWait(20)
+    assert len(window.drop_shelf.staged_items) == 1
+    assert window.state == NotchState.COLLAPSED
+
+    window.config["notifications"] = {"enabled": True, "preview_text": False, "sound": False}
+    window._on_screenshot_captured(window.drop_shelf.staged_items[0].path, image)
+    assert window.state == NotchState.ISLAND
+    assert window.island_thumb.isHidden()
+    assert window.lbl_isl_sub.text() == "Open Poppy for details."
+
+
 def test_pdf_conversion_preserves_existing_output(tmp_path, monkeypatch):
     source, existing = tmp_path / "report.txt", tmp_path / "report.pdf"
     source.write_text("Synthetic text")
@@ -149,6 +180,11 @@ def test_pdf_conversion_preserves_existing_output(tmp_path, monkeypatch):
     monkeypatch.setattr("poppy.ui.extended_views.QFileDialog.getOpenFileName", lambda *args: (str(source), ""))
     view = DocsTabView()
     view._convert_to_pdf()
+    from PySide6.QtTest import QTest
+    for _ in range(100):
+        if view._recent_files:
+            break
+        QTest.qWait(20)
     assert existing.read_bytes() == b"original"
     assert len(view._recent_files) == 1
     assert Path(view._recent_files[0]).read_bytes().startswith(b"%PDF")

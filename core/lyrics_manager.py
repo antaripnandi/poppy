@@ -21,7 +21,7 @@ from contextlib import contextmanager, nullcontext
 import urllib.error
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QTimer
-from poppy.core.storage import data_path, write_json
+from poppy.core.storage import data_path, write_json, spotify_cookie
 
 
 def parse_lrc(lrc_text: str) -> list[tuple[float, str]]:
@@ -100,12 +100,13 @@ class LyricsManager(QObject):
             pass
 
     @staticmethod
-    def _make_key(title: str, artist: str) -> str:
+    def _make_key(title: str, artist: str, album: str = "", duration: float = 0) -> str:
         t = (title or "").strip().lower()
         a = (artist or "").strip().lower()
-        return f"{t}::: {a}"
+        base = f"{t}::: {a}"
+        return f"{base}::: {(album or '').strip().casefold()}::: {round(duration / 5) * 5}" if album or duration else base
 
-    def request_lyrics(self, title: str, artist: str, album: str = ""):
+    def request_lyrics(self, title: str, artist: str, album: str = "", duration: float = 0):
         """Request lyrics asynchronously for the given track."""
         if not title or title.lower() in ("no media playing", "unknown title", "system audio"):
             self.cancel_request()
@@ -113,11 +114,11 @@ class LyricsManager(QObject):
         if self._closed:
             return
 
-        key = self._make_key(title, artist)
+        key = self._make_key(title, artist, album, duration)
         if key == self._current_request_key and self._delivered_key == key:
             return
         self._current_request_key = key
-        self._scheduled_request = (key, title, artist, album)
+        self._scheduled_request = (key, title, artist, album, duration)
         with self._lock:
             cached = self._memory_cache.get(key)
             ready = isinstance(cached, dict) and bool(cached.get("plain") or cached.get("synced"))
@@ -132,7 +133,7 @@ class LyricsManager(QObject):
         self._scheduled_request = None
         if not request or self._closed or request[0] != self._current_request_key:
             return
-        key, title, artist, album = request
+        key = request[0]
 
         # 1. Check in-memory cache
         with self._lock:
@@ -157,7 +158,7 @@ class LyricsManager(QObject):
         # 2. Fetch in background thread
         with self._lock:
             self._pending_key = key
-            self._pending_request = (key, title, artist, album)
+            self._pending_request = request
             if self._worker_count < 2:
                 self._worker_count += 1
                 threading.Thread(target=self._drain_requests, daemon=True, name="poppy-lyrics").start()
@@ -198,10 +199,10 @@ class LyricsManager(QObject):
         self._closed = True
         self.cancel_request()
 
-    def _fetch_worker(self, req_key: str, title: str, artist: str, album: str):
+    def _fetch_worker(self, req_key: str, title: str, artist: str, album: str, duration: float):
         data = None
-        sp_dc = self.config.get("media", {}).get("spotify_sp_dc", "").strip() if self.config else ""
-        providers = [(lambda: self._query_lrclib(title, artist, album), 6),
+        sp_dc = spotify_cookie(self.config.get("media", {})).strip()
+        providers = [(lambda: self._query_lrclib(title, artist, album, duration), 6),
                      (lambda: self._query_netease(title, artist), 4)]
         if sp_dc:
             providers.insert(0, (lambda: self._query_spotify(title, artist, sp_dc), 4))
@@ -300,7 +301,7 @@ class LyricsManager(QObject):
         return title.strip()
 
     @classmethod
-    def _best_match(cls, results, title, artist):
+    def _best_match(cls, results, title, artist, album="", duration=0):
         def normalize(value):
             return re.sub(r'[^\w]+', '', value.casefold())
         wanted = normalize(cls._clean_title(title))
@@ -313,9 +314,15 @@ class LyricsManager(QObject):
             actual_artist = normalize(record.get("artistName") or "")
             title_score = SequenceMatcher(None, wanted, name).ratio()
             artist_match = not performer or (actual_artist and (performer in actual_artist or actual_artist in performer))
-            if title_score >= 0.8 and artist_match:
-                candidates.append((title_score, bool(record.get("syncedLyrics")), record))
-        return max(candidates, key=lambda item: item[:2])[2] if candidates else None
+            if title_score >= 0.8 and artist_match and cls._duration_matches(record, duration):
+                same_album = bool(album) and normalize(record.get("albumName") or "") == normalize(album)
+                candidates.append((title_score, same_album, bool(record.get("syncedLyrics")), record))
+        return max(candidates, key=lambda item: item[:3])[3] if candidates else None
+
+    @staticmethod
+    def _duration_matches(record, duration):
+        length = record.get("duration")
+        return not duration or not isinstance(length, (int, float)) or abs(length - duration) <= max(8, duration * 0.05)
 
     def _query_spotify(self, title: str, artist: str, sp_dc: str) -> dict | None:
         """Fetch official synchronized lyrics from Spotify's internal Color Lyrics endpoint."""
@@ -434,7 +441,7 @@ class LyricsManager(QObject):
                 continue
         return None
 
-    def _query_lrclib(self, title: str, artist: str, album: str) -> dict | None:
+    def _query_lrclib(self, title: str, artist: str, album: str, duration: float = 0) -> dict | None:
         headers = {"User-Agent": "Poppy/dev (https://github.com/antaripnandi/poppy)"}
 
         clean_title = self._clean_title(title) or title
@@ -447,12 +454,16 @@ class LyricsManager(QObject):
             if not t or not a:
                 continue
             params = {"track_name": t, "artist_name": a}
+            if album:
+                params["album_name"] = album
+            if duration > 0:
+                params["duration"] = round(duration)
             url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(params)}"
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with self._urlopen(req, timeout=4.0) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                    if data and (data.get("syncedLyrics") or data.get("plainLyrics")):
+                    if data and self._duration_matches(data, duration) and (data.get("syncedLyrics") or data.get("plainLyrics")):
                         return data
             except Exception:
                 pass
@@ -469,7 +480,7 @@ class LyricsManager(QObject):
                 req = urllib.request.Request(url, headers=headers)
                 with self._urlopen(req, timeout=4.0) as resp:
                     results = json.loads(resp.read().decode("utf-8"))
-                    match = self._best_match(results, title, clean_artist)
+                    match = self._best_match(results, title, clean_artist, album, duration)
                     if match:
                         return match
             except Exception:
@@ -486,7 +497,7 @@ class LyricsManager(QObject):
                 req = urllib.request.Request(url, headers=headers)
                 with self._urlopen(req, timeout=4.0) as resp:
                     results = json.loads(resp.read().decode("utf-8"))
-                    match = self._best_match(results, title, clean_artist)
+                    match = self._best_match(results, title, clean_artist, album, duration)
                     if match:
                         return match
             except Exception:

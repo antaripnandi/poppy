@@ -3,7 +3,7 @@ Tests for Screen Time Manager, Settings integration, and Centered Pop-Out Animat
 """
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLayout
 from PySide6.QtCore import QRect, QEasingCurve
 from poppy.core.screentime_manager import ScreenTimeManager, format_duration
 from poppy.core.window import DynamicNotchWindow, NotchState
@@ -57,7 +57,8 @@ def test_screentime_manager_tracking_and_reset(qapp):
     assert sm.get_top_apps() == []
 
 
-def test_expand_animation_smooth_center(qapp):
+@pytest.mark.parametrize("tab", ["Home", "Music"])
+def test_expand_animation_smooth_center(qapp, tab):
     """
     Ensure the window pops out symmetrically from center with zero right-to-left drift.
     """
@@ -70,7 +71,7 @@ def test_expand_animation_smooth_center(qapp):
     expected_center_x = init_g.x() + init_g.width() / 2.0
 
     # Expand to EXPANDED
-    w._transition_to(NotchState.EXPANDED)
+    w._transition_to(NotchState.EXPANDED, target_tab=tab)
 
     start_v = w.anim.startValue()
     end_v = w.anim.endValue()
@@ -89,6 +90,9 @@ def test_expand_animation_smooth_center(qapp):
         w.anim.setCurrentTime(t)
         qapp.processEvents()
         frame_g = w.geometry()
+        requested = w.anim.currentValue()
+        assert QLayout.closestAcceptableSize(w, requested.size()) == requested.size()
+        assert frame_g.size() == requested.size()
         frame_center = frame_g.x() + frame_g.width() / 2.0
         assert abs(frame_center - expected_center_x) <= 1.0
 

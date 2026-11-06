@@ -1,5 +1,6 @@
 """User data paths and atomic writes. Legacy files are copied, never removed."""
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,29 @@ def write_text(path: Path, content: str):
 
 def write_json(path: Path, content):
     write_text(path, json.dumps(content, ensure_ascii=False, indent=2))
+
+
+def protect_spotify_cookie(cookie: str) -> str:
+    if not cookie:
+        return ""
+    try:
+        import win32crypt
+        blob = win32crypt.CryptProtectData(cookie.encode("utf-8"), "Poppy Spotify lyrics", None, None, None, 1)
+        return base64.b64encode(blob).decode("ascii")
+    except Exception:
+        raise OSError("Windows could not protect the Spotify cookie.") from None
+
+
+def spotify_cookie(media: dict) -> str:
+    encoded = media.get("spotify_sp_dc_protected")
+    if encoded:
+        try:
+            import win32crypt
+            _, value = win32crypt.CryptUnprotectData(base64.b64decode(encoded, validate=True), None, None, None, 1)
+            return value.decode("utf-8")
+        except Exception:
+            return ""
+    return media.get("spotify_sp_dc", "") or ""
 
 
 def data_path(name: str) -> Path:

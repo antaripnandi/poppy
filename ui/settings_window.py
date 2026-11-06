@@ -11,14 +11,17 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QSpinBox, QPushButton, QStackedWidget, QListWidget,
     QFrame, QComboBox, QSlider, QScrollArea, QProgressBar, QMessageBox,
-    QApplication, QLayout
+    QApplication, QLayout, QCheckBox, QColorDialog
 )
 
-from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, LAYOUT_THEMES, home_order, current_layout
-from poppy.ui.styles import THEME_PRESETS, DEFAULT_THEME, normalize_appearance
+from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, LAYOUT_THEMES, home_order, home_slots, current_layout
+from poppy.ui.styles import (
+    THEME_PRESETS, DEFAULT_THEME, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT,
+    APPEARANCE_LAYOUT_VERSION, normalize_appearance,
+)
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
-from poppy.core.storage import data_path, write_json
+from poppy.core.storage import data_path, write_json, spotify_cookie, protect_spotify_cookie
 
 
 class OrderCard(CardFrame):
@@ -114,7 +117,7 @@ class LayoutPreview(QWidget):
         self._ghost.hide()
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.cards = {}
-        for key, text in (("clock", "Time & usage"), ("controls", "Music & controls"),
+        for key, text in (("clock", "Time & usage"), ("controls", "System controls"),
                           ("notes", "Notes"), ("shelf", "Shelf")):
             self.cards[key] = OrderCard(key, text, self)
 
@@ -128,8 +131,9 @@ class LayoutPreview(QWidget):
         for card in self.cards.values():
             self.grid.removeWidget(card)
             card.apply_layout(name)
-        for index, key in enumerate(self.order):
-            self.grid.addWidget(self.cards[key], index // 2, index % 2)
+        for key, slot in zip(self.order, home_slots(name, len(self.order))):
+            self.grid.addWidget(self.cards[key], *slot)
+        self.grid.setColumnStretch(2, 0)
         for column, stretch in enumerate(spec["columns"]):
             self.grid.setColumnStretch(column, stretch)
         self.grid.setSpacing(spec["spacing"] // 2)
@@ -456,7 +460,7 @@ class SettingsWindow(QWidget):
         self.combo_mode.setItemText(2, "Follow Windows")
         self.combo_mode.currentTextChanged.connect(self._on_live_appearance_change)
         l_app.addWidget(_create_setting_card([
-            SettingRow("Layout theme", "Changes surfaces, typography, controls and page spacing", self.combo_layout),
+            SettingRow("Layout theme", f"{len(LAYOUT_THEMES)} layouts for navigation, typography and all tabs", self.combo_layout),
             SettingRow("Appearance mode", "Dark, Light, or follow the Windows app setting", self.combo_mode),
         ]))
         self.layout_preview = LayoutPreview()
@@ -476,6 +480,24 @@ class SettingsWindow(QWidget):
         l_app.addLayout(order_header)
         l_app.addWidget(self.layout_preview)
         l_app.addWidget(self.lbl_layout_description)
+
+        sections_title = QLabel("Home sections")
+        set_widget_style(sections_title, "font-size: 14px; font-weight: 600; color: #eef0f0;")
+        l_app.addWidget(sections_title)
+        sections = QGridLayout()
+        sections.setHorizontalSpacing(16)
+        sections.setVerticalSpacing(8)
+        self._home_section_checks = {}
+        for index, (key, label) in enumerate((
+            ("player", "Mini-player"), ("clock", "Time and usage"),
+            ("controls", "System controls"), ("notes", "Notes"),
+            ("shelf", "Shelf"), ("screentime", "Screen time"),
+        )):
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(True)
+            self._home_section_checks[key] = checkbox
+            sections.addWidget(checkbox, index // 2, index % 2)
+        l_app.addLayout(sections)
 
         self.combo_theme = QComboBox()
         for name, theme in THEME_PRESETS.items():
@@ -518,8 +540,8 @@ class SettingsWindow(QWidget):
 
         self.slider_col_w, self.lbl_val_col_w, row_col_w = self._make_slider_setting("Closed width", "Width when notch is closed (px)", 180, 360, 240)
         self.slider_col_h, self.lbl_val_col_h, row_col_h = self._make_slider_setting("Closed height", "Height of the compact pill (px)", 24, 44, 30)
-        self.slider_open_w, self.lbl_val_open_w, row_open_w = self._make_slider_setting("Panel width", "Preferred width in pixels", 780, 1200, 960)
-        self.slider_open_h, self.lbl_val_open_h, row_open_h = self._make_slider_setting("Panel height", "Preferred height; the panel grows when controls need more room", 480, 800, 560)
+        self.slider_open_w, self.lbl_val_open_w, row_open_w = self._make_slider_setting("Panel width", "Preferred width in pixels", 780, 1200, DEFAULT_PANEL_WIDTH)
+        self.slider_open_h, self.lbl_val_open_h, row_open_h = self._make_slider_setting("Panel height", "Home scrolls when its sections need more room", 480, 800, DEFAULT_PANEL_HEIGHT)
         self.slider_radius, self.lbl_val_radius, row_radius = self._make_slider_setting("Corner radius", "Curvature for rounded bezel corners (px)", 8, 28, 22)
         self.slider_top_offset, self.lbl_val_top_offset, row_top = self._make_slider_setting("Top offset", "Vertical padding gap from top bezel (px)", 0, 40, 0)
 
@@ -527,6 +549,17 @@ class SettingsWindow(QWidget):
             row_style, row_disp, row_col_w, row_col_h, row_open_w, row_open_h, row_radius, row_top
         ])
         l_app.addWidget(card_shape)
+        self.combo_peek_color = QComboBox()
+        for label, value in (("Album artwork", "artwork"), ("Fixed color", "fixed"), ("Match layout", "theme")):
+            self.combo_peek_color.addItem(label, value)
+        self.btn_peek_color = QPushButton()
+        self.btn_peek_color.setAccessibleName("Choose fixed hover player color")
+        self.btn_peek_color.clicked.connect(self._choose_peek_color)
+        self.combo_peek_color.currentIndexChanged.connect(self._on_peek_color_changed)
+        l_app.addWidget(_create_setting_card([
+            SettingRow("Hover player color", "Follow the current artwork or choose a consistent color", self.combo_peek_color),
+            SettingRow("Fixed hover color", "Used when Hover player color is set to Fixed color", self.btn_peek_color),
+        ]))
         l_app.addStretch()
 
         self.stack.addWidget(_make_scroll_area(page_app))
@@ -609,7 +642,7 @@ class SettingsWindow(QWidget):
             SettingRow("Preview on hover", "Show a small media preview when you hover over the closed pill", self.chk_hover_peek),
             SettingRow("Scroll to change volume", "Scroll mouse wheel on closed pill to adjust Windows master volume", self.chk_scroll_volume),
             SettingRow("Launch at login", "Start Poppy when you sign in to Windows", self.chk_autostart),
-            SettingRow("Show tray icon", "Keep Poppy active in System Tray when drawer is closed", self.chk_tray_close),
+            SettingRow("Show tray icon", "Right-click the pill to open settings or exit with the tray icon hidden", self.chk_tray_close),
             SettingRow("Animation duration", "Open and close animation, in milliseconds", self.spin_anim_ms)
         ])
         l_beh.addWidget(card_beh)
@@ -642,7 +675,7 @@ class SettingsWindow(QWidget):
             SettingRow("Show alerts", "Show alerts from Poppy", self.chk_notif_enabled),
             SettingRow("Expand for alerts", "Expand notch into a floating island when notifications arrive", self.chk_notif_show_island),
             SettingRow("Quiet during focus", "Silence incoming notification popups during Pomodoro sprints", self.chk_notif_mute_focus),
-            SettingRow("Alert sound", "Play a sound when an alert arrives", self.chk_notif_sound),
+            SettingRow("Island sound", "Play a sound when an alert opens on the notch", self.chk_notif_sound),
             SettingRow("Show message text", "Display message text in alert (disable to protect privacy)", self.chk_notif_preview)
         ])
         l_notif.addWidget(card_notif)
@@ -745,6 +778,9 @@ class SettingsWindow(QWidget):
         # Card 1: Tracking & Display
         self.chk_st_enabled = ToggleSwitch(accent="#829c8e", checked=True)
         self.chk_st_show_main_menu = ToggleSwitch(accent="#829c8e", checked=True)
+        home_screen_time = self._home_section_checks["screentime"]
+        home_screen_time.toggled.connect(lambda checked: self.chk_st_show_main_menu.setChecked(checked, animate=False))
+        self.chk_st_show_main_menu.toggled.connect(home_screen_time.setChecked)
         self.chk_st_track_apps = ToggleSwitch(accent="#829c8e", checked=True)
 
         self.combo_st_afk = QComboBox()
@@ -755,7 +791,7 @@ class SettingsWindow(QWidget):
 
         card_st_track = _create_setting_card([
             SettingRow("Track active time", "Monitor active keyboard/mouse foreground session time", self.chk_st_enabled),
-            SettingRow("Show on Home", "Display live Screen Time pill directly on notch home dashboard", self.chk_st_show_main_menu),
+            SettingRow("Show on Home", "Show today's screen time and five most-used apps", self.chk_st_show_main_menu),
             SettingRow("Track time by app", "Record per-application duration (Code, Brave, Spotify, etc.)", self.chk_st_track_apps),
             SettingRow("Idle timeout", "Pause tracking when mouse and keyboard are idle", self.combo_st_afk)
         ])
@@ -864,7 +900,7 @@ class SettingsWindow(QWidget):
         lbl_cookie_hint = QLabel(
             "Lyrics sources:\n"
             "Poppy looks for lyrics through LRCLIB and NetEase. Results depend on the track and provider.\n\n"
-            "A Spotify sp_dc cookie is optional. It is stored locally with your settings. "
+            "A Spotify sp_dc cookie is optional. Windows protects it for your account. "
             "Leave this blank to use the public providers."
         )
         set_widget_style(lbl_cookie_hint, """
@@ -1006,7 +1042,7 @@ class SettingsWindow(QWidget):
         self.chk_monitor_bat = ToggleSwitch(accent="#829c8e", checked=True)
 
         card_hw = _create_setting_card([
-            SettingRow("GPU monitoring", "Query GPU core utilization and temperature via NVML", self.chk_monitor_gpu),
+            SettingRow("GPU monitoring", "Show GPU utilization on supported NVIDIA devices", self.chk_monitor_gpu),
             SettingRow("Battery monitoring", "Monitor laptop battery percentage and charging state", self.chk_monitor_bat)
         ])
         l_hw.addWidget(card_hw)
@@ -1213,6 +1249,23 @@ class SettingsWindow(QWidget):
     def _get_current_selected_theme(self) -> str:
         return self.combo_theme.currentText() or DEFAULT_THEME
 
+    def _set_peek_color(self, color):
+        self._peek_color = color.name()
+        swatch = QPixmap(16, 12)
+        swatch.fill(color)
+        self.btn_peek_color.setIcon(QIcon(swatch))
+        self.btn_peek_color.setText(self._peek_color.upper())
+
+    def _on_peek_color_changed(self):
+        self.btn_peek_color.setEnabled(self.combo_peek_color.currentData() == "fixed")
+        self._on_live_appearance_change()
+
+    def _choose_peek_color(self):
+        color = QColorDialog.getColor(QColor(self._peek_color), self, "Hover player color")
+        if color.isValid():
+            self._set_peek_color(color)
+            self._on_live_appearance_change()
+
     def _appearance_values(self):
         return {
             "theme": self._get_current_selected_theme(),
@@ -1220,9 +1273,11 @@ class SettingsWindow(QWidget):
             "home_orders": {name: list(order) for name, order in self._home_orders.items()},
             "mode": "System" if self.combo_mode.currentIndex() == 2 else self.combo_mode.currentText(),
             "style": self.combo_style.currentText(),
+            "peek_color_source": self.combo_peek_color.currentData(),
+            "peek_color": self._peek_color,
             "collapsed_width": self.slider_col_w.value(),
             "collapsed_height": self.slider_col_h.value(),
-            "layout_version": 3,
+            "layout_version": APPEARANCE_LAYOUT_VERSION,
             "open_width": self.slider_open_w.value(),
             "open_height": self.slider_open_h.value(),
             "corner_radius": self.slider_radius.value(),
@@ -1271,6 +1326,14 @@ class SettingsWindow(QWidget):
         self.chk_capture_images.setChecked(self.config.get("capture", {}).get("enabled", False), animate=False)
         # 0. Appearance
         app_cfg = normalize_appearance(self.config.get("appearance", {}))
+        self._set_peek_color(QColor(app_cfg["peek_color"]))
+        self.combo_peek_color.setCurrentIndex(self.combo_peek_color.findData(app_cfg["peek_color_source"]))
+        self.btn_peek_color.setEnabled(app_cfg["peek_color_source"] == "fixed")
+        hidden = app_cfg.get("hidden_home_sections", [])
+        hidden = hidden if isinstance(hidden, list) else []
+        for key, checkbox in self._home_section_checks.items():
+            if key != "screentime":
+                checkbox.setChecked(key not in hidden)
         self._home_orders = {name: list(order) for name, order in app_cfg.get("home_orders", {}).items()}
         self.combo_layout.setCurrentText(app_cfg.get("layout", "Classic"))
         self.combo_mode.setCurrentIndex({"Dark": 0, "Light": 1, "System": 2}.get(app_cfg.get("mode"), 0))
@@ -1291,8 +1354,8 @@ class SettingsWindow(QWidget):
 
         self.slider_col_w.setValue(app_cfg.get("collapsed_width", 240))
         self.slider_col_h.setValue(app_cfg.get("collapsed_height", 30))
-        self.slider_open_w.setValue(app_cfg.get("open_width", 960))
-        self.slider_open_h.setValue(app_cfg.get("open_height", 560))
+        self.slider_open_w.setValue(app_cfg["open_width"])
+        self.slider_open_h.setValue(app_cfg["open_height"])
         self.slider_radius.setValue(app_cfg.get("corner_radius", 22))
         self.slider_top_offset.setValue(app_cfg.get("top_offset", 0))
 
@@ -1354,7 +1417,7 @@ class SettingsWindow(QWidget):
         media_cfg = self.config.get("media", {})
         self.combo_media_background.setCurrentIndex(1 if media_cfg.get("background") == "theme" else 0)
         self.chk_media_players.setChecked(media_cfg.get("show_player_tiles", True), animate=False)
-        self.txt_sp_dc.setText(media_cfg.get("spotify_sp_dc", ""))
+        self.txt_sp_dc.setText(spotify_cookie(media_cfg))
         self.chk_lyrics_auto_scroll.setChecked(media_cfg.get("auto_scroll_lyrics", True), animate=False)
 
         # 6. Weather
@@ -1384,6 +1447,11 @@ class SettingsWindow(QWidget):
 
     def _save_settings(self):
         self._preview_timer.stop()
+        try:
+            protected_cookie = protect_spotify_cookie(self.txt_sp_dc.text().strip())
+        except OSError as error:
+            QMessageBox.warning(self, "Settings were not saved", str(error))
+            return False
         # Always retain one usable tab.
         enabled_tabs = [name for name, chk in self._tab_checkboxes.items() if chk.isChecked()]
         if not enabled_tabs:
@@ -1401,7 +1469,11 @@ class SettingsWindow(QWidget):
         new_config = {
             "clipboard": {"enabled": self.chk_clipboard_history.isChecked()},
             "capture": {"enabled": self.chk_capture_images.isChecked()},
-            "appearance": self._appearance_values(),
+            "appearance": {
+                **self._appearance_values(),
+                "hidden_home_sections": [key for key, checkbox in self._home_section_checks.items()
+                                         if key != "screentime" and not checkbox.isChecked()],
+            },
             "tabs": {
                 "enabled": enabled_tabs
             },
@@ -1426,7 +1498,7 @@ class SettingsWindow(QWidget):
             "media": {
                 "background": "theme" if self.combo_media_background.currentIndex() == 1 else "artwork",
                 "show_player_tiles": self.chk_media_players.isChecked(),
-                "spotify_sp_dc": self.txt_sp_dc.text().strip(),
+                "spotify_sp_dc_protected": protected_cookie,
                 "auto_scroll_lyrics": self.chk_lyrics_auto_scroll.isChecked()
             },
             "weather": {
@@ -1466,6 +1538,7 @@ class SettingsWindow(QWidget):
             previous = merged_config.get(section, {})
             merged_config[section] = {**(previous if isinstance(previous, dict) else {}), **values}
         new_config = merged_config
+        new_config["media"].pop("spotify_sp_dc", None)
         cfg_path = data_path("config.json")
         try:
             write_json(cfg_path, new_config)

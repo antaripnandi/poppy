@@ -1,13 +1,4 @@
-"""
-Poppy Extended Tabs Suite
-Faithfully bringing NotchX's advanced capabilities to Poppy:
-- Calendar Tab: Interactive month calendar, today highlighting, and persistent agenda.
-- Clipboard Tab: Searchable clipboard history, click-to-copy, pinning, and privacy masking.
-- Docs Tab: Word/Text to PDF converter, PDF text extraction, and recent files tray matching documents-v2.
-- Launcher Tab: Raycast/Spotlight command palette for instant app launching and system tasks.
-- Desktops Tab: Virtual Desktops and running windows management matching desktops-v2.
-- Screen Annotation Overlay: Live on-screen drawing, markup, and highlight canvas.
-"""
+"""Calendar, clipboard, PDF tools, commands, and Windows desktop views."""
 
 import os
 import sys
@@ -19,6 +10,7 @@ from pathlib import Path
 import subprocess
 import ctypes
 import uuid
+import threading
 
 from PySide6.QtCore import (
     Qt, QRect, QRectF, QPoint, QSize, Signal, QTimer, QUrl, QMimeData, QDate
@@ -29,7 +21,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QScrollArea, QFrame, QApplication, QFileDialog, QMessageBox, QLayout, QSizePolicy
+    QLineEdit, QTextEdit, QScrollArea, QFrame, QApplication, QFileDialog, QMessageBox, QLayout, QBoxLayout, QSizePolicy, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import QSaveFile, QIODevice
 from shiboken6 import isValid
@@ -38,6 +30,7 @@ from poppy.ui.theme import set_widget_style
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
 from poppy.core.system_tools import lock_workstation
+from poppy.core.system_features import current_desktop_windows, activate_desktop_window
 from poppy.core.storage import data_path, write_json
 
 
@@ -527,28 +520,29 @@ class ClipboardTabView(QWidget):
 # =====================================================================
 
 class DocsTabView(QWidget):
-    """
-    Local document studio matching documents-v2.png.
-    Converts Word/Markdown/Text to PDF, extracts text from PDF, and provides a drag-out shelf.
-    """
+    """Local text-to-PDF conversion and PDF inspection."""
+
+    doc_finished = Signal(object, str)
+
     def __init__(self, parent=None, accent="#6e9bff"):
         super().__init__(parent)
         self._accent = accent
         self._recent_files: list[str] = []
+        self._doc_busy = False
         self._init_ui()
+        self.doc_finished.connect(self._finish_doc_job)
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(18, 14, 18, 14)
         main_layout.setSpacing(14)
 
-        # 3 Action Cards matching documents-v2.png
-        cards_row = QHBoxLayout()
+        cards_row = self.action_cards = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         cards_row.setSpacing(12)
 
         # Card 1: Word / Text -> PDF
         card_w2p = CardFrame(self)
-        l_w2p = QVBoxLayout(card_w2p)
+        l_w2p = QBoxLayout(QBoxLayout.Direction.TopToBottom, card_w2p)
         l_w2p.setContentsMargins(16, 16, 16, 16)
         l_w2p.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l_w2p.setSpacing(6)
@@ -565,18 +559,20 @@ class DocsTabView(QWidget):
 
         btn_act1 = QPushButton("Select File to Convert")
         btn_act1.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_act1, f"background: {self._accent}; border: none; border-radius: 6px; color: white; font-size: 10px; font-weight: 600; padding: 4px 12px; margin-top: 4px;")
         btn_act1.clicked.connect(self._convert_to_pdf)
 
         l_w2p.addWidget(lbl_i1)
-        l_w2p.addWidget(lbl_t1)
-        l_w2p.addWidget(lbl_s1)
+        text1 = QVBoxLayout()
+        text1.setSpacing(3)
+        text1.addWidget(lbl_t1)
+        text1.addWidget(lbl_s1)
+        l_w2p.addLayout(text1, 1)
         l_w2p.addWidget(btn_act1)
         cards_row.addWidget(card_w2p)
 
         # Card 2: PDF Info & Text Extract
         card_p2w = CardFrame(self)
-        l_p2w = QVBoxLayout(card_p2w)
+        l_p2w = QBoxLayout(QBoxLayout.Direction.TopToBottom, card_p2w)
         l_p2w.setContentsMargins(16, 16, 16, 16)
         l_p2w.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l_p2w.setSpacing(6)
@@ -597,17 +593,25 @@ class DocsTabView(QWidget):
         btn_act2.clicked.connect(self._inspect_pdf)
 
         l_p2w.addWidget(lbl_i2)
-        l_p2w.addWidget(lbl_t2)
-        l_p2w.addWidget(lbl_s2)
+        text2 = QVBoxLayout()
+        text2.setSpacing(3)
+        text2.addWidget(lbl_t2)
+        text2.addWidget(lbl_s2)
+        l_p2w.addLayout(text2, 1)
         l_p2w.addWidget(btn_act2)
         cards_row.addWidget(card_p2w)
 
         main_layout.addLayout(cards_row)
 
         # Info line
-        lbl_info = QLabel("Converting locally with native Qt vector PDF engine · Files stay on this PC · Zero cloud leaks")
-        set_widget_style(lbl_info, "font-size: 10.5px; color: #64748b; border: none; background: transparent;")
-        main_layout.addWidget(lbl_info)
+        self._doc_buttons = (btn_act1, btn_act2)
+        self._action_rows = ((l_w2p, lbl_t1, lbl_s1), (l_p2w, lbl_t2, lbl_s2))
+        self.set_accent(self._accent)
+        self.doc_status = QLabel("Files are processed locally.")
+        self.doc_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.doc_status.setWordWrap(True)
+        set_widget_style(self.doc_status, "font-size: 10.5px; color: #64748b; border: none; background: transparent;")
+        main_layout.addWidget(self.doc_status)
 
         # Recent Files Tray
         recent_hdr = QHBoxLayout()
@@ -639,54 +643,88 @@ class DocsTabView(QWidget):
         set_widget_style(self.lbl_empty_recent, "font-size: 10.5px; color: #64748b; border: none; background: transparent;")
         self.recent_layout.addWidget(self.lbl_empty_recent)
 
+    def set_accent(self, accent):
+        self._accent = accent
+        set_widget_style(self._doc_buttons[0], f"QPushButton {{ background: rgba(255,255,255,0.07); border: 1px solid {accent}; border-radius: 6px; color: #edf1f0; font-size: 11px; font-weight: 600; padding: 4px 12px; }} QPushButton:hover {{ background: rgba(255,255,255,0.15); }} QPushButton:focus {{ border: 2px solid {accent}; }}")
+
+    def apply_layout(self, name):
+        list_view = name in ("Daily", "Console")
+        self.action_cards.setDirection(QBoxLayout.Direction.TopToBottom if list_view else QBoxLayout.Direction.LeftToRight)
+        for row, title, description in self._action_rows:
+            row.setDirection(QBoxLayout.Direction.LeftToRight if list_view else QBoxLayout.Direction.TopToBottom)
+            row.setSpacing(12 if list_view else 6)
+            for label in (title, description):
+                label.setAlignment(Qt.AlignmentFlag.AlignVCenter |
+                                   (Qt.AlignmentFlag.AlignLeft if list_view else Qt.AlignmentFlag.AlignHCenter))
+
     def _convert_to_pdf(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select text file to convert to PDF", "", "Documents (*.txt *.md *.py *.json *.html)")
-        if not file_path:
-            return
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select text file to convert to PDF", "", "Text files (*.txt *.md *.py *.json *.html)")
+        if file_path:
+            self._run_doc_job(file_path, self._print_text)
 
-        try:
-            content = Path(file_path).read_text(encoding="utf-8", errors="replace")
-            source = Path(file_path)
-            # A fresh name also protects against two Poppy windows converting at once.
-            out_pdf = str(source.with_name(f"{source.stem}-{uuid.uuid4().hex[:12]}.pdf"))
-
-            doc = QTextDocument()
-            doc.setPlainText(content)
-            output = QSaveFile(out_pdf)
-            if not output.open(QIODevice.OpenModeFlag.WriteOnly):
-                raise OSError(output.errorString())
-            writer = QPdfWriter(output)
-            writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-            doc.print_(writer)
-            del writer
-            if not output.commit():
-                raise OSError(output.errorString())
-
-            self._add_recent(out_pdf)
-        except Exception as e:
-            QMessageBox.warning(self, "PDF could not be saved", str(e))
+    @staticmethod
+    def _print_text(file_path):
+        source = Path(file_path)
+        content = source.read_text(encoding="utf-8", errors="replace")
+        out_pdf = str(source.with_name(f"{source.stem}-{uuid.uuid4().hex[:12]}.pdf"))
+        doc = QTextDocument()
+        doc.setPlainText(content)
+        output = QSaveFile(out_pdf)
+        if not output.open(QIODevice.OpenModeFlag.WriteOnly):
+            raise OSError(output.errorString())
+        writer = QPdfWriter(output)
+        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        doc.print_(writer)
+        del writer
+        if not output.commit():
+            raise OSError(output.errorString())
+        return out_pdf, "PDF document"
 
     def _inspect_pdf(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select PDF to inspect", "", "PDF Files (*.pdf)")
-        if not file_path:
-            return
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select PDF to inspect", "", "PDF files (*.pdf)")
+        if file_path:
+            self._run_doc_job(file_path, self._read_pdf)
 
+    @staticmethod
+    def _read_pdf(file_path):
+        from PySide6.QtPdf import QPdfDocument
+        doc = QPdfDocument()
         try:
-            from PySide6.QtPdf import QPdfDocument
-            doc = QPdfDocument(self)
             err = doc.load(file_path)
             if err != QPdfDocument.Error.None_:
                 raise ValueError("The PDF could not be opened. It may be damaged or password protected.")
             pages = doc.pageCount()
-            title = doc.metaData(QPdfDocument.MetaDataField.Title) or Path(file_path).name
-
-            self._add_recent(file_path, extra_info=f"{pages} pages")
-        except Exception as error:
-            QMessageBox.warning(self, "PDF could not be opened", str(error))
+            return file_path, f"{pages} pages"
         finally:
-            if 'doc' in locals():
-                doc.close()
-                doc.deleteLater()
+            doc.close()
+
+    def _run_doc_job(self, file_path, action):
+        if self._doc_busy:
+            return
+        self._doc_busy = True
+        for button in self._doc_buttons:
+            button.setEnabled(False)
+        self.doc_status.setText("Working…")
+
+        def work():
+            try:
+                result, error = action(file_path), ""
+            except Exception as exception:
+                result, error = None, str(exception)
+            try:
+                self.doc_finished.emit(result, error)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=work, daemon=True, name="poppy-docs").start()
+
+    def _finish_doc_job(self, result, error):
+        self._doc_busy = False
+        for button in self._doc_buttons:
+            button.setEnabled(True)
+        self.doc_status.setText(error or "Files are processed locally.")
+        if result is not None:
+            self._add_recent(*result)
 
     def _add_recent(self, file_path: str, extra_info: str = "PDF Document"):
         self.lbl_empty_recent.setVisible(False)
@@ -738,161 +776,87 @@ class DocsTabView(QWidget):
 # =====================================================================
 
 class LauncherTabView(QWidget):
-    """
-    Spotlight / Raycast style command palette.
-    Instant launch for Windows Start Menu apps and built-in system tools.
-    """
-    def __init__(self, indexer, parent=None, accent="#6e9bff"):
+    """Keyboard command picker and installed-app search."""
+
+    apps_ready = Signal(list)
+    launched = Signal()
+
+    def __init__(self, indexer, parent=None, accent="#6e9bff", *, commands=()):
         super().__init__(parent)
         self.indexer = indexer
-        self._accent = accent
-        self.apps = self.indexer.get_installed_apps()
-        self._filtered = self.apps
-        self._init_ui()
-
-    def _init_ui(self):
+        self.commands = [{"name": name, "run": action} for name, action in commands]
+        self.apps = []
+        self._indexed = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(10)
-
-        # Big Search Bar
         self.input_search = QLineEdit()
-        self.input_search.setPlaceholderText("Search apps, system actions, or type math...")
-        set_widget_style(self.input_search, """
-            QLineEdit {
-                background: rgba(255, 255, 255, 0.05);
-                border: none;
-                border-radius: 10px;
-                color: #f8fafc;
-                font-size: 13px;
-                font-weight: 500;
-                padding: 10px 14px;
-            }
-        """)
-        self.input_search.textChanged.connect(self._on_search_changed)
-        self.input_search.returnPressed.connect(self._launch_top)
+        self.input_search.setPlaceholderText("Search tabs, actions, or apps")
+        self.input_search.setAccessibleName("Search commands and apps")
+        self.input_search.textChanged.connect(self._render_results)
+        self.input_search.returnPressed.connect(self._launch_current)
         layout.addWidget(self.input_search)
-
-        # Scroll Area for Results
-        self.scroll = ScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        set_widget_style(self.scroll, "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { border: none; background: transparent; }")
-        self.container = QWidget()
-        self.results_layout = QVBoxLayout(self.container)
-        self.results_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        self.results_layout.setContentsMargins(0, 0, 0, 0)
-        self.results_layout.setSpacing(4)
-        self.scroll.setWidget(self.container)
-        layout.addWidget(self.scroll, stretch=1)
-
+        self.results = QListWidget()
+        self.results.setAccessibleName("Matching commands")
+        self.results.itemActivated.connect(lambda item: self._launch_current())
+        layout.addWidget(self.results, 1)
+        self.status = QLabel("Enter to open · Esc to close")
+        layout.addWidget(self.status)
+        for key, offset in (("Down", 1), ("Up", -1)):
+            shortcut = QShortcut(QKeySequence(key), self.input_search)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(lambda delta=offset: self._move_selection(delta))
+        self.apps_ready.connect(self._set_apps)
         self._render_results()
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(50, self.input_search.setFocus)
+        self.input_search.setFocus()
 
-    def _on_search_changed(self, text: str):
-        q = text.lower().strip()
-        if not q:
-            self._filtered = self.apps
-        else:
-            self._filtered = [a for a in self.apps if q in a["name"].lower() or q in a.get("sub", "").lower()]
+    def _set_apps(self, apps):
+        self.apps = apps
         self._render_results()
 
     def _render_results(self):
-        while self.results_layout.count():
-            item = self.results_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        words = self.input_search.text().casefold().split()
+        if words and not self._indexed:
+            self._indexed = True
 
-        fluent_font = get_fluent_font_family()
-        shown = self._filtered[:35]
+            def index():
+                try:
+                    apps = self.indexer.get_installed_apps()
+                    self.apps_ready.emit([app for app in apps if app.get("cmd", "").lower().endswith(".lnk")])
+                except (OSError, RuntimeError):
+                    pass
 
-        if not shown:
-            lbl_empty = QLabel("No apps or commands found.")
-            lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            set_widget_style(lbl_empty, "color: #64748b; font-size: 11px; padding: 20px; border: none; background: transparent;")
-            self.results_layout.addWidget(lbl_empty)
-            return
-
-        for idx, app in enumerate(shown):
-            btn = QPushButton()
-            btn.setFixedHeight(38)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            set_widget_style(btn, """
-                QPushButton {
-                    background: rgba(255, 255, 255, 0.035);
-                    border: none;
-                    border-radius: 8px;
-                    text-align: left;
-                    padding: 4px 10px;
-                }
-                QPushButton:hover {
-                    background: rgba(255, 255, 255, 0.10);
-                }
-            """)
-            r_l = QHBoxLayout(btn)
-            r_l.setContentsMargins(6, 2, 6, 2)
-            r_l.setSpacing(10)
-
-            icon_lbl = QLabel(app.get("icon", "\uE71D"))
-            set_widget_style(icon_lbl, f"font-family: '{fluent_font}'; font-size: 14px; color: #38bdf8; border: none; background: transparent;")
-            r_l.addWidget(icon_lbl)
-
-            lbl_name = QLabel(app["name"])
-            set_widget_style(lbl_name, "font-size: 11.5px; font-weight: 600; color: #f1f5f9; border: none; background: transparent;")
-            r_l.addWidget(lbl_name)
-
-            r_l.addStretch()
-
-            lbl_sub = QLabel(app.get("sub", ""))
-            set_widget_style(lbl_sub, "font-size: 10px; color: #64748b; border: none; background: transparent;")
-            r_l.addWidget(lbl_sub)
-
-            btn.clicked.connect(lambda checked=False, a=app: self._launch_app(a))
-            self.results_layout.addWidget(btn)
-
-        self.results_layout.addStretch()
-
-    def _launch_top(self):
+            threading.Thread(target=index, daemon=True, name="poppy-launcher").start()
+        entries = self.commands + (self.apps if words else [])
+        self._filtered = [entry for entry in entries if all(word in entry["name"].casefold() for word in words)][:40]
+        self.results.clear()
+        self.results.addItems([entry["name"] for entry in self._filtered])
         if self._filtered:
-            self._launch_app(self._filtered[0])
+            self.results.setCurrentRow(0)
+        self.status.setText("Enter to open · Esc to close" if self._filtered else "No matching commands.")
 
-    def _launch_app(self, app: dict):
-        cmd = app.get("cmd", "")
-        if cmd == "lock":
-            lock_workstation()
-            return
-        elif cmd == "taskmgr":
-            os.system("start taskmgr")
-            return
-        elif cmd == "ms-settings:":
-            os.startfile("ms-settings:")
-            return
-        elif cmd == "calc":
-            os.startfile("calc.exe")
-            return
-        elif cmd == "ms-screenclip:":
-            os.startfile("ms-screenclip:")
-            return
-        elif cmd == "wt":
-            try:
-                os.startfile("wt.exe")
-            except Exception:
-                os.startfile("cmd.exe")
-            return
-        elif cmd == "explorer":
-            os.startfile("explorer.exe")
-            return
-        elif cmd == "notepad":
-            os.startfile("notepad.exe")
-            return
+    def _move_selection(self, offset):
+        if self.results.count():
+            self.results.setCurrentRow(max(0, min(self.results.count() - 1, self.results.currentRow() + offset)))
 
+    def _launch_current(self):
+        index = self.results.currentRow()
+        if not 0 <= index < len(self._filtered):
+            return
+        entry = self._filtered[index]
         try:
-            os.startfile(cmd)
-        except Exception:
-            pass
+            if "run" in entry:
+                self.launched.emit()
+                entry["run"]()
+            else:
+                os.startfile(entry["cmd"])
+                self.launched.emit()
+        except OSError as error:
+            if self.isVisible():
+                self.status.setText(str(error))
+            else:
+                QMessageBox.warning(self.window().parentWidget(), "Command could not run", str(error))
 
 
 # =====================================================================
@@ -900,142 +864,95 @@ class LauncherTabView(QWidget):
 # =====================================================================
 
 class DesktopsTabView(QWidget):
-    """
-    Virtual Desktops and window manager matching desktops-v2.png.
-    """
+    """Windows on the current desktop, with direct virtual-desktop shortcuts."""
+
+    windows_ready = Signal(object)
+
     def __init__(self, parent=None, accent="#6e9bff"):
         super().__init__(parent)
-        self._accent = accent
-        self._init_ui()
-
-    def _init_ui(self):
+        self._refreshing = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+        header = QHBoxLayout()
+        self.summary = QLabel("Open windows")
+        set_widget_style(self.summary, "font-size: 15px; font-weight: 500; color: #edf1f0;")
+        header.addWidget(self.summary)
+        header.addStretch()
+        for label, callback in (
+            ("Previous desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x25)),
+            ("Next desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x27)),
+            ("New desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x44)),
+            ("Task View", lambda: self._desktop_shortcut(0x5B, 0x09)),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            header.addWidget(button)
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.clicked.connect(self.refresh_windows)
+        header.addWidget(self.refresh_button)
+        layout.addLayout(header)
 
-        # Header with Controls
-        hdr = QHBoxLayout()
-        lbl_info = QLabel("2 Desktops · 3 Windows · Click to switch or create desktop")
-        set_widget_style(lbl_info, "font-size: 11px; color: #94a3b8; border: none; background: transparent;")
-        hdr.addWidget(lbl_info)
-        hdr.addStretch()
+        self.windows = QListWidget()
+        self.windows.setAccessibleName("Windows on the current desktop")
+        self.windows.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.windows.itemActivated.connect(self._activate_window)
+        layout.addWidget(self.windows, 1)
+        self.status = QLabel("Double-click a window or press Enter to switch to it.")
+        set_widget_style(self.status, "font-size: 12px; color: #a7adab;")
+        layout.addWidget(self.status)
+        self.windows_ready.connect(self._show_windows)
 
-        btn_new_desk = QPushButton("+ New Desktop")
-        btn_new_desk.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_new_desk, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.08);
-                border: none;
-                border-radius: 6px;
-                color: #f1f5f9;
-                font-size: 10px;
-                font-weight: 600;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.16);
-            }
-        """)
-        btn_new_desk.clicked.connect(self._create_new_desktop)
-        hdr.addWidget(btn_new_desk)
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_windows()
 
-        btn_task_view = QPushButton("Task View")
-        btn_task_view.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_task_view, f"""
-            QPushButton {{
-                background: {self._accent};
-                border: none;
-                border-radius: 6px;
-                color: #ffffff;
-                font-size: 10px;
-                font-weight: 600;
-                padding: 4px 12px;
-            }}
-        """)
-        btn_task_view.clicked.connect(self._open_task_view)
-        hdr.addWidget(btn_task_view)
-        layout.addLayout(hdr)
+    def refresh_windows(self):
+        if self._refreshing:
+            return
+        self._refreshing = True
+        self.refresh_button.setEnabled(False)
 
-        # Desktop 1 Card
-        card_d1 = CardFrame(self)
-        l_d1 = QVBoxLayout(card_d1)
-        l_d1.setContentsMargins(14, 12, 14, 12)
-        l_d1.setSpacing(8)
+        def read_windows():
+            try:
+                rows = current_desktop_windows()
+            except (OSError, AttributeError):
+                rows = None
+            try:
+                self.windows_ready.emit(rows)
+            except RuntimeError:
+                pass  # The tab may have closed during the Windows query.
 
-        d1_hdr = QHBoxLayout()
-        lbl_d1_title = QLabel("Desktop 1 · 1 Window")
-        set_widget_style(lbl_d1_title, "font-size: 12px; font-weight: 700; color: #f8fafc; border: none; background: transparent;")
-        btn_switch_1 = QPushButton("Switch here >")
-        btn_switch_1.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(btn_switch_1, "background: rgba(255,255,255,0.06); border: none; border-radius: 5px; color: #cbd5e1; font-size: 10px; font-weight: 600; padding: 3px 10px;")
-        btn_switch_1.clicked.connect(self._switch_desktop_left)
-        d1_hdr.addWidget(lbl_d1_title)
-        d1_hdr.addStretch()
-        d1_hdr.addWidget(btn_switch_1)
-        l_d1.addLayout(d1_hdr)
+        threading.Thread(target=read_windows, daemon=True, name="poppy-desktops").start()
 
-        app_row1 = QWidget()
-        set_widget_style(app_row1, "background: rgba(255, 255, 255, 0.035); border-radius: 6px;")
-        ar_l1 = QHBoxLayout(app_row1)
-        ar_l1.setContentsMargins(10, 6, 10, 6)
-        lbl_a1 = QLabel("🎵  Spotify · Media Playing")
-        set_widget_style(lbl_a1, "font-size: 11px; color: #f1f5f9; border: none; background: transparent;")
-        ar_l1.addWidget(lbl_a1)
-        l_d1.addWidget(app_row1)
-        layout.addWidget(card_d1)
+    def _show_windows(self, rows):
+        self._refreshing = False
+        self.refresh_button.setEnabled(True)
+        self.windows.clear()
+        if rows is None:
+            self.summary.setText("Open windows")
+            self.status.setText("Windows could not list this desktop. You can still use Task View.")
+            return
+        count = len(rows)
+        self.summary.setText(f"{count} open window{'s' if count != 1 else ''}")
+        self.status.setText("Double-click a window or press Enter to switch to it." if rows else "No app windows on this desktop.")
+        for hwnd, title in rows:
+            item = QListWidgetItem(title)
+            item.setData(Qt.ItemDataRole.UserRole, hwnd)
+            item.setToolTip(title)
+            self.windows.addItem(item)
 
-        # Desktop 2 Card (You're here)
-        card_d2 = CardFrame(self)
-        l_d2 = QVBoxLayout(card_d2)
-        l_d2.setContentsMargins(14, 12, 14, 12)
-        l_d2.setSpacing(8)
+    def _activate_window(self, item):
+        if not activate_desktop_window(item.data(Qt.ItemDataRole.UserRole)):
+            self.status.setText("Windows could not activate this window. Try Task View or refresh the list.")
 
-        d2_hdr = QHBoxLayout()
-        lbl_d2_title = QLabel("Desktop 2")
-        set_widget_style(lbl_d2_title, "font-size: 12px; font-weight: 700; color: #f8fafc; border: none; background: transparent;")
-        badge_active = QLabel("You're here")
-        set_widget_style(badge_active, f"background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-size: 9.5px; font-weight: 600; border-radius: 4px; padding: 2px 6px; border: none;")
-        d2_hdr.addWidget(lbl_d2_title)
-        d2_hdr.addWidget(badge_active)
-        d2_hdr.addStretch()
-        l_d2.addLayout(d2_hdr)
-
-        app_row2 = QWidget()
-        set_widget_style(app_row2, "background: rgba(255, 255, 255, 0.035); border-radius: 6px;")
-        ar_l2 = QHBoxLayout(app_row2)
-        ar_l2.setContentsMargins(10, 6, 10, 6)
-        lbl_a2 = QLabel("💻  Code Editor · Poppy Dynamic Notch")
-        set_widget_style(lbl_a2, "font-size: 11px; color: #f1f5f9; border: none; background: transparent;")
-        ar_l2.addWidget(lbl_a2)
-        l_d2.addWidget(app_row2)
-        layout.addWidget(card_d2)
-
-        layout.addStretch()
-
-    def _open_task_view(self):
-        # Synthesize Win + Tab
-        ctypes.windll.user32.keybd_event(0x5B, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x09, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x09, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x5B, 0, 2, 0)
-
-    def _create_new_desktop(self):
-        # Synthesize Win + Ctrl + D
-        ctypes.windll.user32.keybd_event(0x5B, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x44, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x44, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x5B, 0, 2, 0)
-
-    def _switch_desktop_left(self):
-        # Synthesize Win + Ctrl + Left
-        ctypes.windll.user32.keybd_event(0x5B, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x25, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x25, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x5B, 0, 2, 0)
+    def _desktop_shortcut(self, *keys):
+        user32 = ctypes.windll.user32
+        for key in keys:
+            user32.keybd_event(key, 0, 0, 0)
+        for key in reversed(keys):
+            user32.keybd_event(key, 0, 2, 0)
+        QTimer.singleShot(350, self, self.refresh_windows)
 
 
 # =====================================================================

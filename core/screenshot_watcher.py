@@ -1,12 +1,8 @@
-"""
-Poppy Screenshot & Clipboard Capture Watcher
-Directly inspired by NotchX ScreenCaptureService & ClipboardService.
-Listens for Windows Snipping Tool (Win+Shift+S), PrtScn, and Windows Screenshots directory.
-Zero-latency detection with hash debouncing, automatic staging, and chat format preparation.
-"""
+"""Stage screenshots from the clipboard and Windows Screenshots folders."""
 
 import os
 import hashlib
+import threading
 import uuid
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, QUrl, QMimeData, QFileSystemWatcher, QTimer, QSaveFile, QIODevice
@@ -18,6 +14,7 @@ from poppy.core.system_features import clipboard_allows_history
 
 class ScreenshotWatcher(QObject):
     screenshot_captured = Signal(str, QImage)  # file_path, qimage
+    _capture_saved = Signal(str, QImage, int)
 
     def __init__(self, shelf_dir: str = None, parent=None):
         super().__init__(parent)
@@ -27,9 +24,13 @@ class ScreenshotWatcher(QObject):
         self.enabled: bool = False
         self._started = False
         self.protected_paths = lambda: set()
-        self._last_image_hash: str | None = None
+        self._last_image_hash = None
         self._ignore_clipboard: bool = False
-        self._last_capture_time: float = 0.0
+        self._capture_lock = threading.Lock()
+        self._generation = 0
+        self._pending = {}
+        self._worker_running = False
+        self._capture_saved.connect(self._deliver_capture)
 
         # Debounce timer for clipboard changes (Windows apps sometimes write multi-pass)
         self._debounce_timer = QTimer(self)
@@ -60,6 +61,10 @@ class ScreenshotWatcher(QObject):
 
     def stop(self):
         self._debounce_timer.stop()
+        with self._capture_lock:
+            self._generation += 1
+            self._pending.clear()
+            self._last_image_hash = None
         if self._started:
             QApplication.clipboard().dataChanged.disconnect(self._on_clipboard_data_changed)
             self._started = False
@@ -106,55 +111,89 @@ class ScreenshotWatcher(QObject):
         cb = QApplication.clipboard()
         mime = cb.mimeData()
 
-        # Check if clipboard has image data
-        if not mime.hasImage():
+        if mime is None or not mime.hasImage():
             return
 
         try:
             img = cb.image()
-            if img.isNull() or img.width() < 16 or img.height() < 16:
-                return
-
-            # Compute pixel hash to avoid duplicate events
-            bits = img.bits()
-            img_hash = hashlib.md5(bytes(bits)).hexdigest()
-            if img_hash == self._last_image_hash:
-                return
-            file_path = self._save_image(img)
-            self._last_image_hash = img_hash
-            self.screenshot_captured.emit(file_path, img)
-            self._clean_shelf_cap()
+            if not img.isNull() and img.width() >= 16 and img.height() >= 16:
+                self._enqueue_capture("clipboard", img)
         except Exception as e:
             print(f"[Poppy ScreenshotWatcher] Error reading clipboard image: {e}")
 
     def _on_screenshots_dir_changed(self, dir_path: str):
         """Handle new files written directly to Pictures/Screenshots (e.g. Win+PrtScn)."""
-        if not self.enabled:
-            return
+        if self.enabled:
+            self._enqueue_capture(dir_path, datetime.now().timestamp())
+
+    def _enqueue_capture(self, source, value):
+        with self._capture_lock:
+            # Bursts replace pending work for the same clipboard or folder.
+            self._pending[source] = value
+            if not self._worker_running:
+                self._worker_running = True
+                threading.Thread(target=self._process_pending, daemon=True, name="poppy-captures").start()
+
+    def _process_pending(self):
+        while True:
+            with self._capture_lock:
+                if not self._pending:
+                    self._worker_running = False
+                    return
+                source = next(iter(self._pending))
+                value = self._pending.pop(source)
+                generation = self._generation
+            try:
+                image = value if source == "clipboard" else self._read_recent_capture(source, value)
+                if image.isNull():
+                    continue
+                digest = self._image_hash(image)
+                with self._capture_lock:
+                    if generation != self._generation or digest == self._last_image_hash:
+                        continue
+                path = self._save_image(image)
+                with self._capture_lock:
+                    current = generation == self._generation
+                    if current:
+                        self._last_image_hash = digest
+                if current:
+                    try:
+                        self._capture_saved.emit(path, image, generation)
+                        continue
+                    except RuntimeError:
+                        pass  # The watcher closed while the image was encoding.
+                self._discard_capture(path)
+            except (OSError, RuntimeError) as error:
+                print(f"[Poppy ScreenshotWatcher] Capture failed: {error}")
+
+    @staticmethod
+    def _read_recent_capture(folder, changed_at):
+        latest = None
+        with os.scandir(folder) as files:
+            for entry in files:
+                if entry.name.lower().endswith((".png", ".jpg", ".jpeg")) and entry.is_file():
+                    modified = entry.stat().st_mtime
+                    if changed_at - modified < 3.0 and (latest is None or modified > latest[0]):
+                        latest = modified, entry.path
+        return QImage(latest[1]) if latest else QImage()
+
+    @staticmethod
+    def _image_hash(image):
+        return image.width(), image.height(), image.format(), hashlib.md5(image.constBits()).digest()
+
+    @staticmethod
+    def _discard_capture(path):
         try:
-            if not os.path.exists(dir_path):
-                return
-            files = [
-                os.path.join(dir_path, f)
-                for f in os.listdir(dir_path)
-                if f.lower().endswith((".png", ".jpg", ".jpeg"))
-            ]
-            if not files:
-                return
-            latest_file = max(files, key=os.path.getmtime)
-            # Only trigger if modified within the last 3 seconds
-            if datetime.now().timestamp() - os.path.getmtime(latest_file) < 3.0:
-                img = QImage(latest_file)
-                if not img.isNull():
-                    bits = img.bits()
-                    img_hash = hashlib.md5(bytes(bits)).hexdigest()
-                    if img_hash != self._last_image_hash:
-                        file_path = self._save_image(img)
-                        self._last_image_hash = img_hash
-                        self.screenshot_captured.emit(file_path, img)
-                        self._clean_shelf_cap()
-        except Exception as e:
-            print(f"[Poppy ScreenshotWatcher] Dir watcher error: {e}")
+            os.remove(path)
+        except OSError:
+            pass
+
+    def _deliver_capture(self, path, image, generation):
+        if not self.enabled or generation != self._generation:
+            self._discard_capture(path)
+            return
+        self.screenshot_captured.emit(path, image)
+        self._clean_shelf_cap()
 
     def copy_image_for_chat(self, file_path: str) -> bool:
         """
@@ -172,7 +211,9 @@ class ScreenshotWatcher(QObject):
             img = QImage(file_path)
             if not img.isNull():
                 mime.setImageData(img)
-                self._last_image_hash = hashlib.md5(bytes(img.bits())).hexdigest()
+                digest = self._image_hash(img)
+                with self._capture_lock:
+                    self._last_image_hash = digest
             mime.setUrls([QUrl.fromLocalFile(file_path)])
             cb.setMimeData(mime)
 

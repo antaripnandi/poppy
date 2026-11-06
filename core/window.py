@@ -21,25 +21,26 @@ from PySide6.QtCore import (
     Qt, QRect, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer, QEvent, Signal
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor
+    QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
+    QShortcut, QKeySequence
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
-    QStackedWidget, QPushButton, QFrame, QGraphicsOpacityEffect, QMenu, QLayout, QSizePolicy
+    QStackedWidget, QPushButton, QFrame, QGraphicsOpacityEffect, QMenu, QLayout, QSizePolicy, QMessageBox, QDialog
 )
 
 from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, surface_colors, is_light_theme, resolve_light_mode, LAYOUT_THEMES, home_order
 from poppy.ui.components import (
     IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail,
-    AnimatedTabStrip, AnimatedStackedWidget, CardFrame
+    AnimatedTabStrip, AnimatedStackedWidget, CardFrame, ClickableSlider
 )
-from poppy.ui.icons import Icons
+from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.ui.views import (
     HomeTabView, MusicTabView, TimerTabView, ShelfTabView, NotesTabView
 )
 from poppy.ui.extended_views import (
     CalendarTabView, ClipboardTabView, DocsTabView,
-    DesktopsTabView, ScreenAnnotationOverlay
+    DesktopsTabView, ScreenAnnotationOverlay, LauncherTabView
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
@@ -53,7 +54,7 @@ from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
 from poppy.core.system_features import (
     PrivacyMonitor, ScreenCaptureShield, BluetoothManager,
-    ClipboardHistoryManager, AudioEndpointManager, clipboard_allows_history
+    ClipboardHistoryManager, AudioEndpointManager, AppLauncherIndexer, clipboard_allows_history
 )
 from poppy.core.weather_manager import WeatherManager
 from poppy.core.screentime_manager import ScreenTimeManager
@@ -92,8 +93,18 @@ def _get_gpu_utilization() -> int | None:
         return None
 
 
+class _NotchLayout(QVBoxLayout):
+    def hasHeightForWidth(self):
+        # The native window clips the drawer during animation. Its children
+        # keep their own sizing rules, but must not set the animation height.
+        return False
+
+
 class DynamicNotchWindow(QWidget):
+    PEEK_SIZE = (408, 125)
     message_requested = Signal(str, str)
+    quit_requested = Signal()
+    settings_applied = Signal()
 
     def __init__(self, config: dict = None):
         super().__init__()
@@ -145,6 +156,9 @@ class DynamicNotchWindow(QWidget):
 
         # Sizing and Themes
         self._load_appearance_config()
+        self._peek_timeline = (0.0, 0.0)
+        self._peek_bg = QColor("#242f4a")
+        self._compact_art_key = None
         self.setMinimumSize(1, 1)
         self.screentime = ScreenTimeManager(self.config, parent=self)
 
@@ -159,6 +173,7 @@ class DynamicNotchWindow(QWidget):
         # Registries
         self._floating_notes = []
         self._settings_window = None
+        self._command_palette = None
 
         # Smooth leave timer (350ms grace period)
         self._leave_timer = QTimer(self)
@@ -186,7 +201,7 @@ class DynamicNotchWindow(QWidget):
         # Periodic Timers
         self._sys_timer = QTimer(self)
         self._sys_timer.setInterval(2000)
-        self._sys_timer.timeout.connect(self._update_system_metrics)
+        self._sys_timer.timeout.connect(lambda: self._update_system_metrics(visible_only=True))
 
         self._clock_timer = QTimer(self)
         self._clock_timer.setInterval(1000)
@@ -194,6 +209,9 @@ class DynamicNotchWindow(QWidget):
 
         self._init_views()
         self._connect_signals()
+        self._commands_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Space"), self)
+        self._commands_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._commands_shortcut.activated.connect(self.open_commands)
         self.pomodoro._emit_update()
 
         # Start background workers
@@ -217,12 +235,12 @@ class DynamicNotchWindow(QWidget):
         self._appearance = app_cfg
         configure_theme(app_cfg)
         self._theme_name = app_cfg.get("theme", DEFAULT_THEME)
-        self._theme = get_theme(self._theme_name)
+        self._theme = get_theme(self._theme_name, app_cfg["layout"])
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
         self._collapsed_w = app_cfg.get("collapsed_width", 240)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = max(app_cfg.get("open_width", 960), 480)
-        self._open_h = max(app_cfg.get("open_height", 560), 360)
+        self._open_w = max(app_cfg["open_width"], 480)
+        self._open_h = max(app_cfg["open_height"], 360)
         self._corner_radius = app_cfg.get("corner_radius", 22)
         self._top_offset = app_cfg.get("top_offset", 0)
         self._display = app_cfg.get("display", "Primary")
@@ -234,7 +252,7 @@ class DynamicNotchWindow(QWidget):
         return QSize(self._target_size[0], self._target_size[1])
 
     def _init_views(self):
-        self.main_layout = QVBoxLayout(self)
+        self.main_layout = _NotchLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
         self.main_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
@@ -251,7 +269,7 @@ class DynamicNotchWindow(QWidget):
         v_coll_layout.setSpacing(0)
         v_coll_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Left Zone: Album Art thumbnail (20x20, rounded 5px)
+        # Left zone artwork scales with the configured pill dimensions.
         left_box = QWidget(self)
         l_layout = QHBoxLayout(left_box)
         l_layout.setContentsMargins(0, 0, 0, 0)
@@ -259,8 +277,7 @@ class DynamicNotchWindow(QWidget):
         l_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.coll_thumb = QLabel()
-        self.coll_thumb.setFixedSize(20, 20)
-        set_widget_style(self.coll_thumb, "background-color: rgba(255,255,255,0.08); border-radius: 5px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 10px; color: #94a3b8;")
+        self._size_collapsed_art()
         self.coll_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.coll_thumb.setText(Icons.MUSIC)
         l_layout.addWidget(self.coll_thumb)
@@ -320,83 +337,83 @@ class DynamicNotchWindow(QWidget):
         # 2. Peek View (Hover HUD: Spotify / YouTube Media HUD)
         # =====================================================================
         self.view_peek = QWidget(self)
-        self.view_peek.setFixedSize(420, 72)
-        v_peek_layout = QHBoxLayout(self.view_peek)
-        v_peek_layout.setContentsMargins(14, 12, 14, 12)
-        v_peek_layout.setSpacing(12)
-        v_peek_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        # Thumbnail
-        self.peek_thumb = QLabel()
-        self.peek_thumb.setFixedSize(44, 44)
-        set_widget_style(self.peek_thumb, "background-color: rgba(255,255,255,0.06); border-radius: 8px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 14px; color: #94a3b8;")
+        self.view_peek.setFixedSize(*self.PEEK_SIZE)
+        layout = QVBoxLayout(self.view_peek)
+        layout.setContentsMargins(22, 10, 22, 9)
+        layout.setSpacing(3)
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        self.peek_thumb = QLabel(Icons.MUSIC)
+        self.peek_thumb.setFixedSize(40, 40)
         self.peek_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.peek_thumb.setText(Icons.MUSIC)
         self.peek_thumb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.peek_thumb.setToolTip("Open Poppy")
-        v_peek_layout.addWidget(self.peek_thumb)
+        header.addWidget(self.peek_thumb)
 
-        # Metadata
-        meta_col = QVBoxLayout()
-        meta_col.setSpacing(3)
-        meta_col.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
+        metadata = QVBoxLayout()
+        metadata.setSpacing(1)
         self.lbl_peek_title = QLabel("Nothing playing")
-        self.lbl_peek_title.setTextFormat(Qt.TextFormat.PlainText)
-        self.lbl_peek_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.lbl_peek_title, "color: #edf1f0; font-size: 12px; font-weight: 600; background: transparent;")
-        self.btn_peek_cycle = QPushButton("")
-        self.btn_peek_cycle.setVisible(False)
-        self.btn_peek_cycle.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_peek_cycle, """
-            QPushButton {
-                background: transparent;
-                border: none;
-                border-radius: 4px;
-                color: #9ca8a5;
-                font-size: 11px;
-                padding: 0;
-            }
-            QPushButton:hover {
-                background: transparent;
-                color: #ffffff;
-            }
-        """)
-        self.btn_peek_cycle.clicked.connect(self.media_manager.next_session)
+        self.lbl_peek_artist = QLabel()
+        for label in (self.lbl_peek_title, self.lbl_peek_artist):
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        metadata.addWidget(self.lbl_peek_title)
+        details = QHBoxLayout()
+        details.setSpacing(6)
+        details.addWidget(self.lbl_peek_artist, 1)
+        self.btn_peek_cycle = QPushButton()
         self.btn_peek_cycle.setMaximumWidth(82)
         self.btn_peek_cycle.setAccessibleName("Switch media player")
-        meta_col.addWidget(self.lbl_peek_title)
-
-        self.lbl_peek_artist = QLabel("Play audio in a media app")
-        self.lbl_peek_artist.setTextFormat(Qt.TextFormat.PlainText)
-        self.lbl_peek_artist.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.lbl_peek_artist, "color: #9ca8a5; font-size: 11px; background: transparent;")
-        detail_row = QHBoxLayout()
-        detail_row.setSpacing(6)
-        detail_row.addWidget(self.lbl_peek_artist, 1)
-        detail_row.addWidget(self.btn_peek_cycle)
-        detail_row.addStretch(1)
-        meta_col.addLayout(detail_row)
-        v_peek_layout.addLayout(meta_col, stretch=1)
-
-        # Playback Controls
-        self.btn_peek_prev = IconButton(Icons.PREV, "Previous track", size=28, font_size=13, is_fluent=True)
-        self.btn_peek_prev.clicked.connect(self.media_manager.previous_track)
-        self.btn_peek_play = IconButton(Icons.PLAY, "Play", size=32, font_size=14, is_fluent=True)
-        set_widget_style(self.btn_peek_play, "QPushButton { background: #2b3032; color: #edf1f0; border: none; border-radius: 16px; padding: 0; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 14px; } QPushButton:hover { background: #3b4344; } QPushButton:pressed { background: #46514c; } QPushButton:focus { border: 1px solid #b5c9bd; } QPushButton:disabled { color: #59615d; }")
+        self.btn_peek_cycle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_peek_cycle.clicked.connect(self.media_manager.next_session)
+        self.btn_peek_cycle.hide()
+        details.addWidget(self.btn_peek_cycle)
+        metadata.addLayout(details)
+        header.addLayout(metadata, 1)
+        self.btn_peek_play = IconButton(Icons.PLAY, "Play", size=34, font_size=15, is_fluent=True)
         self.btn_peek_play.clicked.connect(self.media_manager.toggle_play_pause)
-        self.btn_peek_next = IconButton(Icons.NEXT, "Next track", size=28, font_size=13, is_fluent=True)
-        self.btn_peek_next.clicked.connect(self.media_manager.next_track)
+        header.addWidget(self.btn_peek_play)
+        layout.addLayout(header)
 
-        transport = QHBoxLayout()
-        transport.setSpacing(3)
+        self.peek_seek = ClickableSlider(Qt.Orientation.Horizontal)
+        self.peek_seek.setAccessibleName("Playback position")
+        self.peek_seek.setFixedHeight(12)
+        self.peek_seek.setEnabled(False)
+        self.peek_seek.seek_clicked.connect(self.media_manager.seek)
+        self.peek_seek.sliderReleased.connect(lambda: self.media_manager.seek(self.peek_seek.value()))
+        self.peek_seek.sliderMoved.connect(self._set_peek_elapsed)
+        layout.addWidget(self.peek_seek)
+        times = QHBoxLayout()
+        self.lbl_peek_elapsed, self.lbl_peek_duration = QLabel("--:--"), QLabel("--:--")
+        times.addWidget(self.lbl_peek_elapsed)
+        times.addStretch()
+        times.addWidget(self.lbl_peek_duration)
+        layout.addLayout(times)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(5)
+        self.btn_peek_prev = IconButton(Icons.PREV, "Previous track", size=25, font_size=13, is_fluent=True)
+        self.btn_peek_next = IconButton(Icons.NEXT, "Next track", size=25, font_size=13, is_fluent=True)
+        self.btn_peek_prev.clicked.connect(self.media_manager.previous_track)
+        self.btn_peek_next.clicked.connect(self.media_manager.next_track)
+        self.btn_peek_mute = IconButton(Icons.VOLUME, "Mute system audio", size=25, font_size=13, is_fluent=True)
+        self.btn_peek_mute.clicked.connect(self._on_mute_clicked)
+        self.peek_volume = ClickableSlider(Qt.Orientation.Horizontal)
+        self.peek_volume.setAccessibleName("System volume")
+        self.peek_volume.setRange(0, 100)
+        self.peek_volume.setFixedHeight(18)
+        self.peek_volume.valueChanged.connect(self._on_volume_slider_changed)
+        self.btn_peek_output = IconButton(Icons.SPEAKER, "Choose sound output", size=25, font_size=13, is_fluent=True)
+        self.btn_peek_output.clicked.connect(lambda: self._show_audio_device_dropdown(self.btn_peek_output))
         for button in (self.btn_peek_prev, self.btn_peek_play, self.btn_peek_next):
             button.setEnabled(False)
-            transport.addWidget(button)
-        v_peek_layout.addLayout(transport)
+        for control in (self.btn_peek_prev, self.btn_peek_next, self.btn_peek_mute, self.peek_volume, self.btn_peek_output):
+            controls.addWidget(control)
+        layout.addLayout(controls)
 
         self.main_layout.addWidget(self.view_peek)
-        self.view_peek.setVisible(False)
+        self.view_peek.hide()
+
         self._peek_opacity = QGraphicsOpacityEffect(self.view_peek)
         self.view_peek.setGraphicsEffect(self._peek_opacity)
         self._peek_opacity.setEnabled(False)
@@ -538,6 +555,7 @@ class DynamicNotchWindow(QWidget):
 
         # Header Bar: Tabs on the Left, Clock & Controls Capsule on the Right
         header_bar = QHBoxLayout()
+        self._expanded_header = header_bar
         header_bar.setSpacing(6)
         header_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -600,11 +618,9 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.btn_ctrl_next.clicked.connect(self.media_manager.next_track)
         self.tab_home.btn_clear_shelf.clicked.connect(self.drop_shelf.clear_shelf)
         self.tab_home.btn_home_shelf_chat.clicked.connect(self._copy_latest_shelf_for_chat)
-        self.tab_home.session_select_requested.connect(self.media_manager.select_session)
         self.tab_home.slider_vol.valueChanged.connect(self._on_volume_slider_changed)
         self.tab_home.btn_vol_mute.clicked.connect(self._on_mute_clicked)
         self.tab_home.slider_bright.valueChanged.connect(self._on_brightness_slider_changed)
-        self.tab_home.btn_bright_icon.clicked.connect(self._on_brightness_cycle_clicked)
         self.tab_home.caffeine_toggle_requested.connect(self._toggle_caffeine)
         self.tab_home.mic_mute_toggle_requested.connect(self._toggle_mic_mute)
         self.tab_home.focus_shield_requested.connect(self._toggle_focus_shield)
@@ -615,6 +631,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.player_menu_requested.connect(self._show_player_dropdown)
         self.tab_home.weather_refresh_requested.connect(self.weather_manager.refresh)
         self.weather_manager.weather_updated.connect(self._on_weather_updated)
+        self.bright_ctrl.brightness_changed.connect(self._on_brightness_read)
         self.tab_stack.addWidget(self.tab_home)
 
         # 1: Music Tab
@@ -630,7 +647,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_music.vol_slider.valueChanged.connect(self._on_volume_slider_changed)
         self.tab_music.btn_vol_music.clicked.connect(self._on_mute_clicked)
         self.tab_music.seek_requested.connect(self.media_manager.seek)
-        self.tab_music.sound_settings_requested.connect(lambda: os.startfile("ms-settings:sound"))
+        self.tab_music.sound_settings_requested.connect(lambda: self._show_audio_device_dropdown(self.tab_music.btn_output))
         self.tab_music.layout_changed.connect(self._resize_expanded_panel)
         self.tab_music.btn_lyrics.toggled.connect(self._on_lyrics_visibility_changed)
         self.tab_stack.addWidget(self.tab_music)
@@ -676,6 +693,11 @@ class DynamicNotchWindow(QWidget):
         tools = QHBoxLayout()
         tools.setContentsMargins(6, 0, 6, 0)
         tools.setSpacing(6)
+        commands = QPushButton("Commands")
+        commands.setToolTip("Search tabs, actions, and installed apps (Ctrl+Shift+Space)")
+        set_widget_style(commands, "QPushButton { background: transparent; border: none; color: #a7adab; padding: 4px 7px; } QPushButton:hover { color: #edf1f0; } QPushButton:focus { border: 1px solid #a7adab; }")
+        commands.clicked.connect(self.open_commands)
+        tools.addWidget(commands)
         tools.addStretch()
         for name, _, _, _ in window_tools:
             tools.addWidget(getattr(self, name))
@@ -689,6 +711,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.slider_bright.set_accent(self._theme["accent"])
         self._apply_layout_theme(self._appearance.get("layout", "Classic"))
         refresh_theme()
+        self._refresh_peek_surface()
 
     def _refresh_tab_names(self):
         enabled = self.config.get("tabs", {}).get("enabled", list(self._tab_name_to_stack_idx))
@@ -732,7 +755,9 @@ class DynamicNotchWindow(QWidget):
         detached = self.tab_music.window() is not self
         showing = self.tab_music.isVisible() and self.tab_music.btn_lyrics.isChecked()
         if showing and (visible or detached) and title not in ("", "No Media Playing", "Unknown Title"):
-            self.lyrics_manager.request_lyrics(title, data.get("artist", ""), data.get("album", ""))
+            track = (title, data.get("artist", ""), data.get("album", ""), data.get("duration_sec", 0))
+            self.tab_music.set_lyrics_loading(*track)
+            self.lyrics_manager.request_lyrics(*track)
         else:
             self.lyrics_manager.cancel_request()
 
@@ -745,7 +770,7 @@ class DynamicNotchWindow(QWidget):
         self.media_manager.media_changed.connect(self._on_media_changed)
         self.media_manager.playback_changed.connect(self._on_playback_changed)
         self.media_manager.sessions_updated.connect(self._on_sessions_updated)
-        self.media_manager.timeline_changed.connect(self.tab_music.update_timeline)
+        self.media_manager.timeline_changed.connect(self._on_media_timeline)
 
         # Lyrics
         self.lyrics_manager.lyrics_loaded.connect(self.tab_music.set_lyrics)
@@ -773,15 +798,26 @@ class DynamicNotchWindow(QWidget):
         self.screentime.break_reminder_triggered.connect(self._on_screentime_break_reminder)
         self.screentime.daily_goal_reached.connect(self._on_screentime_goal_reached)
         self.tab_home.screentime_clicked.connect(lambda: self.open_settings("Screen Time"))
+        self.tab_home.customize_requested.connect(lambda: self.open_settings("Appearance"))
+        self._apply_home_sections()
+
+    def _apply_home_sections(self):
+        hidden = self.config.get("appearance", {}).get("hidden_home_sections", [])
+        hidden = [key for key in hidden if isinstance(key, str)] if isinstance(hidden, list) else []
+        st_cfg = self.config.get("screentime", {})
+        show_screen_time = st_cfg.get("enabled", True) and st_cfg.get("show_in_main_menu", True)
+        if show_screen_time:
+            self.tab_home.screentime_widget.update_stats(
+                self.screentime.get_today_seconds(), self.screentime.get_top_apps(5),
+                st_cfg.get("track_apps", True),
+            )
+        self.tab_home.set_sections(hidden, show_screen_time)
 
     def _on_screentime_stats_updated(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str):
         st_cfg = self.config.get("screentime", {})
-        show_pill = st_cfg.get("enabled", True) and st_cfg.get("show_in_main_menu", True)
-        if hasattr(self.tab_home, "screentime_widget"):
-            self.tab_home.screentime_widget.setVisible(show_pill)
-            self.tab_home.screentime_widget.update_stats(
-                total_sec, streak_sec, top_apps, active_app, self.screentime.get_goal_hours()
-            )
+        panel = self.tab_home.screentime_widget
+        if not panel.isHidden() and panel.update_stats(total_sec, top_apps, st_cfg.get("track_apps", True)):
+            self._resize_expanded_panel()
         if self._settings_window and self._settings_window.isVisible():
             self._settings_window.update_screentime_display(
                 total_sec, streak_sec, top_apps, active_app, self.screentime.get_goal_hours()
@@ -793,11 +829,20 @@ class DynamicNotchWindow(QWidget):
     def _on_screentime_goal_reached(self, goal_hours: float):
         self.trigger_island("Screen time limit reached", f"You've reached your {goal_hours:g}-hour daily limit.")
 
+    def _alerts_allowed(self):
+        preferences = self.config.get("notifications", {})
+        quiet = preferences.get("mute_in_focus", True) and self.pomodoro.is_running and self.pomodoro.state.value == "focus"
+        return preferences.get("enabled", True) and not quiet
+
+    def _present_island(self, duration=4500):
+        if self.config.get("notifications", {}).get("sound", True):
+            QApplication.beep()
+        self._transition_to(NotchState.ISLAND)
+        self._island_timer.start(duration)
+
     def trigger_island(self, title: str, text: str):
         preferences = self.config.get("notifications", {})
-        if not preferences.get("enabled", True):
-            return
-        if preferences.get("mute_in_focus", True) and self.pomodoro.is_running and self.pomodoro.state.value == "focus":
+        if not self._alerts_allowed():
             return
         if not preferences.get("preview_text", True):
             text = "Open Poppy for details."
@@ -809,8 +854,7 @@ class DynamicNotchWindow(QWidget):
         self.lbl_isl_sub.setToolTip(text)
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.hide()
-        self._transition_to(NotchState.ISLAND)
-        self._island_timer.start()
+        self._present_island()
 
     def _update_clock(self):
         now = datetime.now()
@@ -822,9 +866,12 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.lbl_big_time.setText(time_12)
         self.tab_home.lbl_date.setText(date_str)
 
-    def _update_system_metrics(self):
+    def _update_system_metrics(self, *, visible_only=False):
         if self._appearance.get("mode") == "System" and is_light_theme() != resolve_light_mode("System"):
             self._apply_live_appearance(self._appearance)
+        self._sync_system_controls()
+        if visible_only and not self.tab_home.card_clock.isVisible():
+            return
         try:
             cpu = int(psutil.cpu_percent())
             ram = int(psutil.virtual_memory().percent)
@@ -852,26 +899,22 @@ class DynamicNotchWindow(QWidget):
         except Exception:
             pass
 
-        # Periodic background sync for hardware sliders if user is not actively dragging
-        self._sync_system_controls()
-
     def _sync_system_controls(self, force: bool = False):
         """Synchronizes UI volume and brightness sliders with actual Windows hardware levels."""
         home_visible = self.tab_home.isVisible()
-        if not force and not (home_visible or self.tab_music.isVisible()):
+        if not force and not (home_visible or self.tab_music.isVisible() or self.view_peek.isVisible()):
             return
         try:
             # Volume sync
-            if force or (not self.tab_home.slider_vol.isSliderDown() and not self.tab_music.vol_slider.isSliderDown()):
+            if not any(slider.isSliderDown() for slider in
+                       (self.tab_home.slider_vol, self.tab_music.vol_slider, self.peek_volume)):
                 vol = self.audio_ctrl.get_volume()
                 muted = self.audio_ctrl.get_mute()
-                self.tab_home.set_volume_display(vol, muted)
-                self.tab_music.set_volume_display(vol, muted)
+                self._show_volume(vol, muted)
 
             # Brightness sync
             if (force or home_visible) and not self.tab_home.slider_bright.isSliderDown():
-                bright = self.bright_ctrl.get_brightness()
-                self.tab_home.set_brightness_display(bright)
+                self.bright_ctrl.request_brightness()
 
             # Mic mute sync
             if force or home_visible:
@@ -886,22 +929,35 @@ class DynamicNotchWindow(QWidget):
         if muted and value > 0:
             self.audio_ctrl.set_mute(False)
             muted = False
-        self.tab_home.set_volume_display(value, muted)
-        self.tab_music.set_volume_display(value, muted)
+        self._show_volume(value, muted)
 
     def _on_mute_clicked(self):
         new_muted = self.audio_ctrl.toggle_mute()
         vol = self.audio_ctrl.get_volume()
-        self.tab_home.set_volume_display(vol, new_muted)
-        self.tab_music.set_volume_display(vol, new_muted)
+        self._show_volume(vol, new_muted)
+
+    def _show_volume(self, volume, muted):
+        self.tab_home.set_volume_display(volume, muted)
+        self.tab_music.set_volume_display(volume, muted)
+        if not self.peek_volume.isSliderDown():
+            self.peek_volume.blockSignals(True)
+            self.peek_volume.setValue(volume)
+            self.peek_volume.blockSignals(False)
+        self.btn_peek_mute.setText(Icons.MUTE if muted else Icons.VOLUME)
+        label = "Unmute system audio" if muted else "Mute system audio"
+        self.btn_peek_mute.setToolTip(label)
+        self.btn_peek_mute.setAccessibleName(label)
 
     def _on_brightness_slider_changed(self, value: int):
         self.bright_ctrl.set_brightness(value)
         self.tab_home.set_brightness_display(value)
 
-    def _on_brightness_cycle_clicked(self):
-        next_val = self.bright_ctrl.cycle_brightness()
-        self.tab_home.set_brightness_display(next_val)
+    def _on_brightness_read(self, value):
+        slider = self.tab_home.slider_bright
+        slider.setEnabled(value is not None)
+        slider.setToolTip("Brightness" if value is not None else "Brightness control is unavailable on this display.")
+        if value is not None and not slider.isSliderDown():
+            self.tab_home.set_brightness_display(value)
 
     def _on_weather_updated(self, data: dict):
         self.tab_home.update_weather(data)
@@ -931,7 +987,7 @@ class DynamicNotchWindow(QWidget):
                 font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
                 font-size: 11px;
             """
-        set_widget_style(self.tab_home.btn_act_caffeine, style)
+        self.tab_home.btn_act_caffeine.setChecked(is_on)
         self.tab_home.btn_act_caffeine.setToolTip(tip)
         if hasattr(self, 'btn_hdr_caffeine') and self.btn_hdr_caffeine:
             set_widget_style(self.btn_hdr_caffeine, style)
@@ -942,52 +998,15 @@ class DynamicNotchWindow(QWidget):
         self._update_mic_button_ui(new_state)
 
     def _update_mic_button_ui(self, is_muted: bool):
-        if is_muted:
-            self.tab_home.btn_act_mic.setText(Icons.MIC_MUTE)
-            self.tab_home.btn_act_mic.setToolTip("Microphone: MUTED (Click to Unmute)")
-            set_widget_style(self.tab_home.btn_act_mic, """
-                background: rgba(239, 68, 68, 0.22);
-                border: none;
-                border-radius: 6px;
-                color: #f87171;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-        else:
-            self.tab_home.btn_act_mic.setText(Icons.MIC)
-            self.tab_home.btn_act_mic.setToolTip("Microphone: LIVE (Click to Mute)")
-            set_widget_style(self.tab_home.btn_act_mic, """
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #94a3b8;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
+        button = self.tab_home.btn_act_mic
+        button.setChecked(is_muted)
+        button.setToolTip("Microphone muted. Click to unmute." if is_muted else "Mute microphone")
 
     def _toggle_focus_shield(self):
         if self.pomodoro.is_running:
             self.pomodoro.pause()
-            set_widget_style(self.tab_home.btn_act_shield, """
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #94a3b8;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-            self.tab_home.btn_act_shield.setToolTip("Focus Shield: OFF (Click to Start Focus Sprint)")
         else:
             self.pomodoro.start()
-            set_widget_style(self.tab_home.btn_act_shield, f"""
-                background: rgba(99, 102, 241, 0.25);
-                border: none;
-                border-radius: 6px;
-                color: #a5b4fc;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-            self.tab_home.btn_act_shield.setToolTip("Focus Shield: ACTIVE (Focus Sprint in progress)")
             QTimer.singleShot(300, self._collapse_to_pill)
 
     def _trigger_screen_snip(self):
@@ -1012,6 +1031,46 @@ class DynamicNotchWindow(QWidget):
         self._switch_to_tab_by_name("Home")
         self.tab_home.input_calc.setFocus()
         self.tab_home.input_calc.selectAll()
+
+    def open_commands(self):
+        if self._command_palette is not None:
+            self._command_palette.raise_()
+            self._command_palette.activateWindow()
+            return
+        dialog = QDialog(self, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.setWindowTitle("Poppy commands")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.resize(480, 360)
+        actions = [
+            ("Settings", self.open_settings), ("Start or pause focus timer", self.pomodoro.toggle),
+            ("New floating note", lambda: self._tear_off_sticky_note("")),
+            ("Open calculator", self._trigger_quick_search),
+            ("Take a screen snip", self._trigger_screen_snip),
+            ("Pick a screen color", self._trigger_color_eyedropper),
+            ("Toggle keep awake", self._toggle_caffeine),
+            ("Windows sound settings", lambda: os.startfile("ms-settings:sound")),
+            ("Windows Bluetooth settings", lambda: os.startfile("ms-settings:bluetooth")),
+        ]
+        for name in self._active_tab_names:
+            actions.append((f"Open {name}", lambda tab=name: self._transition_to(NotchState.EXPANDED, target_tab=tab)))
+        view = LauncherTabView(AppLauncherIndexer, commands=actions)
+        QVBoxLayout(dialog).addWidget(view)
+        view.launched.connect(dialog.accept)
+        dialog.finished.connect(lambda _: setattr(self, "_command_palette", None))
+        self._command_palette = dialog
+        dialog.show()
+        dialog.activateWindow()
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        menu.addAction("Open commands", self.open_commands)
+        menu.addAction("Settings", self.open_settings)
+        menu.addSeparator()
+        menu.addAction("Exit Poppy", self.quit_requested.emit)
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            menu.deleteLater()
 
     def _lock_workstation(self):
         lock_workstation()
@@ -1041,9 +1100,10 @@ class DynamicNotchWindow(QWidget):
         for s in sessions:
             idx = s["index"]
             name = s["display_name"]
-            prefix = "✓  " if idx == active_idx else "    "
-            action = menu.addAction(f"{prefix}{name}")
-            action.triggered.connect(lambda checked=False, i=idx, n=name: self._on_player_session_selected(i, n))
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(idx == active_idx)
+            action.triggered.connect(lambda checked=False, i=idx: self.media_manager.select_session(i))
 
         if not sessions:
             act = menu.addAction("No active media sessions")
@@ -1051,13 +1111,12 @@ class DynamicNotchWindow(QWidget):
 
         btn = self.tab_home.btn_player_drop
         pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
-        menu.exec(pos)
+        try:
+            menu.exec(pos)
+        finally:
+            menu.deleteLater()
 
-    def _on_player_session_selected(self, idx: int, name: str):
-        self.media_manager.select_session(idx)
-        self.tab_home.btn_player_drop.setText(f"{name} ▾")
-
-    def _show_audio_device_dropdown(self):
+    def _show_audio_device_dropdown(self, anchor=None):
         endpoints = AudioEndpointManager.get_output_endpoints()
         menu = QMenu(self)
         set_widget_style(menu, """
@@ -1086,7 +1145,10 @@ class DynamicNotchWindow(QWidget):
         for ep in endpoints:
             name = ep["name"]
             action = menu.addAction(name)
-            action.setEnabled(False)
+            action.setEnabled(bool(ep.get("id")))
+            action.setCheckable(True)
+            action.setChecked(ep.get("default", False))
+            action.triggered.connect(lambda checked=False, device=ep: self._on_audio_endpoint_selected(device))
 
         if not endpoints:
             act = menu.addAction("No active audio endpoints")
@@ -1096,15 +1158,22 @@ class DynamicNotchWindow(QWidget):
         act_settings = menu.addAction("Sound Settings...")
         act_settings.triggered.connect(lambda: os.startfile("ms-settings:sound"))
 
-        btn = self.tab_home.btn_audio_drop
+        btn = anchor or self.tab_home.btn_audio_drop
         pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
-        menu.exec(pos)
-
-    def _on_audio_endpoint_selected(self, name: str):
         try:
-            os.startfile("ms-settings:sound")
-        except Exception:
-            pass
+            menu.exec(pos)
+        finally:
+            menu.deleteLater()
+
+    def _on_audio_endpoint_selected(self, device: dict):
+        try:
+            AudioEndpointManager.set_default_output(device["id"])
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Could not switch sound output", f"{error}\nChoose an output in Windows Sound Settings.")
+            return
+        self.tab_home.btn_audio_drop.setToolTip(f"Sound output: {device['name']}")
+        self.tab_music.btn_output.setToolTip(f"Sound output: {device['name']}")
+        self._sync_system_controls(force=True)
 
     def _show_bluetooth_dropdown(self):
         menu = QMenu(self)
@@ -1340,6 +1409,7 @@ class DynamicNotchWindow(QWidget):
             )
 
     def _on_pomo_state_changed(self, state, label):
+        self.tab_home.btn_act_shield.setChecked(self.pomodoro.is_running)
         self.tab_timer.lbl_phase.setText(label)
         phase = getattr(state, "value", str(state))
         self.tab_timer.btn_phase_long.setChecked(phase == "long_break")
@@ -1357,12 +1427,11 @@ class DynamicNotchWindow(QWidget):
         unchanged = self._current_media and all(self._current_media.get(field) == data.get(field) for field in fields)
         self._current_media = dict(data)
         if unchanged:
-            self.tab_music.update_timeline(data.get("position_sec", 0), data.get("duration_sec", 0), data.get("is_playing", False))
+            self._on_media_timeline(data.get("position_sec", 0), data.get("duration_sec", 0), data.get("is_playing", False))
             self._on_playback_changed(data.get("is_playing", False))
             return
         title = data.get("title", "No Media Playing")
         artist = data.get("artist", "")
-        source = data.get("display_name") or data.get("source_app", "")
         is_playing = data.get("is_playing", False)
 
         # Fit metadata to actual pixels, leaving transport controls a stable width.
@@ -1382,48 +1451,37 @@ class DynamicNotchWindow(QWidget):
 
         # Home keeps full metadata for tooltips and elides it to the card width.
         self.tab_home.update_track_info(title, artist)
-        if hasattr(self.tab_home, "lbl_music_source"):
-            self.tab_home.lbl_music_source.setText(source.upper() if source else "")
-        if hasattr(self.tab_home, "btn_player_drop") and source:
-            self.tab_home.btn_player_drop.setText(f"{source} ▾")
 
         # Music Tab update
         self.tab_music.update_media(data)
+        self._peek_timeline = (data.get("position_sec", 0), data.get("duration_sec", 0))
+        if self.state == NotchState.PEEK:
+            self._show_peek_timeline()
 
         # Synchronized & Plain Lyrics (LRCLIB asynchronous fetch)
         if title and title not in ("No Media Playing", "Unknown Title", ""):
-            self.tab_music.set_lyrics_loading(title, artist)
+            self.tab_music.set_lyrics_loading(title, artist, data.get("album", ""), data.get("duration_sec", 0))
             self._on_lyrics_visibility_changed(self.tab_music.btn_lyrics.isChecked())
         else:
             self.lyrics_manager.cancel_request()
             self.tab_music.set_lyrics_not_found(title)
 
-        # Thumbnails
-        thumb_bytes = data.get("thumbnail_bytes")
-        if thumb_bytes:
-            pix = self.tab_music._artwork_pixmap
-            if not pix.isNull():
-                scaled_peek = self.tab_music._rounded_art(pix, 44, 7)
-                self.peek_thumb.setPixmap(scaled_peek)
-                self.tab_home.lbl_music_art.setPixmap(self.tab_music._rounded_art(pix, 48, min(8, self.tab_music._art_radius())))
-                scaled_coll = pix.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                self.coll_thumb.setPixmap(scaled_coll)
-                self.coll_thumb.setText("")
-            else:
-                self.peek_thumb.setText(Icons.MUSIC)
-                self.tab_home.lbl_music_art.setText(Icons.MUSIC)
-                self.coll_thumb.setText(Icons.MUSIC)
-        else:
+        artwork = self.tab_music._artwork_pixmap
+        if artwork.isNull():
             self.peek_thumb.setText(Icons.MUSIC)
             self.tab_home.lbl_music_art.setText(Icons.MUSIC)
-            self.coll_thumb.setText(Icons.MUSIC)
+        else:
+            self.peek_thumb.setPixmap(self.tab_music._rounded_art(artwork, self.peek_thumb.width(), 9))
+            self.tab_home.lbl_music_art.setPixmap(self.tab_music._rounded_art(
+                artwork, self.tab_home.lbl_music_art.width(), min(6, self.tab_music._art_radius())))
+        self._refresh_collapsed_art()
+        self._refresh_peek_surface()
 
         if is_playing and not self.pomodoro.is_running:
             self.discord_rpc.update_media(title, artist, data.get("album", ""), is_playing)
 
     def _on_playback_changed(self, is_playing: bool):
         self.coll_visualizer.set_playing(is_playing)
-        self.tab_home.music_bars.set_playing(is_playing)
         self.tab_music.bars.set_playing(is_playing)
         if hasattr(self.tab_music, "set_playback_state"):
             self.tab_music.set_playback_state(is_playing)
@@ -1431,7 +1489,8 @@ class DynamicNotchWindow(QWidget):
         play_symbol = Icons.PAUSE if is_playing else Icons.PLAY
         self._set_peek_playing(is_playing)
         self.tab_home.btn_ctrl_play.setText(play_symbol)
-        self.tab_music.btn_play.setText(play_symbol)
+        self.tab_home.btn_ctrl_play.setAccessibleName("Pause" if is_playing else "Play")
+        self.tab_home.btn_ctrl_play.setToolTip("Pause" if is_playing else "Play")
 
     def _set_peek_playing(self, playing):
         self.btn_peek_play.setText(Icons.PAUSE if playing else Icons.PLAY)
@@ -1439,15 +1498,117 @@ class DynamicNotchWindow(QWidget):
         self.btn_peek_play.setAccessibleName(label)
         self.btn_peek_play.setToolTip(label)
 
+    def _size_collapsed_art(self):
+        size = max(12, min(round(self._collapsed_h * 0.70), round(self._collapsed_w * 0.11)))
+        radius = max(3, round(size * 0.24))
+        self.coll_thumb.setFixedSize(size, size)
+        self.coll_thumb.setStyleSheet(f"background: rgba(128,128,128,0.16); border-radius: {radius}px; color: #9ca8b7; font-family: '{get_fluent_font_family()}'; font-size: {max(9, size // 2)}px;")
+
+    def _refresh_collapsed_art(self):
+        artwork = self.tab_music._artwork_pixmap
+        size = self.coll_thumb.width()
+        key = (artwork.cacheKey(), size)
+        if key == self._compact_art_key:
+            return
+        self._compact_art_key = key
+        if artwork.isNull():
+            self.coll_thumb.setText(Icons.MUSIC)
+        else:
+            self.coll_thumb.setPixmap(self.tab_music._rounded_art(artwork, size, max(3, round(size * 0.24))))
+
+    def _on_media_timeline(self, position, duration, playing):
+        self.tab_music.update_timeline(position, duration, playing)
+        self._peek_timeline = (position, duration)
+        if self.state == NotchState.PEEK:
+            self._show_peek_timeline()
+
+    def _show_peek_timeline(self):
+        if self.peek_seek.isSliderDown():
+            return
+        position, duration = self._peek_timeline
+        self.peek_seek.setEnabled(bool(duration > 0 and self._current_media.get("can_seek")))
+        self.peek_seek.setRange(0, max(1, round(duration)))
+        self.peek_seek.setValue(round(position) if duration > 0 else 0)
+        self._set_peek_elapsed(position if duration > 0 else None)
+        self.lbl_peek_duration.setText(self.tab_music._format_time(duration) if duration > 0 else "--:--")
+
+    def _set_peek_elapsed(self, position):
+        self.lbl_peek_elapsed.setText(self.tab_music._format_time(position) if position is not None else "--:--")
+
+    def _refresh_peek_surface(self):
+        source = self._appearance["peek_color_source"]
+        theme_color = QColor(surface_colors()["root"] if is_light_theme() else self._theme["bg"])
+        if source == "fixed":
+            color = QColor(self._appearance["peek_color"])
+        elif source == "artwork" and not self.tab_music._artwork_pixmap.isNull():
+            hue, saturation, _, _ = self.tab_music._artwork_surface.getHsl()
+            color = QColor.fromHsl(max(0, hue), min(78, saturation), 215 if is_light_theme() else 43)
+        else:
+            color = theme_color
+        if color == getattr(self, "_styled_peek_bg", None):
+            return
+        self._styled_peek_bg = self._peek_bg = color
+
+        def linear(channel):
+            return channel / 12.92 if channel < 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+        luminance = sum(weight * linear(channel) for weight, channel in zip(
+            (0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
+        dark_ink = luminance >= 0.179
+        ink, inverse = ("#111315", "#ffffff") if dark_ink else ("#ffffff", "#111315")
+        rgb = "0,0,0" if dark_ink else "255,255,255"
+        muted = f"rgba({rgb},0.78)"
+        self.lbl_peek_title.setStyleSheet(f"color: {ink}; font-size: 13px; font-weight: 600;")
+        for label in (self.lbl_peek_artist, self.lbl_peek_elapsed, self.lbl_peek_duration):
+            label.setStyleSheet(f"color: {muted}; font-size: 10px;")
+        font = get_fluent_font_family()
+        self.peek_thumb.setStyleSheet(
+            f"color: {ink}; background: rgba({rgb},0.10); border-radius: 9px; "
+            f"font-family: '{font}'; font-size: 15px;")
+        self.btn_peek_cycle.setStyleSheet(f"""
+            QPushButton {{ color: {muted}; background: transparent; border: none; padding: 1px 0; font-size: 10px; }}
+            QPushButton:hover, QPushButton:focus {{ color: {ink}; text-decoration: underline; }}
+        """)
+        for button in (self.btn_peek_prev, self.btn_peek_next, self.btn_peek_mute, self.btn_peek_output, self.btn_peek_play):
+            primary = button is self.btn_peek_play
+            button.setProperty("poppyStyleSource", None)
+            button.setStyleSheet(f"""
+                QPushButton {{
+                    background: {ink if primary else 'transparent'};
+                    color: {inverse if primary else ink};
+                    border: 1px solid transparent;
+                    border-radius: {17 if primary else 7}px;
+                    padding: 0;
+                    font-family: '{font}';
+                    font-size: {15 if primary else 13}px;
+                }}
+                QPushButton:hover {{ border-color: {muted}; }}
+                QPushButton:focus {{ border-color: {inverse if primary else ink}; }}
+                QPushButton:disabled {{ color: {muted}; }}
+            """)
+        for slider in (self.peek_seek, self.peek_volume):
+            handle = 7 if slider is self.peek_seek else 10
+            slider.setStyleSheet(f"""
+                QSlider::groove:horizontal {{ height: 3px; background: rgba({rgb},0.25); border-radius: 1px; }}
+                QSlider::sub-page:horizontal {{ background: {muted}; border-radius: 1px; }}
+                QSlider::handle:horizontal {{
+                    background: {ink};
+                    width: {handle}px;
+                    margin: -{handle // 2 - 1}px 0;
+                    border-radius: {handle // 2}px;
+                }}
+                QSlider::handle:horizontal:disabled {{ background: transparent; }}
+                QSlider:focus {{ border: 1px solid {muted}; }}
+            """)
+        if self.state == NotchState.PEEK:
+            self.update()
+
     def _elide_peek_metadata(self):
         data = self._current_media
         title = data.get("title", "")
         available = title not in ("No Media Playing", "Unknown Title", "")
         artist = data.get("artist", "") if available else "Play audio in a media app"
-        source_width = min(self.btn_peek_cycle.maximumWidth(), self.btn_peek_cycle.sizeHint().width()) + 6 if not self.btn_peek_cycle.isHidden() else 0
-        artist_width = min(self.lbl_peek_artist.fontMetrics().horizontalAdvance(artist) + 1,
-                           max(1, self.lbl_peek_title.width() - source_width))
-        self.lbl_peek_artist.setFixedWidth(artist_width)
+        if available and self.btn_peek_cycle.isHidden() and data.get("display_name"):
+            artist = " · ".join(filter(None, (artist, data["display_name"])))
         for label, text in ((self.lbl_peek_title, title if available else "Nothing playing"),
                             (self.lbl_peek_artist, artist)):
             label.setText(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(1, label.width())))
@@ -1459,13 +1620,15 @@ class DynamicNotchWindow(QWidget):
             return
         self._session_ui_signature = signature
         accent = self._theme["accent"]
-        self.tab_home.update_sessions_list(sessions_list, active_index, accent=accent)
+        self.tab_home.update_sessions_list(sessions_list, active_index)
         self.tab_music.update_sessions_list(sessions_list, active_index, accent=accent)
 
         # In Peek mode, if multiple sessions exist, show source switch pill
         if len(sessions_list) > 1 and active_index < len(sessions_list):
             curr_name = sessions_list[active_index]["display_name"]
-            self.btn_peek_cycle.setText(self.btn_peek_cycle.fontMetrics().elidedText(f"· {curr_name}", Qt.TextElideMode.ElideRight, 82))
+            metrics = self.btn_peek_cycle.fontMetrics()
+            source = metrics.elidedText(curr_name, Qt.TextElideMode.ElideRight, 82 - metrics.horizontalAdvance(" ▾"))
+            self.btn_peek_cycle.setText(f"{source} ▾")
             self.btn_peek_cycle.setVisible(True)
             self.btn_peek_cycle.setToolTip(f"Player {active_index + 1} of {len(sessions_list)}. Click to switch media player.")
         else:
@@ -1478,7 +1641,12 @@ class DynamicNotchWindow(QWidget):
     def _on_screenshot_captured(self, file_path: str, qimage: QImage):
         self._last_screenshot_path = file_path
         self.drop_shelf.add_paths([file_path])
-        self.tab_home.update_shelf_display(self.drop_shelf.staged_items)
+        if not self._alerts_allowed():
+            return
+        preferences = self.config.get("notifications", {})
+        if self.state == NotchState.EXPANDED or not preferences.get("show_island_on_notify", True) or not preferences.get("preview_text", True):
+            self.trigger_island("Screenshot staged", "Ready in Shelf.")
+            return
 
         # Setup Island view
         self.lbl_isl_title.setText("Screenshot staged")
@@ -1509,9 +1677,7 @@ class DynamicNotchWindow(QWidget):
         self._thumb_anim.start()
 
         # If drawer is not already expanded, expand to Island
-        if self.state != NotchState.EXPANDED:
-            self._transition_to(NotchState.ISLAND)
-            self._island_timer.start(4500)
+        self._present_island()
 
     def _copy_island_for_chat(self):
         if self._last_screenshot_path:
@@ -1688,9 +1854,15 @@ class DynamicNotchWindow(QWidget):
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
         self.tab_home.apply_layout(name, home_order(name, self._appearance.get("home_orders")))
         self.tab_music.apply_layout(name)
+        self.tab_docs.apply_layout(name)
+        expanded = self.view_expanded.layout()
+        index = 2 if name == "Daily" else 0
+        if expanded.itemAt(index) is not self._expanded_header:
+            expanded.removeItem(self._expanded_header)
+            expanded.insertLayout(index, self._expanded_header)
         if not self.tab_music._artwork_pixmap.isNull():
             self.tab_home.lbl_music_art.setPixmap(self.tab_music._rounded_art(
-                self.tab_music._artwork_pixmap, 48, min(8, self.tab_music._art_radius())))
+                self.tab_music._artwork_pixmap, self.tab_home.lbl_music_art.width(), min(6, self.tab_music._art_radius())))
         self.tab_strip.apply_design()
         for index in range(self.tab_stack.count()):
             stacked = self.tab_stack.widget(index)
@@ -1719,26 +1891,27 @@ class DynamicNotchWindow(QWidget):
             return
         self._appearance = app_cfg
         self._theme_name = app_cfg.get("theme", DEFAULT_THEME)
-        self._theme = get_theme(self._theme_name)
+        self._theme = get_theme(self._theme_name, app_cfg["layout"])
         self._style = app_cfg.get("style", "Notch")
         self._collapsed_w = app_cfg.get("collapsed_width", 240)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = max(app_cfg.get("open_width", 960), 480)
-        self._open_h = max(app_cfg.get("open_height", 560), 360)
+        self._open_w = max(app_cfg["open_width"], 480)
+        self._open_h = max(app_cfg["open_height"], 360)
         self._corner_radius = app_cfg.get("corner_radius", 22)
         self._top_offset = app_cfg.get("top_offset", 0)
         self._display = app_cfg.get("display", "Primary")
 
-        if palette_changed:
-            set_widget_style(QApplication.instance(), get_stylesheet(self._theme_name))
+        if palette_changed or layout_changed:
+            set_widget_style(QApplication.instance(), get_stylesheet(self._theme_name, app_cfg["layout"]))
             accent = self._theme["accent"]
             set_widget_style(self.lbl_coll_pomo, f"color: {accent}; font-size: 11px; font-weight: 600; min-width: 44px;")
             self.tab_strip.set_accent(accent)
             self.tab_music.set_accent(accent)
             self.tab_timer.set_accent(accent)
+            self.tab_docs.set_accent(accent)
             self.tab_home.slider_vol.set_accent(accent)
             self.tab_home.slider_bright.set_accent(accent)
-        if palette_changed or light_changed or media_changed:
+        if palette_changed or layout_changed or light_changed or media_changed:
             self.tab_music.configure_appearance(self.config.get("media", {}), self._theme)
             self._applied_media_appearance = media_values
         if layout_changed:
@@ -1747,6 +1920,7 @@ class DynamicNotchWindow(QWidget):
             self.tab_home.apply_layout(app_cfg["layout"], home_order(app_cfg["layout"], app_cfg.get("home_orders")))
         if light_changed or layout_changed:
             refresh_theme()
+            self.tab_strip.apply_design()
         if palette_changed or layout_changed or light_changed:
             for dialog in self._floating_windows:
                 set_widget_style(dialog, f"QDialog {{ background-color: {self._theme['bg']}; color: #f1f5f9; }}")
@@ -1754,6 +1928,9 @@ class DynamicNotchWindow(QWidget):
 
         if self.view_collapsed.size() != QSize(self._collapsed_w, self._collapsed_h):
             self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
+            self._size_collapsed_art()
+            self._refresh_collapsed_art()
+        self._refresh_peek_surface()
         self._apply_geometry_for_state(self.state, animate=False)
         self.update()
 
@@ -1785,10 +1962,7 @@ class DynamicNotchWindow(QWidget):
 
         if hasattr(self, "screentime"):
             self.screentime.update_config(self.config)
-            st_cfg = self.config.get("screentime", {})
-            show_pill = st_cfg.get("enabled", True) and st_cfg.get("show_in_main_menu", True)
-            if hasattr(self.tab_home, "screentime_widget"):
-                self.tab_home.screentime_widget.setVisible(show_pill)
+            self._apply_home_sections()
 
         capture_enabled = self.config.get("capture", {}).get("enabled", False)
         self.screenshot_watcher.enabled = capture_enabled
@@ -1796,9 +1970,7 @@ class DynamicNotchWindow(QWidget):
             self.screenshot_watcher.start()
         else:
             self.screenshot_watcher.stop()
-
-        if hasattr(self.tab_home, "set_accent"):
-            self.tab_home.set_accent(self._theme["accent"])
+        self.settings_applied.emit()
 
     # --- Mouse & State Transitions ---
     def enterEvent(self, event):
@@ -1919,7 +2091,7 @@ class DynamicNotchWindow(QWidget):
             self._click_outside_timer.start()
 
     def _check_click_outside(self):
-        if self._is_pinned:
+        if self._is_pinned or self._command_palette is not None:
             return
         if self.state != NotchState.EXPANDED:
             self._click_outside_timer.stop()
@@ -2000,7 +2172,7 @@ class DynamicNotchWindow(QWidget):
             self.view_expanded.setVisible(False)
             self._click_outside_timer.stop()
         elif new_state == NotchState.PEEK:
-            self._target_size = (380, 68)
+            self._target_size = self.PEEK_SIZE
             self.view_collapsed.setVisible(False)
             self.view_peek.setVisible(True)
             self.view_island.setVisible(False)
@@ -2040,6 +2212,8 @@ class DynamicNotchWindow(QWidget):
 
         self._apply_geometry_for_state(new_state, animate=True, start_rect=start_rect)
         if new_state == NotchState.PEEK:
+            self._show_peek_timeline()
+            self._sync_system_controls()
             self.view_peek.layout().activate()
             self._elide_peek_metadata()
             duration = min(160, self.config.get("notch", {}).get("animation_duration_ms", 200))
@@ -2081,7 +2255,7 @@ class DynamicNotchWindow(QWidget):
         if state == NotchState.COLLAPSED:
             self._target_size = (self._collapsed_w, self._collapsed_h)
         elif state == NotchState.PEEK:
-            self._target_size = (420, 72)
+            self._target_size = self.PEEK_SIZE
         elif state == NotchState.ISLAND:
             self._target_size = (420, 64)
         elif state == NotchState.EXPANDED:
@@ -2094,11 +2268,14 @@ class DynamicNotchWindow(QWidget):
             chrome_height = margins.top() + margins.bottom() + layout.spacing() * (layout.count() - 1)
             chrome_height += sum(layout.itemAt(i).minimumSize().height()
                                  for i in range(layout.count()) if layout.itemAt(i).widget() is not self.tab_stack)
-            if page in (self.tab_home, self.tab_music):
-                page.fit_height(max_height - chrome_height)
-            w = max(self._open_w, 780, page.minimumSizeHint().width() + 28)
-            h = max(self._open_h, 480, page.minimumSizeHint().height() + chrome_height)
-            self._target_size = (min(w, screen.width() - 16), min(h, max_height))
+            preferred_height = min(max(self._open_h, 480), max_height)
+            w = min(max(self._open_w, 780, page.minimumSizeHint().width() + 28), screen.width() - 16)
+            if page is self.tab_home:
+                page.fit_height(preferred_height - chrome_height, w, max_height=max_height - chrome_height)
+            elif page is self.tab_music:
+                page.fit_height(preferred_height - chrome_height)
+            h = max(preferred_height, page.minimumSizeHint().height() + chrome_height)
+            self._target_size = (w, min(h, max_height))
             self.view_expanded.setFixedSize(*self._target_size)
 
         screen = self._get_current_screen_geometry()
@@ -2176,26 +2353,29 @@ class DynamicNotchWindow(QWidget):
             self._update_clickthrough_mask()
 
     def _update_clickthrough_mask(self):
-        w = self.width()
-        h = self.height()
-        radius = float(self._corner_radius if self.state == NotchState.EXPANDED else (14 if self.state == NotchState.ISLAND else 12))
+        self.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))
 
+    def _notch_path(self):
+        w, h = float(self.width()), float(self.height())
+        radius = min(w / 2, h / 2, self._corner_radius if self.state == NotchState.EXPANDED else 14)
         path = QPainterPath()
         if self._style == "Notch":
-            # Hugs top edge: Top corners are square (0,0), bottom corners are rounded
+            # Leave room within the window for reverse curves at the bezel.
+            flare = min(10.0, h * 0.27, w * 0.12)
+            radius = min(radius, (w - 2 * flare) / 2)
             path.moveTo(0, 0)
             path.lineTo(w, 0)
-            path.lineTo(w, h - radius)
-            path.quadTo(w, h, w - radius, h)
-            path.lineTo(radius, h)
-            path.quadTo(0, h, 0, h - radius)
+            path.quadTo(w - flare, 0, w - flare, flare)
+            path.lineTo(w - flare, h - radius)
+            path.quadTo(w - flare, h, w - flare - radius, h)
+            path.lineTo(flare + radius, h)
+            path.quadTo(flare, h, flare, h - radius)
+            path.lineTo(flare, flare)
+            path.quadTo(flare, 0, 0, 0)
             path.closeSubpath()
         else:
-            # Floating Pill: All 4 corners rounded
             path.addRoundedRect(0, 0, w, h, radius, radius)
-
-        polygon = path.toFillPolygon().toPolygon()
-        self.setMask(QRegion(polygon))
+        return path
 
     # --- Drag & Drop Handlers ---
     def dragEnterEvent(self, event):
@@ -2220,26 +2400,15 @@ class DynamicNotchWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = float(self.width())
         h = float(self.height())
-        radius = float(self._corner_radius if self.state == NotchState.EXPANDED else (14 if self.state == NotchState.ISLAND else 12))
-
-        path = QPainterPath()
-        if self._style == "Notch":
-            path.moveTo(0, 0)
-            path.lineTo(w, 0)
-            path.lineTo(w, h - radius)
-            path.quadTo(w, h, w - radius, h)
-            path.lineTo(radius, h)
-            path.quadTo(0, h, 0, h - radius)
-            path.closeSubpath()
-        else:
-            path.addRoundedRect(0, 0, w, h, radius, radius)
+        path = self._notch_path()
 
         # Gradient / Surface Fill from active theme
         bg_col = QColor(surface_colors()["root"] if is_light_theme() else self._theme["bg"])
         grad_col = QColor(surface_colors()["root"] if is_light_theme() else self._theme["gradient"])
-        if self._appearance.get("layout") in ("Flat", "Paper", "Instrument"):
+        if self.state == NotchState.PEEK:
+            bg_col = grad_col = self._peek_bg
+        if self.state != NotchState.PEEK and self._appearance.get("layout") in ("Flat", "Paper", "Instrument"):
             if self._appearance.get("layout") == "Paper" and not is_light_theme():
                 bg_col = QColor((bg_col.red() * 3 + 44) // 4, (bg_col.green() * 3 + 40) // 4, (bg_col.blue() * 3 + 32) // 4)
             grad_col = bg_col
@@ -2249,7 +2418,8 @@ class DynamicNotchWindow(QWidget):
         painter.setBrush(QBrush(gradient))
 
         # Quiet hairline rim highlight
-        painter.setPen(QPen(QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 16), 1.0))
+        rim = QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 16)
+        painter.setPen(QPen(rim, 1.0) if self.state == NotchState.EXPANDED else Qt.PenStyle.NoPen)
         painter.drawPath(path)
 
     def closeEvent(self, event):
@@ -2269,6 +2439,7 @@ class DynamicNotchWindow(QWidget):
         self.screentime.close()
         self.lyrics_manager.close()
         self.media_manager.stop()
+        self.bright_ctrl.close()
         self.discord_rpc.close()
         self.screenshot_watcher.stop()
         self.bt_manager.close()

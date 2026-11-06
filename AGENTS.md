@@ -6,7 +6,7 @@
 ## 1. Project Overview & Philosophy
 - **What Poppy Is:** A top-bezel Dynamic Notch and Productivity Island for Windows 11/10 built with Python 3.11 and Qt 6 (`PySide6`).
 - **Design Metaphor:** Desktop dashboard with direct tabs, separate player/lyrics areas, and selectable layout and appearance modes. See DESIGNS.md.
-- **Appearance:** Preserve Classic, Minimal and Soft alongside Flat, Paper and Instrument. Home order is customizable per design through Settings' draggable preview and Alt + arrows; validate complete four-card permutations, save on Done and cancel on close. Reuse live widgets so rearranging never loses notes or media state.
+- **Appearance:** Preserve all nine layout themes. Home order is customizable per design through Settings' draggable preview and Alt + arrows; validate complete four-card permutations, save on Done and cancel on close. Reuse live widgets so rearranging never loses notes or media state.
 - **Senior Developer Decision Ladder (Ponytail Rules):**
   1. **YAGNI First:** Never add scaffolding, speculative abstractions, or unused features.
   2. **Zero Bloat / Zero AI Slop:** No garish border lines, no emojis in code, no bloated external dependencies. Pure stdlib + `PySide6` + `ctypes` Win32 API only.
@@ -66,9 +66,9 @@ Multiple running Poppy processes cause invisible overlap, audio hook collisions,
 
 `DynamicNotchWindow` operates across 4 distinct states (`NotchState`):
 1. `COLLAPSED` (`240x30`): Compact clock with artwork and visualizer bars during a media session. An idle pill stays collapsed on hover. Battery is shown on Home only.
-2. `PEEK` (`420x72`): Hover player with rounded artwork, pixel-elided metadata and grouped transport controls. Source switching sits beside the artist, below the title. Pill and peek clicks open Home by default and respect the Open to setting. Use hover intent, leave grace and a short opacity reveal. Finish or cancel animation effects cleanly.
+2. `PEEK` (`408x125`): Hover player with rounded artwork, pixel-elided metadata, transport, a seek bar and system audio controls. Source switching sits on the artist row. Use artwork, a fixed color, or the layout surface with readable contrast. Pill and peek clicks open Home by default and respect the Open to setting. Use hover intent, leave grace and a short opacity reveal.
 3. `ISLAND` (`420x64`): Floating interactive notification or system prompt island.
-4. `EXPANDED` (`960x560` by default): Home shows music, time, hardware usage, battery, notes and shelf. All enabled tabs are directly visible. There is no More overflow. Clamp to the active display. Home fits all cards without an outer scroll area, growing to its required height and reducing padding on short screens.
+4. `EXPANDED` (`1120x500` by default): Home supports a mini-player, four dashboard cards and a ranked Screen Time panel. Settings controls section visibility. All enabled tabs are directly visible. There is no More overflow. Clamp to the active display. Put Screen Time beside the cards on wide panels and below them on narrow panels. Scroll Home content when needed, keeping the mini-player above it.
 
 ### Smooth Center-Pop Animation
 When expanding or collapsing, the notch must animate symmetrically from the horizontal center:
@@ -77,6 +77,7 @@ start_x = screen.x() + (screen.width() - current_w) // 2
 target_x = screen.x() + (screen.width() - target_w) // 2
 ```
 Never animate from left/right or introduce horizontal jitter.
+Keep child height-for-width constraints inside the pages. The outer layout must accept intermediate geometry on Windows so page minimums do not snap the window to its final height.
 
 ### Settings Window Interaction
 When the Settings button is pressed (`open_settings`):
@@ -123,4 +124,4 @@ Always run:
 ```bash
 python -m pytest poppy/tests/
 ```
-Ensure all 31 tests pass with zero warnings before committing changes.
+Ensure the full suite passes with zero warnings before committing changes. Commit and push each verified set of requested edits to the branch's configured upstream. Keep unrelated changes out of the commit.

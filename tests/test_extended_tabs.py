@@ -152,11 +152,16 @@ def test_bluetooth_manager():
         assert "transport" not in d["name"].lower()
 
 
-def test_desktops_tab_view(qapp):
+def test_desktops_tab_view(qapp, monkeypatch):
+    activated = []
+    monkeypatch.setattr("poppy.ui.extended_views.activate_desktop_window", lambda hwnd: activated.append(hwnd) or True)
     view = DesktopsTabView()
-    assert view is not None
-    assert hasattr(view, "_open_task_view")
-    assert hasattr(view, "_create_new_desktop")
+    assert view.windows.count() == 0
+    view._show_windows([(123, "Example document")])
+    assert view.windows.count() == 1
+    assert view.windows.item(0).text() == "Example document"
+    view.windows.itemActivated.emit(view.windows.item(0))
+    assert activated == [123]
     view.deleteLater()
     qapp.processEvents()
 

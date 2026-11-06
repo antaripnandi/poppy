@@ -15,9 +15,96 @@ from pathlib import Path
 import subprocess
 import uuid
 import threading
+from contextlib import contextmanager
 
 from PySide6.QtCore import QObject, Signal, QTimer
 from poppy.core.storage import data_path, write_json
+
+
+@contextmanager
+def _windows_com_interface(class_id, interface_id):
+    from poppy.core.system_controls import GUID
+    ole32 = ctypes.WinDLL("ole32")
+    ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    ole32.CoInitializeEx.restype = ctypes.HRESULT
+    result = ole32.CoInitializeEx(None, 2)
+    if result < 0 and result != -2147417850:  # RPC_E_CHANGED_MODE: COM is already initialized.
+        raise OSError(f"Windows COM could not start ({result:#x})")
+    pointer = ctypes.c_void_p()
+    table = None
+    try:
+        clsid = GUID.from_buffer_copy(uuid.UUID(class_id).bytes_le)
+        iid = GUID.from_buffer_copy(uuid.UUID(interface_id).bytes_le)
+        ole32.CoCreateInstance.argtypes = [ctypes.POINTER(GUID), ctypes.c_void_p, wintypes.DWORD,
+                                          ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)]
+        ole32.CoCreateInstance.restype = ctypes.HRESULT
+        hr = ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(pointer))
+        if hr < 0 or not pointer.value:
+            raise OSError(f"Windows interface is unavailable ({hr:#x})")
+        table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        yield pointer, table
+    finally:
+        if table is not None:
+            ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(table[2])(pointer)
+        if result >= 0:
+            ole32.CoUninitialize()
+
+
+def current_desktop_windows():
+    """List titled app windows on the current desktop through the public shell API."""
+    user32 = ctypes.WinDLL("user32")
+    dwmapi = ctypes.WinDLL("dwmapi")
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+    windows = []
+    with _windows_com_interface("aa509086-5ca9-4c25-8f95-589d3c07b48a",
+                                "a5cd92ff-29be-454c-8d04-d82879fb3f1b") as (manager, table):
+        on_current = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, wintypes.HWND,
+                                       ctypes.POINTER(wintypes.BOOL))(table[3])
+
+        @callback_type
+        def collect(hwnd, _):
+            if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4):
+                return True
+            if user32.GetWindowLongW(hwnd, -20) & 0x80:  # WS_EX_TOOLWINDOW
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == os.getpid():
+                return True
+            cloaked = wintypes.DWORD()
+            dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+            current = wintypes.BOOL()
+            if cloaked.value or on_current(manager, hwnd, ctypes.byref(current)) < 0 or not current.value:
+                return True
+            title = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, title, len(title))
+            if title.value.strip():
+                windows.append((int(hwnd), title.value.strip()))
+            return True
+
+        if not user32.EnumWindows(collect, 0):
+            raise OSError("Windows could not list open windows.")
+    return windows
+
+
+def activate_desktop_window(hwnd):
+    user32 = ctypes.WinDLL("user32")
+    for method in (user32.IsWindow, user32.IsIconic, user32.SetForegroundWindow):
+        method.argtypes = [wintypes.HWND]
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    if not user32.IsWindow(hwnd):
+        return False
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    return bool(user32.SetForegroundWindow(hwnd))
 
 
 class PrivacyMonitor(QObject):
@@ -426,13 +513,28 @@ class AudioEndpointManager:
     """Read playback endpoint names with checked COM calls and owned allocations."""
 
     @staticmethod
+    def set_default_output(device_id):
+        if not device_id:
+            raise ValueError("This output has no Windows device ID.")
+        # Windows has no public default-output setter. Keep the unsupported
+        # interface isolated so Settings remains available if Windows rejects it.
+        with _windows_com_interface("870af99c-171d-4f9e-af0d-e63df40c2bc9",
+                                    "f8679f50-850a-41cf-9c72-430f290290c8") as (policy, table):
+            set_endpoint = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p,
+                                             wintypes.LPCWSTR, ctypes.c_int)(table[13])
+            for role in (0, 1):  # Console and Multimedia; leave call-device preferences alone.
+                hr = set_endpoint(policy, device_id, role)
+                if hr < 0:
+                    raise OSError(f"Windows rejected the output change ({hr:#x}).")
+
+    @staticmethod
     def get_output_endpoints() -> list[dict]:
         from poppy.core.system_controls import GUID
 
         class PROPERTYKEY(ctypes.Structure):
             _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
 
-        ole32 = ctypes.oledll.ole32
+        ole32 = ctypes.WinDLL("ole32")
         initialized = False
         pointers = []
         devices = []
@@ -452,6 +554,8 @@ class AudioEndpointManager:
         try:
             result = ole32.CoInitialize(None)
             initialized = result in (0, 1)
+            if result < 0 and result != -2147417850:
+                return []
             ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
             ole32.CoTaskMemFree.restype = None
             ole32.PropVariantClear.argtypes = [ctypes.POINTER(PROPVARIANT)]
@@ -465,6 +569,20 @@ class AudioEndpointManager:
             if result < 0 or not enumerator.value:
                 return []
             pointers.append(enumerator)
+            default_device, default_id_ptr = ctypes.c_void_p(), ctypes.c_void_p()
+            default_id = ""
+            try:
+                call(enumerator, 4, [ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                     0, 1, ctypes.byref(default_device))
+                call(default_device, 5, [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(default_id_ptr))
+                if default_id_ptr.value:
+                    default_id = ctypes.wstring_at(default_id_ptr)
+            except OSError:
+                pass
+            finally:
+                if default_id_ptr.value:
+                    ole32.CoTaskMemFree(default_id_ptr)
+                release(default_device)
             collection = ctypes.c_void_p()
             call(enumerator, 3, [wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)], 0, 1, ctypes.byref(collection))
             pointers.append(collection)
@@ -482,7 +600,8 @@ class AudioEndpointManager:
                     call(device, 4, [wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)], 0, ctypes.byref(store))
                     call(store, 5, [ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT)], ctypes.byref(key), ctypes.byref(value))
                     name = ctypes.wstring_at(value.pwszVal) if value.vt == 31 and value.pwszVal else "Audio device"
-                    devices.append({"name": name, "id": ctypes.wstring_at(device_id) if device_id.value else ""})
+                    endpoint_id = ctypes.wstring_at(device_id) if device_id.value else ""
+                    devices.append({"name": name, "id": endpoint_id, "default": bool(endpoint_id and endpoint_id == default_id)})
                 finally:
                     ole32.PropVariantClear(ctypes.byref(value))
                     if device_id.value:

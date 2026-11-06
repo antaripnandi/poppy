@@ -8,6 +8,7 @@ from PySide6.QtTest import QTest
 
 from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.ui.settings_window import SettingsWindow
+from poppy.ui.components import CardFrame
 from poppy.ui.theme import LAYOUT_THEMES, HOME_CARDS, home_order, configure_theme, refresh_theme, set_widget_style
 from poppy.ui.styles import normalize_appearance
 
@@ -34,8 +35,9 @@ def editor(audit_app, monkeypatch):
 def actual_order(home):
     keys = {home.card_clock: "clock", home.card_controls: "controls",
             home.card_notes: "notes", home.card_shelf: "shelf"}
-    return [keys[home.dashboard_grid.itemAtPosition(row, column).widget()]
-            for row in range(2) for column in range(2)]
+    grid = home.dashboard_grid
+    return [key for _, key in sorted((grid.getItemPosition(grid.indexOf(widget))[:2], key)
+                                     for widget, key in keys.items())]
 
 
 def test_drag_changes_home_and_outside_drop_and_escape_leave_it_alone(editor, audit_app):
@@ -165,6 +167,21 @@ def test_design_compilation_preserves_focus_and_restores_authored_controls(audit
     configure_theme({"mode": "Dark", "layout": "Classic"})
     refresh_theme()
     assert button.styleSheet() == original
+
+
+def test_deck_daily_and_console_style_every_tab(editor, audit_app):
+    window, settings = editor
+    for name in ("Deck", "Daily", "Console"):
+        settings.combo_layout.setCurrentText(name)
+        audit_app.processEvents()
+        expanded = window.view_expanded.layout()
+        assert expanded.indexOf(window.tab_stack) == (0 if name == "Daily" else 1)
+        assert window.tab_home._layout_name == window.tab_music._layout_name == name
+        assert window.tab_strip.buttons[0].icon().isNull() == (name != "Deck")
+        for index in range(2, window.tab_stack.count()):
+            page = window.tab_stack.widget(index)
+            assert page.layout().spacing() == LAYOUT_THEMES[name]["spacing"]
+            assert all(card.property("layoutTheme") == name for card in page.findChildren(CardFrame))
 
 
 @pytest.mark.parametrize("name", list(LAYOUT_THEMES))

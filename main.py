@@ -21,25 +21,34 @@ from poppy.core.window import DynamicNotchWindow
 from poppy.ui.theme import set_widget_style
 from poppy.ui.styles import get_stylesheet, DEFAULT_THEME
 from poppy.core.instance import SingleInstance
-from poppy.core.storage import data_path, write_json
+from poppy.core.storage import data_path, write_json, protect_spotify_cookie
 
 
 def load_config() -> dict:
-    config_file = data_path("config.json")
+    user_config = data_path("config.json")
+    config_file = user_config
     if not config_file.exists():
         config_file = current_dir / "config.json"
     if config_file.exists():
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 config = json.load(f)
-                if not isinstance(config, dict):
-                    raise ValueError("Settings must contain a JSON object")
-                if config_file != data_path("config.json"):
-                    try:
-                        write_json(data_path("config.json"), config)
-                    except OSError as error:
-                        print(f"[Poppy] Could not copy legacy settings: {error}")
-                return config
+            if not isinstance(config, dict):
+                raise ValueError("Settings must contain a JSON object")
+            media = config.get("media", {})
+            migrate_cookie = isinstance(media, dict) and bool(media.get("spotify_sp_dc"))
+            if migrate_cookie:
+                try:
+                    media["spotify_sp_dc_protected"] = protect_spotify_cookie(media["spotify_sp_dc"])
+                    del media["spotify_sp_dc"]
+                except OSError:
+                    migrate_cookie = False
+            if migrate_cookie or config_file != user_config:
+                try:
+                    write_json(user_config, config)
+                except OSError as error:
+                    print(f"[Poppy] Could not write settings: {error}")
+            return config
         except Exception as e:
             print(f"[Poppy] Config load warning: {e}")
     return {}
@@ -90,8 +99,8 @@ def main():
 
     # Load persistent settings
     config = load_config()
-    active_theme = config.get("appearance", {}).get("theme", DEFAULT_THEME)
-    set_widget_style(app, get_stylesheet(active_theme))
+    appearance = config.get("appearance", {})
+    set_widget_style(app, get_stylesheet(appearance.get("theme", DEFAULT_THEME), appearance.get("layout", "Classic")))
 
     # Create & display dynamic notch window
     notch = DynamicNotchWindow(config=config)
@@ -148,10 +157,14 @@ def main():
 
     act_quit = QAction("Exit Poppy", tray_menu)
     act_quit.triggered.connect(exit_app)
+    notch.quit_requested.connect(exit_app)
     tray_menu.addAction(act_quit)
 
     tray_icon.setContextMenu(tray_menu)
-    tray_icon.show()
+    def sync_tray():
+        tray_icon.setVisible(notch.config.get("notch", {}).get("keep_in_tray", True))
+    notch.settings_applied.connect(sync_tray)
+    sync_tray()
 
     sys.exit(app.exec())
 

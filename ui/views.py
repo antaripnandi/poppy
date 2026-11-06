@@ -9,7 +9,7 @@ import operator as op
 import re
 import time
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer, QSize, QRect
+from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer, QSize, QRect, QEvent
 from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QPainterPath, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
@@ -17,11 +17,11 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QApplication, QMenu, QSizePolicy, QFileDialog, QLayout, QBoxLayout
 )
 
-from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, home_order
+from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, home_order, home_slots
 from poppy.ui.components import (
     IconButton, CircularProgressRing, AudioVisualizerBars, MetricLabel,
-    CardFrame, SourcePill, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
-    ScreenTimeHomeWidget, CapsuleSlider, ScrollArea
+    CardFrame, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
+    ScreenTimeHomeWidget, CapsuleSlider, ScrollArea, PlaybackSlider
 )
 from poppy.ui.icons import Icons
 from poppy.core.storage import data_path, write_text
@@ -36,10 +36,30 @@ def _visible_sessions(sessions, active_index, limit=4):
     return visible
 
 
+class WeatherLabel(QLabel):
+    """Keep the full forecast available while the dashboard row stays compact."""
+
+    def setText(self, text):
+        self._forecast = text
+        self._fit_forecast()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_forecast()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._fit_forecast()
+
+    def _fit_forecast(self):
+        if hasattr(self, "_forecast"):
+            super().setText(self.fontMetrics().elidedText(self._forecast, Qt.TextElideMode.ElideRight, self.width()))
+
+
 class HomeTabView(QWidget):
     """Home dashboard featuring 4 responsive cards inspired by home-v2.png."""
     tear_off_requested = Signal(str)
-    session_select_requested = Signal(int)
     pin_requested = Signal(str)
     caffeine_toggle_requested = Signal()
     mic_mute_toggle_requested = Signal()
@@ -53,31 +73,70 @@ class HomeTabView(QWidget):
     bluetooth_menu_requested = Signal()
     weather_refresh_requested = Signal()
     screentime_clicked = Signal()
+    customize_requested = Signal()
     layout_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._source_pills = []
         self._latest_shelf_path = ""
         self._track_title = "Nothing playing"
         self._track_artist = ""
         self._layout_name = "Classic"
+        self._dashboard_wide = True
+        self._hidden_sections = set()
         self._init_ui()
         self._design_sources = {widget: widget.property("poppyStyleSource") for widget in
-            (self.lbl_big_time, self.txt_notes, self.lbl_music_title, self.lbl_music_artist,
+            (self.lbl_big_time, self.lbl_date, self.txt_notes, self.lbl_music_title, self.lbl_music_artist,
              self.lbl_notes_title, self.lbl_shelf_status)}
         self._design_headers = []
-        for card, text in ((self.card_clock, "SYSTEM"), (self.card_controls, "PLAYBACK")):
+        for card, text in ((self.card_clock, "SYSTEM"), (self.card_controls, "CONTROLS")):
             label = QLabel(text)
             card.layout().insertWidget(0, label)
             label.hide()
             self._design_headers.append(label)
 
     def _init_ui(self):
-        grid = QGridLayout(self)
+        home = QVBoxLayout(self)
+        home.setContentsMargins(12, 8, 12, 10)
+        home.setSpacing(12)
+        self._init_player()
+        home.addWidget(self.mini_player)
+
+        body = QWidget()
+        body.setObjectName("homeBody")
+        set_widget_style(body, "QWidget#homeBody { background: transparent; }")
+        self.body_layout = QGridLayout(body)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.home_scroll = ScrollArea()
+        self.home_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.home_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.home_scroll.setWidgetResizable(True)
+        self.home_scroll.setWidget(body)
+        self.home_scroll.setAccessibleName("Home dashboard")
+        self.home_scroll.verticalScrollBar().setSingleStep(24)
+        set_widget_style(self.home_scroll, """
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar::corner { background: transparent; border: none; }
+            QScrollBar:horizontal { height: 0px; }
+        """)
+        home.addWidget(self.home_scroll, 1)
+
+        grid = QGridLayout()
         self.dashboard_grid = grid
-        grid.setContentsMargins(12, 8, 12, 10)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(12)
+        self.body_layout.addLayout(grid, 0, 0)
+        self.body_layout.setColumnStretch(0, 3)
+        self.body_layout.setRowStretch(0, 1)
+        self.screentime_widget = ScreenTimeHomeWidget()
+        self.screentime_widget.clicked.connect(self.screentime_clicked.emit)
+        self.body_layout.addWidget(self.screentime_widget, 1, 0)
+        self.screentime_widget.hide()
+        self.btn_customize = self._text_action("Customize Home", "Choose which sections appear on Home")
+        self.btn_customize.clicked.connect(self.customize_requested.emit)
+        home.addWidget(self.btn_customize, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.btn_customize.hide()
 
         # -------------------------------------------------------------
         # Card 1: Clock, Date & Hardware Telemetry (home-v2 Card 1)
@@ -92,238 +151,95 @@ class HomeTabView(QWidget):
         set_widget_style(self.lbl_big_time, """
             QLabel {
                 font-size: 32px;
-                font-weight: 700;
-                color: #ffffff;
+                font-weight: 500;
+                color: #edf1f0;
                 background: transparent;
                 border: none;
-                letter-spacing: -0.6px;
             }
         """)
         self.lbl_date = QLabel("Monday, 5 October")
         set_widget_style(self.lbl_date, "QLabel { font-size: 11.5px; color: #94a3b8; font-weight: 500; background: transparent; border: none; }")
 
-        # Weather / Status row in ambient glass capsule
-        weather_card = QFrame()
-        set_widget_style(weather_card, """
-            QFrame {
-                background: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.07);
-                border-radius: 8px;
-            }
-            QFrame:hover {
-                background: rgba(255, 255, 255, 0.07);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-            }
-        """)
-        weather_row = QHBoxLayout(weather_card)
-        weather_row.setContentsMargins(8, 4, 10, 4)
-        weather_row.setSpacing(6)
-        self.lbl_weather_icon = QLabel(Icons.WEATHER_SUN)
-        set_widget_style(self.lbl_weather_icon, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 13px; color: #38bdf8; background: transparent; border: none;")
-        self.lbl_weather_text = QLabel("Fetching live weather...")
-        set_widget_style(self.lbl_weather_text, "font-size: 11px; color: #cbd5e1; font-weight: 500; background: transparent; border: none;")
+        self.lbl_weather_text = WeatherLabel()
+        self.lbl_weather_text.setText("Fetching weather…")
+        self.lbl_weather_text.setTextFormat(Qt.TextFormat.PlainText)
+        self.lbl_weather_text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        set_widget_style(self.lbl_weather_text, "font-size: 12px; color: #b9bfbd; background: transparent;")
         self.lbl_weather_text.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.lbl_weather_text.setToolTip("Click to Refresh Weather")
+        self.lbl_weather_text.setToolTip("Refresh weather")
         self.lbl_weather_text.mousePressEvent = lambda e: self.weather_refresh_requested.emit()
-        weather_row.addWidget(self.lbl_weather_icon)
-        weather_row.addWidget(self.lbl_weather_text)
-        weather_row.addStretch()
 
-        # Telemetry pills row
-        telemetry_row = QHBoxLayout()
+        # Hardware readings
+        telemetry_row = QGridLayout()
+        self.telemetry_grid = telemetry_row
         telemetry_row.setSpacing(6)
         self.lbl_cpu = MetricLabel("CPU", "--%")
         self.lbl_gpu = MetricLabel("GPU", "--%")
         self.lbl_ram = MetricLabel("RAM", "--%")
         self.lbl_bat = MetricLabel("Battery", "--%")
-        telemetry_row.addWidget(self.lbl_cpu)
-        telemetry_row.addWidget(self.lbl_gpu)
-        telemetry_row.addWidget(self.lbl_ram)
-        telemetry_row.addWidget(self.lbl_bat)
-        telemetry_row.addStretch()
-
-        l_clock.addWidget(self.lbl_big_time)
-        l_clock.addWidget(self.lbl_date)
-        l_clock.addSpacing(3)
-        l_clock.addWidget(weather_card)
-        l_clock.addSpacing(4)
-
-        # Screen Time Interactive Pill
-        self.screentime_widget = ScreenTimeHomeWidget(self)
-        self.screentime_widget.clicked.connect(self.screentime_clicked.emit)
-        l_clock.addWidget(self.screentime_widget)
+        self.metrics = (self.lbl_cpu, self.lbl_gpu, self.lbl_ram, self.lbl_bat)
+        for column, metric in enumerate(self.metrics):
+            telemetry_row.addWidget(metric, 0, column)
+        self.clock_face = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        self.clock_face.setSpacing(4)
+        self.clock_detail = QVBoxLayout()
+        self.clock_detail.setSpacing(2)
+        self.clock_detail.addWidget(self.lbl_big_time)
+        self.clock_detail.addWidget(self.lbl_weather_text)
+        self.clock_face.addLayout(self.clock_detail)
+        self.clock_face.addWidget(self.lbl_date)
+        l_clock.addLayout(self.clock_face)
 
         l_clock.addStretch()
         l_clock.addLayout(telemetry_row)
         grid.addWidget(card_clock, 0, 0)
 
         # -------------------------------------------------------------
-        # Card 2: Audio, Sliders & Quick Controls (Option 1 Bento)
-        # -------------------------------------------------------------
+        # System controls stay separate from playback.
         card_controls = CardFrame(self)
         self.card_controls = card_controls
         l_ctrl = QVBoxLayout(card_controls)
+        self.controls_layout = l_ctrl
         l_ctrl.setContentsMargins(18, 14, 18, 14)
-        l_ctrl.setSpacing(6)
+        l_ctrl.setSpacing(4)
 
-        # macOS Control Center thick capsule sliders
-        self.btn_vol_mute = QPushButton(Icons.VOLUME)
-        self.btn_vol_mute.setVisible(False)
-        self.lbl_vol_num = QLabel("50")
-        self.lbl_vol_num.setVisible(False)
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self)
+        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self)
+        for slider, label in ((self.slider_vol, "Volume"), (self.slider_bright, "Brightness")):
+            slider.setAccessibleName(label)
+            slider.setToolTip(label)
+            slider.installEventFilter(self)
+            l_ctrl.addWidget(slider)
 
-        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, accent="#0a84ff", parent=self)
-        self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_num.setText(str(v)))
-        l_ctrl.addWidget(self.slider_vol)
-
-        self.btn_bright_icon = QPushButton(Icons.BRIGHTNESS)
-        self.btn_bright_icon.setVisible(False)
-        self.lbl_bright_num = QLabel("75")
-        self.lbl_bright_num.setVisible(False)
-
-        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, accent="#38bdf8", parent=self)
-        self.slider_bright.valueChanged.connect(lambda v: self.lbl_bright_num.setText(str(v)))
-        l_ctrl.addWidget(self.slider_bright)
-
-        # Audio Output & Media Player Selector Pills + Controls row
-        row_dev = QHBoxLayout()
-        row_dev.setSpacing(6)
-        self.btn_audio_drop = QPushButton("Sound settings ▾")
-        set_widget_style(self.btn_audio_drop, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 12px;
-                color: #e2e8f0;
-                font-size: 11px;
-                font-weight: 500;
-                padding: 4px 11px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.16);
-            }
-        """)
+        audio_row = QHBoxLayout()
+        self.btn_vol_mute = self._text_action("Mute", "Mute system audio")
+        self.btn_audio_drop = self._text_action("Sound output", "Choose an output or open Windows Sound Settings")
         self.btn_audio_drop.clicked.connect(self.audio_device_menu_requested.emit)
+        audio_row.addWidget(self.btn_vol_mute)
+        audio_row.addStretch()
+        audio_row.addWidget(self.btn_audio_drop)
+        l_ctrl.addLayout(audio_row)
+        l_ctrl.addSpacing(4)
 
-        self.btn_player_drop = QPushButton("Player ▾")
-        self.btn_player_drop.setMaximumWidth(150)
-        set_widget_style(self.btn_player_drop, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 12px;
-                color: #e2e8f0;
-                font-size: 11px;
-                font-weight: 500;
-                padding: 4px 11px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.16);
-            }
-        """)
-        self.btn_dev_lock = QPushButton("Lock")
-        self.btn_dev_lock.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_dev_lock.setToolTip("Lock Windows Workstation (Win + L)")
-        set_widget_style(self.btn_dev_lock, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 12px;
-                color: #94a3b8;
-                font-size: 11px;
-                font-weight: 500;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                color: #ffffff;
-                border: 1px solid rgba(255, 255, 255, 0.16);
-            }
-        """)
-        self.btn_dev_lock.clicked.connect(self.lock_workstation_requested.emit)
-        self.btn_player_drop.clicked.connect(self.player_menu_requested.emit)
-
-        # Transport icons inside controls card
-        self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous", size=24, font_size=11, is_fluent=True)
-        self.btn_ctrl_play = IconButton(Icons.PLAY, "Play/Pause", size=26, font_size=12, is_fluent=True)
-        self.btn_ctrl_next = IconButton(Icons.NEXT, "Next", size=24, font_size=11, is_fluent=True)
-        self.music_bars = AudioVisualizerBars(self)
-
-        row_dev.addWidget(self.btn_audio_drop)
-        row_dev.addWidget(self.btn_player_drop)
-        row_dev.addStretch()
-        row_dev.addWidget(self.btn_ctrl_prev)
-        row_dev.addWidget(self.btn_ctrl_play)
-        row_dev.addWidget(self.btn_ctrl_next)
-        row_dev.addWidget(self.music_bars)
-        l_ctrl.addLayout(row_dev)
-
-        # Track metadata labels referenced by window updates
-        self.lbl_music_title = QLabel("Nothing playing", self)
-        self.lbl_music_title.setTextFormat(Qt.TextFormat.PlainText)
-        self.lbl_music_title.setWordWrap(False)
-        self.lbl_music_title.setMaximumHeight(48)
-        self.lbl_music_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.lbl_music_title, "font-size: 18px; font-weight: 600; color: #f1f5f9; background: transparent;")
-
-        self.lbl_music_artist = QLabel("", self)
-        self.lbl_music_artist.setTextFormat(Qt.TextFormat.PlainText)
-        set_widget_style(self.lbl_music_artist, "font-size: 12px; color: #94a3b8;")
-        self.lbl_music_art = QLabel(Icons.MUSIC)
-        self.lbl_music_art.setFixedSize(48, 48)
-        self.lbl_music_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        set_widget_style(self.lbl_music_art, "background: rgba(255,255,255,0.05); border-radius: 8px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 20px; color: #94a3b8;")
-        metadata = QVBoxLayout()
-        metadata.setSpacing(2)
-        metadata.addWidget(self.lbl_music_title)
-        metadata.addWidget(self.lbl_music_artist)
-        track_header = QHBoxLayout()
-        track_header.setSpacing(12)
-        track_header.addWidget(self.lbl_music_art)
-        track_header.addLayout(metadata, 1)
-        l_ctrl.insertLayout(0, track_header)
-        self.lbl_music_source = QLabel("", self)
-        set_widget_style(self.lbl_music_source, "font-size: 11px; color: #94a3b8;")
-        self.lbl_music_source.hide()
-
-        # Quick Actions Row (home-v2.png bottom pill strip)
-        row_actions = QHBoxLayout()
-        row_actions.setSpacing(6)
-
-        self.btn_act_caffeine = IconButton(Icons.POWER, "Keep Awake (Caffeine: OFF)", size=24, font_size=11, is_fluent=True)
-        self.btn_act_caffeine.clicked.connect(self.caffeine_toggle_requested.emit)
-        row_actions.addWidget(self.btn_act_caffeine)
-
-        self.btn_act_mic = IconButton(Icons.MIC, "Microphone (Mute / Unmute)", size=24, font_size=11, is_fluent=True)
-        self.btn_act_mic.clicked.connect(self.mic_mute_toggle_requested.emit)
-        row_actions.addWidget(self.btn_act_mic)
-
-        self.btn_act_shield = IconButton(Icons.SHIELD, "Focus Shield (Toggle Pomodoro Focus Sprint)", size=24, font_size=11, is_fluent=True)
-        self.btn_act_shield.clicked.connect(self.focus_shield_requested.emit)
-        row_actions.addWidget(self.btn_act_shield)
-
-        self.btn_act_snip = IconButton(Icons.SNIP, "Screen Snip (Win + Shift + S)", size=24, font_size=11, is_fluent=True)
-        self.btn_act_snip.clicked.connect(self.screen_snip_requested.emit)
-        row_actions.addWidget(self.btn_act_snip)
-
-        self.btn_act_eyedropper = IconButton(Icons.COLOR, "Color Eyedropper (Pick Screen Color)", size=24, font_size=11, is_fluent=True)
-        self.btn_act_eyedropper.clicked.connect(self.eyedropper_requested.emit)
-        row_actions.addWidget(self.btn_act_eyedropper)
-
-        self.btn_act_search = IconButton(Icons.SEARCH, "Quick Search / Calculator", size=24, font_size=11, is_fluent=True)
-        self.btn_act_search.clicked.connect(self.quick_search_requested.emit)
-        row_actions.addWidget(self.btn_act_search)
-
-        self.btn_act_bt = IconButton(Icons.BLUETOOTH, "Bluetooth Devices", size=24, font_size=11, is_fluent=True)
-        self.btn_act_bt.clicked.connect(self.bluetooth_menu_requested.emit)
-        row_actions.addWidget(self.btn_act_bt)
-
-        row_actions.addWidget(self.btn_dev_lock)
-        row_actions.addStretch()
-        l_ctrl.addLayout(row_actions)
-
+        actions = QGridLayout()
+        actions.setSpacing(3)
+        for index, (attr, label, tip, signal, toggle) in enumerate((
+            ("btn_act_caffeine", "Awake", "Keep the PC awake", self.caffeine_toggle_requested, True),
+            ("btn_act_mic", "Mic", "Mute or unmute microphone", self.mic_mute_toggle_requested, True),
+            ("btn_act_shield", "Focus", "Start or pause a focus sprint", self.focus_shield_requested, True),
+            ("btn_act_snip", "Snip", "Take a screen snip", self.screen_snip_requested, False),
+            ("btn_act_eyedropper", "Color", "Pick a screen color", self.eyedropper_requested, False),
+            ("btn_act_search", "Calc", "Focus the calculator", self.quick_search_requested, False),
+            ("btn_act_bt", "Bluetooth", "Show Bluetooth devices", self.bluetooth_menu_requested, False),
+            ("btn_dev_lock", "Lock", "Lock Windows", self.lock_workstation_requested, False),
+        )):
+            button = self._text_action(label, tip)
+            button.setCheckable(toggle)
+            button.clicked.connect(signal.emit)
+            setattr(self, attr, button)
+            actions.addWidget(button, index // 4, index % 4)
+        l_ctrl.addLayout(actions)
+        l_ctrl.addStretch()
         grid.addWidget(card_controls, 0, 1)
 
         # -------------------------------------------------------------
@@ -338,26 +254,8 @@ class HomeTabView(QWidget):
         notes_hdr = QHBoxLayout()
         lbl_notes_title = QLabel("Notes")
         self.lbl_notes_title = lbl_notes_title
-        set_widget_style(lbl_notes_title, "QLabel { font-size: 10.5px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; background: transparent; border: none; }")
-        self.btn_pop_note = QPushButton("Floating copy")
-        self.btn_pop_note.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_pop_note.setToolTip("Spawn an on-screen floating sticky note")
-        set_widget_style(self.btn_pop_note, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 6px;
-                color: #e2e8f0;
-                font-size: 10px;
-                font-weight: 600;
-                padding: 3px 9px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                color: #ffffff;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-            }
-        """)
+        set_widget_style(lbl_notes_title, "QLabel { font-size: 13px; font-weight: 500; color: #edf1f0; background: transparent; border: none; }")
+        self.btn_pop_note = self._text_action("Floating copy", "Open a floating copy of these notes")
         self.btn_pop_note.clicked.connect(self._on_tear_off)
         notes_hdr.addWidget(lbl_notes_title)
         notes_hdr.addStretch()
@@ -365,6 +263,7 @@ class HomeTabView(QWidget):
         l_notes.addLayout(notes_hdr)
 
         self.txt_notes = QTextEdit()
+        self.txt_notes.setMinimumHeight(64)
         self.txt_notes.setPlaceholderText("Jot something down...")
         set_widget_style(self.txt_notes, """
             QTextEdit {
@@ -404,22 +303,9 @@ class HomeTabView(QWidget):
 
         shelf_hdr = QHBoxLayout()
         self.lbl_shelf_status = QLabel("Shelf · 0 files")
-        set_widget_style(self.lbl_shelf_status, "QLabel { font-size: 12px; font-weight: 500; color: #94a3b8; background: transparent; border: none; }")
-        self.btn_clear_shelf = QPushButton("Clear")
-        set_widget_style(self.btn_clear_shelf, """
-            QPushButton {
-                font-size: 9.5px;
-                padding: 3px 8px;
-                border-radius: 5px;
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                color: #94a3b8;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                color: #ffffff;
-            }
-        """)
+        set_widget_style(self.lbl_shelf_status, "font-size: 13px; font-weight: 500; color: #edf1f0; background: transparent;")
+        self.btn_clear_shelf = self._text_action("Clear", "Clear the shelf")
+        self.btn_clear_shelf.hide()
         shelf_hdr.addWidget(self.lbl_shelf_status)
         shelf_hdr.addStretch()
         shelf_hdr.addWidget(self.btn_clear_shelf)
@@ -498,19 +384,15 @@ class HomeTabView(QWidget):
         self.shelf_preview_frame.setVisible(False)
 
         # Empty hint
-        self.lbl_shelf_empty = QLabel("Drop files or snip (Win+Shift+S / PrtScn)")
+        self.lbl_shelf_empty = QLabel("Drop files here")
+        self.lbl_shelf_empty.setToolTip("Drop files or use Windows + Shift + S to take a snip")
         set_widget_style(self.lbl_shelf_empty, "font-size: 10px; color: #64748b; background: transparent; border: none;")
         l_shelf.addWidget(self.lbl_shelf_empty)
-
-        # Multi-session switcher pills strip
-        self.pills_container = QHBoxLayout()
-        self.pills_container.setSpacing(4)
-        l_ctrl.addLayout(self.pills_container)
 
         # Inline Calculator
         calc_row = QHBoxLayout()
         self.input_calc = QLineEdit()
-        self.input_calc.setPlaceholderText("calc: 45*12, 120/3, 50^2...")
+        self.input_calc.setPlaceholderText("Calculate…")
         set_widget_style(self.input_calc, """
             QLineEdit {
                 background: rgba(255, 255, 255, 0.04);
@@ -535,12 +417,94 @@ class HomeTabView(QWidget):
         l_shelf.addStretch()
         grid.addWidget(card_shelf, 1, 1)
 
+    @staticmethod
+    def _text_action(text, tip):
+        button = QPushButton(text)
+        button.setToolTip(tip)
+        button.setAccessibleName(tip)
+        button.setMinimumHeight(24)
+        set_widget_style(button, """
+            QPushButton {
+                background: transparent; border: none; border-radius: 5px;
+                color: #b9bfbd; font-family: 'Segoe UI'; font-size: 12px; padding: 2px 5px;
+            }
+            QPushButton:hover, QPushButton:checked {
+                background: rgba(255,255,255,0.08); color: #edf1f0;
+            }
+            QPushButton:focus { border: 1px solid #a7adab; }
+        """)
+        return button
+
+    def _init_player(self):
+        self.mini_player = CardFrame(self)
+        self.mini_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.mini_player)
+        self.mini_layout.setContentsMargins(12, 8, 12, 8)
+        self.mini_layout.setSpacing(10)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.mini_layout.addLayout(row, 1)
+
+        self.lbl_music_art = QLabel(Icons.MUSIC)
+        self.lbl_music_art.setFixedSize(36, 36)
+        self.lbl_music_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_widget_style(self.lbl_music_art, """
+            background: rgba(255,255,255,0.05); border-radius: 6px; color: #a7adab;
+            font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 16px;
+        """)
+        row.addWidget(self.lbl_music_art)
+
+        metadata = QVBoxLayout()
+        metadata.setSpacing(2)
+        metadata.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_music_title = QLabel(self._track_title)
+        self.lbl_music_artist = QLabel()
+        for label, style in (
+            (self.lbl_music_title, "font-size: 14px; font-weight: 500; color: #edf1f0;"),
+            (self.lbl_music_artist, "font-size: 12px; color: #a7adab;"),
+        ):
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            set_widget_style(label, style)
+            metadata.addWidget(label)
+        self.lbl_music_artist.hide()
+        row.addLayout(metadata, 1)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(4)
+        self.btn_player_drop = self._text_action("Players", "Switch media player")
+        self.btn_player_drop.clicked.connect(self.player_menu_requested.emit)
+        self.btn_player_drop.setMaximumWidth(150)
+        self.btn_player_drop.hide()
+        actions.addWidget(self.btn_player_drop)
+
+        transport = QHBoxLayout()
+        transport.setSpacing(2)
+        self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous track", size=32, font_size=16, is_fluent=True)
+        self.btn_ctrl_play = IconButton(Icons.PLAY, "Play", size=32, font_size=16, is_fluent=True)
+        self.btn_ctrl_next = IconButton(Icons.NEXT, "Next track", size=32, font_size=16, is_fluent=True)
+        for button in (self.btn_ctrl_prev, self.btn_ctrl_play, self.btn_ctrl_next):
+            button.setEnabled(False)
+            transport.addWidget(button)
+        actions.addLayout(transport)
+        self.mini_layout.addLayout(actions)
+        self.daily_audio = QWidget(self.mini_player)
+        self.daily_audio_layout = QHBoxLayout(self.daily_audio)
+        self.daily_audio_layout.setContentsMargins(4, 0, 0, 0)
+        self.daily_audio_layout.setSpacing(4)
+        self.mini_layout.addWidget(self.daily_audio, 1)
+        self.daily_audio.hide()
+
     def update_track_info(self, title, artist):
-        self._track_title = title if title not in ("No Media Playing", "Unknown Title", "") else "Nothing playing"
-        self._track_artist = artist
+        available = title not in ("No Media Playing", "Unknown Title", "")
+        self._track_title = title if available else "Nothing playing"
+        self._track_artist = artist if available else ""
         self.lbl_music_title.setToolTip(self._track_title)
-        self.lbl_music_artist.setToolTip(artist)
+        self.lbl_music_artist.setToolTip(self._track_artist)
+        self.lbl_music_artist.setVisible(bool(self._track_artist))
+        for button in (self.btn_ctrl_prev, self.btn_ctrl_play, self.btn_ctrl_next):
+            button.setEnabled(available)
         self._elide_track_labels()
+        QTimer.singleShot(0, self, self._elide_track_labels)
 
     def _elide_track_labels(self):
         for label, text in ((self.lbl_music_title, self._track_title), (self.lbl_music_artist, self._track_artist)):
@@ -551,35 +515,118 @@ class HomeTabView(QWidget):
         if hasattr(self, "lbl_music_title"):
             QTimer.singleShot(0, self, self._elide_track_labels)
 
+    def _position_screen_time(self, width):
+        has_cards = self.dashboard_grid.count() > 0
+        sideways = has_cards and width >= 1000 and not self.screentime_widget.isHidden()
+        row = 0 if sideways or not has_cards else 1
+        column = 1 if sideways else 0
+        index = self.body_layout.indexOf(self.screentime_widget)
+        if self.body_layout.getItemPosition(index)[:2] != (row, column):
+            self.body_layout.removeWidget(self.screentime_widget)
+            self.body_layout.addWidget(self.screentime_widget, row, column, alignment=Qt.AlignmentFlag.AlignTop)
+        self.body_layout.setRowStretch(0, int(has_cards))
+        self.body_layout.setColumnStretch(1, int(sideways))
+        self.screentime_widget.setMinimumWidth(220 if sideways else 0)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Wheel and self.home_scroll.verticalScrollBar().maximum() > 0:
+            self.home_scroll.wheelEvent(event)
+            return True
+        return super().eventFilter(watched, event)
+
+    def set_sections(self, hidden, screen_time):
+        self._hidden_sections = set(hidden)
+        self.screentime_widget.setVisible(screen_time)
+        self.apply_layout(self._layout_name, self._card_order)
+        self.layout_changed.emit()
+
     def apply_layout(self, name, order=None):
         self._layout_name = name
+        self._card_order = home_order(name, {name: order})
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
-        grid = self.dashboard_grid
         cards = {"clock": self.card_clock, "controls": self.card_controls,
                  "notes": self.card_notes, "shelf": self.card_shelf}
-        for card in cards.values():
-            grid.removeWidget(card)
-            card.apply_layout(name)
+        for key, card in cards.items():
+            card.apply_layout(name, outline=False)
             card.layout().setContentsMargins(spec["padding"], spec["padding"], spec["padding"], spec["padding"])
-        for index, key in enumerate(home_order(name, {name: order})):
-            grid.addWidget(cards[key], index // 2, index % 2)
-        grid.setSpacing(spec["spacing"])
+        self._arrange_dashboard()
+        self.dashboard_grid.setSpacing(spec["spacing"])
         inset = spec["inset"]
-        grid.setContentsMargins(inset, 8, inset, 10)
-        for column, stretch in enumerate(spec["columns"]):
-            grid.setColumnStretch(column, stretch)
-        grid.setRowStretch(0, 1)
-        grid.setRowStretch(1, 1)
+        self.layout().setContentsMargins(inset, 8, inset, 10)
+        self.layout().setSpacing(spec["spacing"])
+        self.mini_player.apply_layout(name, outline=False)
+        self.screentime_widget.apply_layout(name, outline=False)
+        self.screentime_widget.layout().setContentsMargins(spec["padding"], 10, spec["padding"], 10)
         self._apply_design(name)
         QTimer.singleShot(0, self, self._elide_track_labels)
+
+    def _arrange_dashboard(self):
+        name, grid = self._layout_name, self.dashboard_grid
+        cards = {"clock": self.card_clock, "controls": self.card_controls,
+                 "notes": self.card_notes, "shelf": self.card_shelf}
+        visible = [key for key in self._card_order if key not in self._hidden_sections]
+        wide = self._dashboard_wide
+        player_visible = "player" not in self._hidden_sections
+        deck_grid = name == "Deck" and wide and len(visible) == 4 and player_visible
+        slots = home_slots(name, len(visible), wide=deck_grid if name == "Deck" else wide)
+        for card in (*cards.values(), self.mini_player):
+            grid.removeWidget(card)
+        self.layout().removeWidget(self.mini_player)
+        for key, slot in zip(visible, slots):
+            grid.addWidget(cards[key], *slot)
+        if deck_grid:
+            grid.addWidget(self.mini_player, 0, 2)
+        else:
+            # Daily keeps its media and transport strip beneath the content.
+            self.layout().insertWidget(1 if name == "Daily" else 0, self.mini_player)
+        self.mini_layout.setDirection(QBoxLayout.Direction.TopToBottom if deck_grid else QBoxLayout.Direction.LeftToRight)
+        daily_strip = name == "Daily" and wide and player_visible and "controls" in visible
+        if daily_strip != (self.daily_audio_layout.count() > 0):
+            for i, slider in enumerate((self.slider_vol, self.slider_bright)):
+                if daily_strip:
+                    self.controls_layout.removeWidget(slider)
+                    self.daily_audio_layout.addWidget(slider)
+                else:
+                    self.daily_audio_layout.removeWidget(slider)
+                    self.controls_layout.insertWidget(i + 1, slider)
+                slider.show()
+        self.daily_audio.setVisible(daily_strip)
+        for key, card in cards.items():
+            card.setVisible(key in visible)
+        self.mini_player.setVisible(player_visible)
+        body_visible = bool(visible) or not self.screentime_widget.isHidden()
+        self.home_scroll.setVisible(body_visible)
+        self.btn_customize.setVisible(not (player_visible or body_visible))
+        columns = LAYOUT_THEMES[name]["columns"]
+        for column in range(3):
+            grid.setColumnStretch(column, columns[column] if column < len(columns)
+                                  and (column < 2 or any(slot[1] + slot[3] > 2 for slot in slots)) else 0)
+        rows = max((row + span for row, _, span, _ in slots), default=0)
+        for row in range(3):
+            grid.setRowStretch(row, int(row < rows and (name != "Daily" or row == 1)))
 
     def _apply_design(self, name):
         for widget, source in self._design_sources.items():
             set_widget_style(widget, source)
         for label in self._design_headers:
-            label.setVisible(name == "Instrument")
+            label.setVisible(name == "Instrument" or (name == "Console" and self._dashboard_wide))
             set_widget_style(label, "background: rgba(255,255,255,0.08); color: #b6c3bd; font-family: 'Consolas'; font-size: 10px; padding: 3px 6px; border: none;")
-        for metric in (self.lbl_cpu, self.lbl_gpu, self.lbl_ram, self.lbl_bat):
+        daily = name == "Daily"
+        self.clock_face.setDirection(QBoxLayout.Direction.LeftToRight if daily else QBoxLayout.Direction.TopToBottom)
+        self.clock_face.removeWidget(self.lbl_date)
+        self.clock_detail.removeWidget(self.lbl_date)
+        self.clock_detail.removeWidget(self.lbl_weather_text)
+        if daily:
+            self.clock_face.insertWidget(0, self.lbl_date, 1)
+            self.clock_detail.addWidget(self.lbl_weather_text)
+        else:
+            self.clock_detail.insertWidget(1, self.lbl_date)
+            self.clock_detail.addWidget(self.lbl_weather_text)
+        metric_columns = 2 if name in ("Deck", "Console") and self._dashboard_wide else 4
+        for i, metric in enumerate(self.metrics):
+            self.telemetry_grid.removeWidget(metric)
+            self.telemetry_grid.addWidget(metric, i // metric_columns, i % metric_columns,
+                                          Qt.AlignmentFlag.AlignLeft)
             metric.apply_design(name)
         if name == "Paper":
             set_widget_style(self.lbl_big_time, "font-family: 'Cambria'; font-size: 34px; font-weight: 400; color: #f0ece3; background: transparent; border: none;")
@@ -590,9 +637,23 @@ class HomeTabView(QWidget):
                 set_widget_style(label, "background: rgba(255,255,255,0.08); color: #b6c3bd; font-family: 'Consolas'; font-size: 10px; padding: 3px 6px; border: none;")
         elif name == "Flat":
             set_widget_style(self.lbl_big_time, "font-family: 'Segoe UI'; font-size: 28px; font-weight: 600; color: #edf1f0; background: transparent; border: none;")
+        elif daily:
+            set_widget_style(self.lbl_date, "QLabel { font-family: 'Georgia'; font-size: 29px; color: #edf1f0; }")
+            set_widget_style(self.lbl_big_time, "QLabel { font-family: 'Georgia'; font-size: 23px; color: #edf1f0; }")
+            set_widget_style(self.txt_notes, "QTextEdit { font-family: 'Georgia'; font-size: 15px; color: #edf1f0; border: none; background: transparent; }")
+        elif name in ("Deck", "Console"):
+            family = "Bahnschrift" if name == "Console" else "Segoe UI"
+            set_widget_style(self.lbl_big_time, f"QLabel {{ font-family: '{family}'; font-size: 30px; font-weight: 600; color: #edf1f0; }}")
 
-    def fit_height(self, available_height):
-        """Use normal theme spacing when possible; tighten padding on short screens."""
+    def fit_height(self, available_height, width=None, *, max_height=None):
+        """Fit the cards first and scroll any extra content on shorter displays."""
+        width = self.width() if width is None else width
+        wide = width >= 1000
+        if self._dashboard_wide != wide and self._layout_name in ("Deck", "Daily", "Console"):
+            self._dashboard_wide = wide
+            self._arrange_dashboard()
+            self._apply_design(self._layout_name)
+        self._position_screen_time(width)
         spec = LAYOUT_THEMES.get(self._layout_name, LAYOUT_THEMES["Classic"])
         cards = (self.card_clock, self.card_controls, self.card_notes, self.card_shelf)
 
@@ -601,47 +662,49 @@ class HomeTabView(QWidget):
                 card.layout().setContentsMargins(spec["padding"], vertical_padding, spec["padding"], vertical_padding)
                 card.layout().activate()
                 card.updateGeometry()
+            self.layout().setSpacing(gap)
+            self.body_layout.setSpacing(gap)
             self.dashboard_grid.setSpacing(gap)
             self.dashboard_grid.invalidate()
+            self.body_layout.invalidate()
+
+        def body_height():
+            margins = self.layout().contentsMargins()
+            space = available_height - margins.top() - margins.bottom()
+            if self.layout().indexOf(self.mini_player) >= 0 and not self.mini_player.isHidden():
+                space -= self.mini_player.minimumSizeHint().height() + self.layout().spacing()
+            return max(1, space)
 
         padding, gap = spec["padding"], spec["spacing"]
         set_spacing(padding, gap)
-        overflow = self.minimumSizeHint().height() - available_height
+        overflow = self.dashboard_grid.minimumSize().height() - body_height()
         if overflow > 0:
             padding = max(8, padding - (overflow + 3) // 4)
             set_spacing(padding, gap)
-            overflow = self.minimumSizeHint().height() - available_height
+            overflow = self.dashboard_grid.minimumSize().height() - body_height()
             if overflow > 0:
                 set_spacing(padding, max(4, gap - overflow))
+        minimum = self.body_layout.minimumSize().height()
+        viewport_height = body_height()
+        if max_height is not None:
+            grid_height = self.dashboard_grid.minimumSize().height()
+            needed = minimum if self.screentime_widget.isHidden() else grid_height
+            viewport_height += min(max(0, needed - viewport_height), max(0, max_height - available_height))
+        self.home_scroll.setMinimumHeight(min(minimum, viewport_height))
 
-    def update_sessions_list(self, sessions: list, active_index: int, accent: str = "#6e9bff"):
-        while self.pills_container.count() > 0:
-            item = self.pills_container.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.hide()
-                widget.deleteLater()
-        self._source_pills.clear()
-
-        if sessions and active_index < len(sessions):
-            curr_name = sessions[active_index]["display_name"]
-            self.btn_player_drop.setText(f"{curr_name} ▾")
-
-        for s in _visible_sessions(sessions, active_index) if len(sessions) > 1 else []:
-            idx = s["index"]
-            name = s["display_name"]
-            is_active = (idx == active_index)
-            pill = SourcePill(name, session_index=idx, is_active=is_active, accent=accent, parent=self)
-            pill.clicked.connect(lambda checked=False, i=idx: self.session_select_requested.emit(i))
-            self.pills_container.addWidget(pill)
-            self._source_pills.append(pill)
-            pill.show()
-        self.card_controls.updateGeometry()
-        self.dashboard_grid.invalidate()
-        self.layout_changed.emit()
+    def update_sessions_list(self, sessions, active_index):
+        self.btn_player_drop.setVisible(len(sessions) > 1)
+        if 0 <= active_index < len(sessions):
+            name = sessions[active_index]["display_name"]
+            text = self.btn_player_drop.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 122)
+            self.btn_player_drop.setText(f"{text} ▾")
+            self.btn_player_drop.setToolTip(f"Switch media player. Current player: {name}")
+        self.layout().activate()
+        self._elide_track_labels()
 
     def update_shelf_display(self, items: list):
         count = len(items)
+        self.btn_clear_shelf.setVisible(count > 0)
         self.lbl_shelf_status.setText(f"Shelf · {count} file{'s' if count != 1 else ''}")
         if count > 0:
             latest = items[-1]
@@ -721,31 +784,18 @@ class HomeTabView(QWidget):
         self.slider_vol.blockSignals(True)
         self.slider_vol.setValue(vol)
         self.slider_vol.blockSignals(False)
-        self.lbl_vol_num.setText(str(vol))
-        if is_muted:
-            self.btn_vol_mute.setText(Icons.MUTE)
-            self.btn_vol_mute.setToolTip("Audio Muted (Click to Unmute)")
-        else:
-            if vol == 0:
-                icon = Icons.MUTE
-            elif vol < 35:
-                icon = Icons.VOLUME_LOW
-            elif vol < 70:
-                icon = Icons.VOLUME_MED
-            else:
-                icon = Icons.VOLUME
-            self.btn_vol_mute.setText(icon)
-            self.btn_vol_mute.setToolTip("Audio (Click to Mute)")
+        action = "Unmute" if is_muted else "Mute"
+        self.btn_vol_mute.setText(action)
+        self.btn_vol_mute.setAccessibleName(f"{action} system audio")
+        self.btn_vol_mute.setToolTip(f"{action} system audio")
 
     def set_brightness_display(self, bright: int):
         self.slider_bright.blockSignals(True)
         self.slider_bright.setValue(bright)
         self.slider_bright.blockSignals(False)
-        self.lbl_bright_num.setText(str(bright))
 
     def update_weather(self, data: dict):
         """Updates the weather display with live meteorological data."""
-        icon = data.get("icon", Icons.WEATHER_SUN)
         text = data.get("display_text", "")
         city = data.get("city", "")
         cond = data.get("condition", "")
@@ -754,15 +804,8 @@ class HomeTabView(QWidget):
         l = data.get("low", 0)
         hum = data.get("humidity", 0)
 
-        self.lbl_weather_icon.setText(icon)
         self.lbl_weather_text.setText(text)
         self.lbl_weather_text.setToolTip(f"{city}\n{temp}°C · {cond}\nHigh: {h}°C · Low: {l}°C\nHumidity: {hum}%\n(Click to Refresh)")
-
-    def set_accent(self, accent: str):
-        self._accent = accent
-        if hasattr(self, "screentime_widget"):
-            self.screentime_widget.set_accent(accent)
-
 
 class MusicTabView(QWidget):
     """Desktop media player and lyrics columns with real session switching."""
@@ -790,7 +833,7 @@ class MusicTabView(QWidget):
         self._layout_name = current_layout()
 
         self._init_ui()
-        player = self.player_card.layout()
+        player = self.player_body
         for widget in (self.lbl_large_art, self.lbl_title, self.lbl_artist):
             player.removeWidget(widget)
         self.identity = QWidget()
@@ -802,9 +845,11 @@ class MusicTabView(QWidget):
         metadata_layout = QVBoxLayout(metadata)
         metadata_layout.setContentsMargins(0, 0, 0, 0)
         metadata_layout.setSpacing(6)
+        metadata_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         metadata_layout.addWidget(self.lbl_title)
         metadata_layout.addWidget(self.lbl_artist)
         self.identity_layout.addWidget(metadata, 1)
+        self.identity_metadata = metadata
         player.insertWidget(1, self.identity)
         self.apply_layout(self._layout_name)
 
@@ -830,7 +875,12 @@ class MusicTabView(QWidget):
         self.player_card = QFrame()
         self.player_card.setObjectName("mediaCard")
         self._set_surface(QColor("#202329"))
-        player = QVBoxLayout(self.player_card)
+        self.player_shell = QHBoxLayout(self.player_card)
+        self.player_shell.setContentsMargins(0, 0, 0, 0)
+        self.player_shell.setSpacing(0)
+        controls = QWidget(self.player_card)
+        self.player_shell.addWidget(controls, 1)
+        player = self.player_body = QVBoxLayout(controls)
         player.setContentsMargins(24, 18, 24, 18)
         player.setSpacing(8)
         source_row = QHBoxLayout()
@@ -880,7 +930,7 @@ class MusicTabView(QWidget):
         self.lbl_source = QLabel(self)
         self.lbl_source.hide()
 
-        self.scrubber = ClickableSlider(Qt.Orientation.Horizontal)
+        self.scrubber = PlaybackSlider(Qt.Orientation.Horizontal)
         self.scrubber.setRange(0, 100)
         self.scrubber.setEnabled(False)
         self.scrubber.setAccessibleName("Playback position")
@@ -908,6 +958,7 @@ class MusicTabView(QWidget):
         self.btn_play.setToolTip("Play")
         set_widget_style(self.btn_play, self._play_button_style())
         self.btn_next = IconButton(Icons.NEXT, "Next track", size=36, font_size=16, is_fluent=True)
+        self._transport_styles = {button: button.property("poppyStyleSource") for button in (self.btn_prev, self.btn_next)}
         for button in (self.btn_prev, self.btn_play, self.btn_next):
             button.setEnabled(False)
             transport.addWidget(button)
@@ -921,7 +972,7 @@ class MusicTabView(QWidget):
         self.vol_slider.setValue(50)
         self.vol_slider.setMinimumWidth(48)
         self.vol_slider.setFixedHeight(24)
-        self.btn_output = IconButton(Icons.SPEAKER, "Windows sound settings", size=24, font_size=12, is_fluent=True)
+        self.btn_output = IconButton(Icons.SPEAKER, "Choose sound output", size=24, font_size=12, is_fluent=True)
         self.btn_output.clicked.connect(self.sound_settings_requested.emit)
         volume.addWidget(self.btn_vol_music)
         volume.addWidget(self.vol_slider)
@@ -961,25 +1012,39 @@ class MusicTabView(QWidget):
     def fit_height(self, available_height):
         """Keep transport and volume controls visible; reduce art size before clipping."""
         spec = LAYOUT_THEMES[self._layout_name]
-        player = self.player_card.layout()
+        player = self.player_body
         padding = spec["padding"]
-        player.setContentsMargins(padding, padding, padding, padding)
-        player.setSpacing(min(8, spec["spacing"]))
-        size = spec["art_size"]
+        gap = min(8, spec["spacing"])
+        deck = self._layout_name == "Deck"
+        horizontal = deck or self.identity_layout.direction() == QBoxLayout.Direction.LeftToRight
+        # Read the fixed rows directly. A hidden player's cached size hint
+        # can still describe the previous theme during a layout switch.
+        fixed = sum(player.itemAt(i).minimumSize().height() for i in range(player.count())
+                    if player.itemAt(i).widget() is not self.identity)
+        metadata = self.identity_metadata.minimumSizeHint().height()
+        identity_gap = self.identity_layout.spacing() if not horizontal else 0
+        room = available_height - self.layout().contentsMargins().top() - self.layout().contentsMargins().bottom()
+        room -= fixed + (player.count() - 1) * gap + 2 * padding
+        if not horizontal:
+            room -= metadata + identity_gap
+        min_art = min(96, spec["art_size"])
+        if room < min_art:
+            room += 2 * (padding - 10) + (player.count() - 1) * (gap - 4)
+            vertical, gap = 10, 4
+        else:
+            vertical = padding
+        size = spec["art_size"] if deck else max(min_art, min(spec["art_size"], room))
+        self.player_shell.setContentsMargins(padding if deck else 0, 0, 0, 0)
+        player.setContentsMargins(padding, vertical, padding, vertical)
+        player.setSpacing(gap)
         self.lbl_large_art.setFixedSize(size, size)
+        self.identity.setMinimumHeight(metadata if deck else max(size, metadata) if horizontal else size + metadata + identity_gap)
+        self.identity_layout.invalidate()
+        player.invalidate()
+        player.parentWidget().updateGeometry()
+        self.player_shell.invalidate()
         self.player_card.updateGeometry()
         self.layout().invalidate()
-        overflow = self.minimumSizeHint().height() - available_height
-        if overflow > 0:
-            size = max(min(96, spec["art_size"]), size - overflow)
-            self.lbl_large_art.setFixedSize(size, size)
-            self.player_card.updateGeometry()
-            self.layout().invalidate()
-            if self.minimumSizeHint().height() > available_height:
-                player.setContentsMargins(padding, 10, padding, 10)
-                player.setSpacing(4)
-                self.player_card.updateGeometry()
-                self.layout().invalidate()
         if not self._artwork_pixmap.isNull():
             key = (self._artwork_pixmap.cacheKey(), size, self._art_radius())
             if key != getattr(self, "_fitted_art_key", None):
@@ -987,19 +1052,40 @@ class MusicTabView(QWidget):
                 self._fitted_art_key = key
 
     def _art_radius(self):
-        return LAYOUT_THEMES[self._layout_name]["radius"] if self._layout_name in ("Flat", "Paper", "Instrument") else 10
+        return {"Deck": 12, "Daily": 1, "Console": 0}.get(
+            self._layout_name, LAYOUT_THEMES[self._layout_name]["radius"] if self._layout_name in ("Flat", "Paper", "Instrument") else 10)
 
     def apply_layout(self, name):
         self._layout_name = name if name in LAYOUT_THEMES else "Classic"
         spec = LAYOUT_THEMES[self._layout_name]
-        horizontal = name in ("Flat", "Paper")
+        horizontal = name in ("Flat", "Paper", "Console")
+        if name == "Deck":
+            if self.player_shell.indexOf(self.lbl_large_art) < 0:
+                self.identity_layout.removeWidget(self.lbl_large_art)
+                self.player_shell.insertWidget(0, self.lbl_large_art, 0, Qt.AlignmentFlag.AlignVCenter)
+        elif self.player_shell.indexOf(self.lbl_large_art) >= 0:
+            self.player_shell.removeWidget(self.lbl_large_art)
+            self.identity_layout.insertWidget(0, self.lbl_large_art)
         self.identity_layout.setDirection(QBoxLayout.Direction.LeftToRight if horizontal else QBoxLayout.Direction.TopToBottom)
-        alignment = (Qt.AlignmentFlag.AlignLeft if horizontal else Qt.AlignmentFlag.AlignHCenter) | Qt.AlignmentFlag.AlignVCenter
+        left = horizontal or name in ("Deck", "Daily")
+        alignment = (Qt.AlignmentFlag.AlignLeft if left else Qt.AlignmentFlag.AlignHCenter) | Qt.AlignmentFlag.AlignVCenter
         self.lbl_title.setAlignment(alignment)
         self.lbl_artist.setAlignment(alignment)
-        self.identity_layout.setAlignment(self.lbl_large_art, Qt.AlignmentFlag.AlignCenter)
+        if name != "Deck":
+            self.identity_layout.setAlignment(self.lbl_large_art, Qt.AlignmentFlag.AlignLeft if name == "Daily" else Qt.AlignmentFlag.AlignCenter)
+        family = {"Daily": "Georgia", "Console": "Bahnschrift"}.get(name, "Segoe UI")
+        font_size = {"Deck": 24, "Daily": 26, "Console": 23}.get(name, 18)
+        set_widget_style(self.lbl_title, f"font-family: '{family}'; font-size: {font_size}px; font-weight: 500; color: #edf1f0;")
+        for control, glyph, word in ((self.btn_prev, Icons.PREV, "Previous"), (self.btn_next, Icons.NEXT, "Next")):
+            control.setText(word if name == "Console" else glyph)
+            control.setFixedWidth(72 if name == "Console" else 36)
+            set_widget_style(control, self._text_transport_style() if name == "Console" else self._transport_styles[control])
+        self.btn_play.setFixedWidth(60 if name == "Console" else 36)
+        set_widget_style(self.btn_play, self._play_button_style())
+        self.btn_play.setText(("Pause" if self._is_playing else "Play") if name == "Console" else (Icons.PAUSE if self._is_playing else Icons.PLAY))
+        self.lyrics_widget.apply_design(name)
         for label in (self.lbl_elapsed, self.lbl_remaining):
-            family = "Consolas" if name == "Instrument" else "Segoe UI"
+            family = "Consolas" if name in ("Instrument", "Console") else "Segoe UI"
             set_widget_style(label, f"font-family: '{family}'; font-size: 11px; color: #a7adab;")
         columns = self.layout()
         columns.removeWidget(self.player_card)
@@ -1020,7 +1106,15 @@ class MusicTabView(QWidget):
             QTimer.singleShot(0, self, self._elide_metadata)
 
     @staticmethod
-    def _play_button_style():
+    def _text_transport_style():
+        return "QPushButton { font-family: 'Consolas'; font-size: 11px; background: transparent; color: #edf1f0; border: 1px solid #53664d; padding: 0; } QPushButton:hover, QPushButton:focus { border: 1px solid #9ebc79; } QPushButton:disabled { color: #64748b; }"
+
+    def _play_button_style(self):
+        if self._layout_name == "Console":
+            return self._text_transport_style()
+        if self._layout_name in ("Deck", "Daily"):
+            tint = "#416393" if self._layout_name == "Deck" else "#784c3d"
+            return f"QPushButton {{ background: {tint}; color: #edf1f0; border: none; border-radius: 16px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 16px; padding: 0; }} QPushButton:hover {{ background: #567486; }} QPushButton:focus {{ border: 1px solid #a7bbc7; }} QPushButton:disabled {{ color: #64748b; }}"
         return "QPushButton { background: transparent; color: #edf1f0; border: none; border-radius: 4px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 17px; padding: 0; } QPushButton:hover { background: rgba(255,255,255,0.08); } QPushButton:pressed { background: rgba(255,255,255,0.14); } QPushButton:disabled { color: #64748b; } QPushButton:focus { border: 1px solid #a7bbc7; }"
 
     def _set_surface(self, color):
@@ -1030,7 +1124,9 @@ class MusicTabView(QWidget):
             hue, saturation, _, _ = color.getHsl()
             color = QColor.fromHsl(max(0, hue), min(saturation, 65), 242)
         spec = LAYOUT_THEMES[self._layout_name]
-        background = "transparent" if self._layout_name in ("Minimal", "Flat", "Paper") and self._surface_mode == "theme" else color.name()
+        background = "transparent" if self._layout_name in ("Minimal", "Flat", "Paper", "Daily") and self._surface_mode == "theme" else color.name()
+        if self._layout_name in ("Deck", "Console") and self._surface_mode == "theme":
+            background = "rgba(160,193,244,0.12)" if self._layout_name == "Deck" else "rgba(168,191,154,0.07)"
         set_widget_style(self.player_card, f"QFrame#mediaCard {{ background: {background}; border: none; border-radius: {spec['radius']}px; }} QFrame#mediaCard QLabel {{ background: transparent; border: none; }}")
 
     @property
@@ -1146,7 +1242,7 @@ class MusicTabView(QWidget):
     def set_playback_state(self, is_playing: bool):
         self._is_playing = is_playing
         self._last_tick_ts = time.time()
-        self.btn_play.setText(Icons.PAUSE if is_playing else Icons.PLAY)
+        self.btn_play.setText(("Pause" if is_playing else "Play") if self._layout_name == "Console" else (Icons.PAUSE if is_playing else Icons.PLAY))
         self.btn_play.setAccessibleName("Pause" if is_playing else "Play")
         self.btn_play.setToolTip("Pause" if is_playing else "Play")
         self.lyrics_widget.set_playback_state(is_playing)
@@ -1169,8 +1265,8 @@ class MusicTabView(QWidget):
         else:
             self.lyrics_widget.set_not_found(self.lbl_title.text(), self.lbl_artist.text())
 
-    def set_lyrics_loading(self, title: str, artist: str):
-        key = LyricsManager._make_key(title, artist)
+    def set_lyrics_loading(self, title: str, artist: str, album: str = "", duration: float = 0):
+        key = LyricsManager._make_key(title, artist, album, duration)
         if key == getattr(self, "_lyrics_track_key", None):
             return
         self._lyrics_track_key = key

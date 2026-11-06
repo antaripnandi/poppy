@@ -71,7 +71,7 @@ def test_fast_skips_only_query_the_final_track_and_cache_reopen_is_offline(audit
     manager = LyricsManager()
     queries, loaded = [], []
     manager.lyrics_loaded.connect(lambda *args: loaded.append(args))
-    def query(title, artist, album):
+    def query(title, artist, album, duration):
         queries.append(title)
         return {"syncedLyrics": "[00:01.00]A line"}
     monkeypatch.setattr(manager, "_query_lrclib", query)
@@ -201,6 +201,14 @@ def test_session_reordering_keeps_the_selected_player(audit_app):
     asyncio.run(manager._refresh_all_sessions())
     assert manager.get_active_index() == 0
     assert manager.sessions[0].app_id == "browser"
+    roster, tracks = [], []
+    manager.sessions_updated.connect(lambda sessions, index: roster.append((sessions, index)))
+    manager.media_changed.connect(tracks.append)
+    manager._session_manager.get_sessions = lambda: [RawSession("browser"), RawSession("brave")]
+    asyncio.run(manager._refresh_all_sessions())
+    assert roster[-1][1] == 0
+    assert roster[-1][0][1]["display_name"] == "Brave"
+    assert tracks == []
 
 
 def test_unexpected_provider_failure_does_not_leak_a_worker_slot(audit_app, monkeypatch):

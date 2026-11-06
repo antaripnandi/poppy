@@ -152,7 +152,7 @@ def test_hidden_panels_do_not_query_hardware(connected_settings, monkeypatch):
     window, _ = connected_settings
     queries = []
     for controller, method in ((window.audio_ctrl, "get_volume"), (window.audio_ctrl, "get_mute"),
-                               (window.audio_ctrl, "get_mic_mute"), (window.bright_ctrl, "get_brightness")):
+                               (window.audio_ctrl, "get_mic_mute"), (window.bright_ctrl, "request_brightness")):
         monkeypatch.setattr(controller, method, lambda: queries.append(True))
     _sync_hardware(window)
     assert queries == []

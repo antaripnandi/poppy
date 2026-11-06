@@ -3,12 +3,18 @@
 import pytest
 from pathlib import Path
 from PySide6.QtCore import QRect, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QLabel, QScrollArea
 
 from poppy.core.drop_shelf import DropShelfManager
+from poppy.core.system_features import AppLauncherIndexer
 from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.ui.settings_window import SettingsWindow
-from poppy.ui.styles import get_stylesheet, get_theme, normalize_appearance
+from poppy.ui.extended_views import LauncherTabView
+from poppy.ui.styles import (
+    DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, APPEARANCE_LAYOUT_VERSION,
+    get_stylesheet, get_theme, normalize_appearance,
+)
 from poppy.ui.views import MusicTabView, ShelfItemRow
 from poppy.ui.components import CardFrame
 from poppy.ui.theme import configure_theme, is_light_theme, refresh_theme, set_widget_style, LAYOUT_THEMES
@@ -33,7 +39,9 @@ def dashboard_window(audit_app, monkeypatch):
 
 
 def test_legacy_dimensions_migrate_once_and_custom_sizes_survive():
-    assert normalize_appearance({"layout_version": 2, "open_width": 600, "open_height": 400})["open_width"] == 960
+    for version, width, height in ((2, 600, 400), (3, 960, 560)):
+        config = normalize_appearance({"layout_version": version, "open_width": width, "open_height": height})
+        assert (config["open_width"], config["open_height"]) == (DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT)
     assert normalize_appearance({"open_width": 800, "open_height": 500})["open_width"] == 800
     assert normalize_appearance({"layout_version": 3, "open_width": 960, "open_height": 480})["open_height"] == 480
 
@@ -46,7 +54,7 @@ def test_all_tabs_are_directly_visible_and_home_is_default(dashboard_window, aud
         window.tab_strip.buttons[index].click()
         audit_app.processEvents()
         assert window.tab_stack.currentIndex() == window._tab_name_to_stack_idx[name]
-        assert window.width() == 960
+        assert window.width() == DEFAULT_PANEL_WIDTH
         for button in window.tab_strip.buttons + [window.btn_settings]:
             assert window.view_expanded.rect().contains(QRect(button.mapTo(window.view_expanded, button.rect().topLeft()), button.size()))
     window._collapse_to_pill()
@@ -90,7 +98,7 @@ def test_layout_and_mode_preview_preserves_notes_and_cancel_restores(dashboard_w
     assert window.tab_home is original_view
     assert window.tab_home.dashboard_grid.itemAtPosition(0, 1).widget() is window.tab_home.card_notes
     assert window.tab_home.lbl_big_time.palette().color(QPalette.ColorRole.WindowText).lightness() < 100
-    assert window.grab().toImage().pixelColor(5, 80).lightness() > 200
+    assert window.grab().toImage().pixelColor(18, 80).lightness() > 200
     assert window.tab_home.txt_notes.toPlainText() == "Keep this unsaved note"
     settings.close()
     audit_app.processEvents()
@@ -196,6 +204,7 @@ def test_follow_windows_updates_without_restarting(dashboard_window, monkeypatch
 def test_loaded_dashboard_fits_without_scrolling(dashboard_window, audit_app, tmp_path, monkeypatch):
     window = dashboard_window
     window._switch_to_tab_by_name("Home")
+    window.tab_home.set_sections([], screen_time=False)
     paths = []
     for index in range(8):
         path = tmp_path / f"Screenshot_2026-11-03_{index}.txt"
@@ -206,8 +215,6 @@ def test_loaded_dashboard_fits_without_scrolling(dashboard_window, audit_app, tm
         {"index": 0, "display_name": "Spotify"},
         {"index": 1, "display_name": "Brave"},
     ], 0)
-    assert window.tab_home.findChildren(QScrollArea) == []
-
     for screen in (QRect(0, 0, 1440, 1000), QRect(0, 0, 800, 600)):
         monkeypatch.setattr(window, "_get_current_screen_geometry", lambda screen=screen: screen)
         for mode in ("Dark", "Light"):
@@ -218,10 +225,84 @@ def test_loaded_dashboard_fits_without_scrolling(dashboard_window, audit_app, tm
                 home = window.tab_home
                 assert window.height() <= screen.height() - 56
                 assert home.height() >= home.minimumSizeHint().height(), (layout, mode, screen)
+                assert home.home_scroll.verticalScrollBar().maximum() == 0
                 for widget in (home.card_clock, home.card_controls, home.card_notes,
                                home.card_shelf, home.shelf_preview_frame, home.input_calc,
-                               home.txt_notes, *home._source_pills):
+                               home.txt_notes, home.mini_player, home.btn_player_drop,
+                               home.slider_vol, home.slider_bright):
                     assert home.rect().contains(QRect(widget.mapTo(home, widget.rect().topLeft()), widget.size()))
+
+
+def test_home_section_choices_save_and_keep_hidden_notes(dashboard_window, audit_app, monkeypatch):
+    from poppy.main import load_config
+    monkeypatch.setattr("poppy.ui.settings_window.get_autostart_state", lambda: False)
+    window = dashboard_window
+    window._switch_to_tab_by_name("Home")
+    home = window.tab_home
+    home.txt_notes.setPlainText("Keep my notes")
+    settings = SettingsWindow(window.config)
+    settings.settings_saved.connect(window._on_settings_saved)
+    for checkbox in settings._home_section_checks.values():
+        checkbox.setChecked(False)
+    assert not home.card_notes.isHidden()
+    assert settings._save_settings()
+    assert home.mini_player.isHidden() and home.home_scroll.isHidden()
+    assert home.btn_customize.isVisible()
+    assert home.txt_notes.toPlainText() == "Keep my notes"
+
+    reloaded = SettingsWindow(load_config())
+    assert all(not checkbox.isChecked() for checkbox in reloaded._home_section_checks.values())
+    reloaded.settings_saved.connect(window._on_settings_saved)
+    reloaded._home_section_checks["notes"].setChecked(True)
+    assert reloaded._save_settings()
+    audit_app.processEvents()
+    assert home.card_notes.isVisible() and home.card_clock.isHidden()
+    assert home.dashboard_grid.getItemPosition(0) == (0, 0, 1, 2)
+    assert home.txt_notes.toPlainText() == "Keep my notes"
+
+
+def test_screen_time_home_shows_five_ranked_apps_on_short_displays(dashboard_window, audit_app, monkeypatch):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    window = dashboard_window
+    window._switch_to_tab_by_name("Home")
+    monkeypatch.setattr("poppy.core.screentime_manager._get_idle_seconds", lambda: 180)
+    manager = window.screentime
+    manager._today_apps = {f"App {index}": index * 60 for index in range(1, 8)}
+    manager._today_seconds = 1680
+    manager._save_counter = 1
+    manager._on_tick()
+    audit_app.processEvents()
+
+    home = window.tab_home
+    panel = home.screentime_widget
+    assert panel.lbl_time.text() == "28m"
+    assert [name.text() for row, name, _ in panel.rows if not row.isHidden()] == [
+        "App 7", "App 6", "App 5", "App 4", "App 3",
+    ]
+    assert window.width() == DEFAULT_PANEL_WIDTH
+    assert panel.x() > home.card_controls.geometry().right()
+    assert home.home_scroll.verticalScrollBar().maximum() == 0
+
+    monkeypatch.setattr(window, "_get_current_screen_geometry", lambda: QRect(0, 0, 800, 600))
+    window._resize_expanded_panel()
+    audit_app.processEvents()
+    assert panel.y() > home.card_shelf.geometry().bottom()
+    assert window.height() <= 544
+    slider = home.slider_vol
+    volume = slider.value()
+    position = slider.rect().center()
+    wheel = QWheelEvent(QPointF(position), QPointF(slider.mapToGlobal(position)),
+                        QPoint(0, -40), QPoint(0, -120), Qt.MouseButton.NoButton,
+                        Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+    audit_app.sendEvent(slider, wheel)
+    assert slider.value() == volume
+    assert home.home_scroll.verticalScrollBar().value() > 0
+    last_row = panel.rows[-1][0]
+    home.home_scroll.ensureWidgetVisible(last_row)
+    viewport = home.home_scroll.viewport()
+    assert viewport.rect().contains(QRect(last_row.mapTo(viewport, last_row.rect().topLeft()), last_row.size()))
 
 
 def test_lyrics_share_the_desktop_view_without_resizing(dashboard_window, audit_app, monkeypatch):
@@ -253,10 +334,13 @@ def test_music_controls_fit_without_an_outer_scroll_area(dashboard_window, audit
     for screen in (QRect(0, 0, 1440, 1000), QRect(0, 0, 800, 600)):
         monkeypatch.setattr(window, "_get_current_screen_geometry", lambda screen=screen: screen)
         for mode in ("Dark", "Light"):
-            window._apply_live_appearance({"mode": mode, "layout": layout, "open_width": 780, "open_height": 480, "layout_version": 3})
+            window._apply_live_appearance({"mode": mode, "layout": layout, "open_width": 1120, "open_height": 500})
             audit_app.processEvents()
             assert window.height() <= screen.height() - 56
             assert view.player_card.x() < view.lyrics_widget.x()
+            art_rect = QRect(view.lbl_large_art.mapTo(view, view.lbl_large_art.rect().topLeft()), view.lbl_large_art.size())
+            metadata_rect = QRect(view.identity_metadata.mapTo(view, view.identity_metadata.rect().topLeft()), view.identity_metadata.size())
+            assert not art_rect.intersects(metadata_rect)
             for control in (view.lbl_large_art, view.lbl_title, view.scrubber, view.btn_prev,
                             view.btn_play, view.btn_next, view.vol_slider, view.btn_output,
                             *view._source_pills):
@@ -377,8 +461,8 @@ def test_settings_plain_labels_theme_and_size_persist(monkeypatch):
     monkeypatch.setattr("poppy.ui.settings_window.get_autostart_state", lambda: False)
     monkeypatch.setattr("poppy.ui.settings_window.set_autostart_state", lambda *args: None)
     settings = SettingsWindow({"appearance": {"open_width": 960, "open_height": 480}})
-    assert settings.slider_open_w.value() == 960
-    assert settings.slider_open_h.value() == 560
+    assert settings.slider_open_w.value() == DEFAULT_PANEL_WIDTH
+    assert settings.slider_open_h.value() == DEFAULT_PANEL_HEIGHT
     text = [settings.nav_list.item(i).text() for i in range(settings.nav_list.count())]
     text.extend(label.text() for label in settings.findChildren(QLabel))
     assert not any(ord(char) >= 0x1F000 or char == "\ufe0f" for string in text for char in string)
@@ -391,7 +475,7 @@ def test_settings_plain_labels_theme_and_size_persist(monkeypatch):
     settings.chk_media_players.setChecked(False)
     assert settings._save_settings()
     assert settings.config["appearance"]["theme"] == "Graphite"
-    assert settings.config["appearance"]["layout_version"] == 3
+    assert settings.config["appearance"]["layout_version"] == APPEARANCE_LAYOUT_VERSION
     assert settings.config["appearance"]["layout"] == "Soft"
     assert settings.config["appearance"]["mode"] == "Light"
     assert settings.config["media"]["background"] == "theme"
@@ -420,13 +504,24 @@ def test_lyrics_are_requested_only_when_opened(dashboard_window, monkeypatch):
     requests = []
     monkeypatch.setattr(window.lyrics_manager, "request_lyrics", lambda *args: requests.append(args))
     window._switch_to_tab_by_name("Home")
-    window._on_media_changed({"title": "Test song", "artist": "Test artist", "album": "Test album"})
+    window._on_media_changed({"title": "Test song", "artist": "Test artist", "album": "Test album", "duration_sec": 180})
     assert requests == []
     window._switch_to_tab_by_name("Music")
-    assert requests == [("Test song", "Test artist", "Test album")]
+    assert requests == [("Test song", "Test artist", "Test album", 180)]
     window.tab_music.btn_lyrics.click()
     window._on_media_changed({"title": "Next song", "artist": "Another artist"})
     assert len(requests) == 1
+
+
+def test_commands_open_tabs_with_enter(dashboard_window, monkeypatch):
+    monkeypatch.setattr(AppLauncherIndexer, "get_installed_apps", lambda: [])
+    window = dashboard_window
+    window.open_commands()
+    palette = window._command_palette.findChild(LauncherTabView)
+    palette.input_search.setText("open notes")
+    QTest.keyClick(palette.input_search, Qt.Key.Key_Return)
+    assert window._last_tab_name == "Notes"
+    assert window._command_palette is None
 
 
 def test_follow_playback_can_be_disabled(dashboard_window, audit_app):

@@ -96,6 +96,7 @@ class MediaManager(QObject):
         super().__init__(parent)
         self.sessions: list[SessionData] = []
         self._selected_index = 0
+        self._last_roster = None
         self._lock = threading.RLock()
         self._loop = None
         self._thread = None
@@ -228,6 +229,7 @@ class MediaManager(QObject):
                     self.media_changed.emit(empty_data)
                     self.playback_changed.emit(False)
                     self.sessions_updated.emit([], 0)
+                    self._last_roster = None
                     self.timeline_changed.emit(0.0, 0.0, False)
                     self._last_state_hash = "empty"
                 return
@@ -244,11 +246,10 @@ class MediaManager(QObject):
 
             # Compute fingerprint for track/session changes
             state_fingerprint = self._fingerprint(curr)
+            self._publish_sessions()
 
             if state_fingerprint != self._last_state_hash:
                 self._last_state_hash = state_fingerprint
-                sessions_summary = [s.to_dict() for s in self.sessions]
-                self.sessions_updated.emit(sessions_summary, self._selected_index)
                 self.media_changed.emit(curr.to_dict())
                 self.playback_changed.emit(curr.is_playing)
 
@@ -282,8 +283,13 @@ class MediaManager(QObject):
                 self.media_changed.emit(curr.to_dict())
                 self.playback_changed.emit(curr.is_playing)
                 self.timeline_changed.emit(curr.position_sec, curr.duration_sec, curr.is_playing)
-                sessions_summary = [s.to_dict() for s in self.sessions]
-                self.sessions_updated.emit(sessions_summary, self._selected_index)
+                self._publish_sessions()
+
+    def _publish_sessions(self):
+        roster = (self._selected_index, tuple((item.app_id, item.display_name) for item in self.sessions))
+        if roster != self._last_roster:
+            self._last_roster = roster
+            self.sessions_updated.emit([item.to_dict() for item in self.sessions], self._selected_index)
 
     def _fingerprint(self, session):
         return (len(self.sessions), self._selected_index, session.app_id, session.title,

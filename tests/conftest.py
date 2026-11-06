@@ -45,6 +45,7 @@ def isolate_runtime(tmp_path, monkeypatch, audit_app):
     from poppy.core.screenshot_watcher import ScreenshotWatcher
     from poppy.core.system_features import BluetoothManager
     from poppy.core.window import DynamicNotchWindow
+    from poppy.ui import extended_views
     monkeypatch.setenv("POPPY_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(MediaManager, "start", lambda self: None)
     monkeypatch.setattr(MediaManager, "_dispatch_command", lambda *args: None)
@@ -52,6 +53,7 @@ def isolate_runtime(tmp_path, monkeypatch, audit_app):
     monkeypatch.setattr(WeatherManager, "refresh", lambda self: None)
     monkeypatch.setattr(ScreenshotWatcher, "start", lambda self: None)
     monkeypatch.setattr(BluetoothManager, "_get_devices", staticmethod(lambda: []))
+    monkeypatch.setattr(extended_views, "current_desktop_windows", lambda: [])
     monkeypatch.setattr(DynamicNotchWindow, "_sync_system_controls", lambda *args, **kwargs: None)
     baseline = set(audit_app.topLevelWidgets())
     yield

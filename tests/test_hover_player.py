@@ -1,11 +1,13 @@
 """Compact media preview layout, playback actions and hover transitions."""
 
 import pytest
-from PySide6.QtCore import Qt, QRect, QPoint
+from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.core.media_manager import MediaManager
 from poppy.ui.theme import LAYOUT_THEMES
+from poppy.ui.settings_window import SettingsWindow
 
 
 def settle(window, app):
@@ -121,3 +123,59 @@ def test_idle_pill_shows_only_clock_before_and_after_a_media_session(audit_app, 
     assert window.state == NotchState.EXPANDED
     assert window.tab_stack.currentWidget() is window.tab_home
     window.close()
+
+
+def test_peek_seeks_and_fixed_color_survives_layout_changes(audit_app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(MediaManager, "seek", lambda self, value: calls.append(value))
+    window = DynamicNotchWindow()
+    window.show()
+    window._on_media_changed({"title": "Track", "position_sec": 25, "duration_sec": 100, "can_seek": True})
+    window._transition_to(NotchState.PEEK)
+    settle(window, audit_app)
+    assert window.peek_seek.value() == 25
+    assert window.lbl_peek_elapsed.text() == "00:25"
+    QTest.mouseClick(window.peek_seek, Qt.MouseButton.LeftButton, pos=QPoint(window.peek_seek.width() // 2, 5))
+    assert 48 <= calls[-1] <= 52
+    assert window.state == NotchState.PEEK
+    for layout, mode in (("Deck", "Dark"), ("Daily", "Light"), ("Console", "Dark")):
+        window._apply_live_appearance({"layout": layout, "mode": mode, "peek_color_source": "fixed", "peek_color": "#244f58"})
+        assert window.grab().toImage().pixelColor(window.width() // 2, 6) == QColor("#244f58")
+        assert "background: #ffffff" in window.btn_peek_play.styleSheet()
+    window.close()
+
+
+def test_collapsed_artwork_resizes_and_notch_flare_matches_the_mask(audit_app):
+    window = DynamicNotchWindow()
+    window.show()
+    artwork = QImage(64, 48, QImage.Format.Format_ARGB32)
+    artwork.fill(QColor("#337799"))
+    encoded = QBuffer()
+    encoded.open(QIODevice.OpenModeFlag.WriteOnly)
+    assert artwork.save(encoded, "PNG")
+    window._on_media_changed({"title": "Track", "thumbnail_bytes": bytes(encoded.data())})
+    sizes = []
+    for width, height in ((180, 24), (340, 44)):
+        window._apply_live_appearance({"collapsed_width": width, "collapsed_height": height})
+        sizes.append(window.coll_thumb.width())
+        pixmap = window.coll_thumb.pixmap()
+        assert pixmap.deviceIndependentSize().width() == window.coll_thumb.width()
+        assert pixmap.toImage().pixelColor(0, 0).alpha() == 0
+        assert window._notch_path().contains(QPointF(8, 1))
+        assert not window._notch_path().contains(QPointF(2, height / 2))
+        assert not window.mask().contains(QPoint(2, height // 2))
+    assert sizes[1] > sizes[0]
+    window.close()
+
+
+def test_settings_round_trip_fixed_hover_color(audit_app, monkeypatch):
+    monkeypatch.setattr("poppy.ui.settings_window.QColorDialog.getColor", lambda *_: QColor("#93beb2"))
+    settings = SettingsWindow({})
+    saved = []
+    settings.settings_saved.connect(saved.append)
+    settings.combo_peek_color.setCurrentIndex(settings.combo_peek_color.findData("fixed"))
+    settings.btn_peek_color.click()
+    assert settings._save_settings()
+    restored = SettingsWindow(saved[-1])
+    assert restored.combo_peek_color.currentData() == "fixed"
+    assert restored.btn_peek_color.text() == "#93BEB2"

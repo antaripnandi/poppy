@@ -46,9 +46,49 @@ LAYOUT_THEMES = {
         "media_columns": (1, 1), "art_size": 128,
         "description": "Compact instrument panels with header strips, numeric readouts and segmented meters.",
     },
+    "Deck": {
+        "radius": 15, "padding": 13, "spacing": 10, "fill": 0.075,
+        "inset": 10, "columns": (4, 5, 5), "home_order": ("clock", "controls", "notes", "shelf"),
+        "media_columns": (3, 2), "art_size": 160,
+        "description": "Icon tabs, tinted modules, and a player with artwork beside the controls.",
+    },
+    "Daily": {
+        "radius": 0, "padding": 9, "spacing": 9, "fill": 0.0,
+        "inset": 18, "columns": (5, 4), "home_order": ("clock", "notes", "controls", "shelf"),
+        "media_columns": (4, 6), "art_size": 148,
+        "description": "A serif agenda with a date masthead, an open scratchpad, and navigation at the bottom.",
+    },
+    "Console": {
+        "radius": 0, "padding": 12, "spacing": 9, "fill": 0.035,
+        "inset": 12, "columns": (2, 4, 3), "home_order": ("clock", "controls", "notes", "shelf"),
+        "media_columns": (5, 4), "art_size": 76,
+        "description": "A compact status panel with monospaced readings, labeled transport and timestamped lyrics.",
+    },
 }
 
 HOME_CARDS = ("clock", "controls", "notes", "shelf")
+DESIGN_PALETTES = {
+    "Deck": (("#202d48", "#2a3857", "#edf3ff", "#b6c7e3", "#aac9ff"),
+             ("#e6eefb", "#f3f7ff", "#202f4d", "#4e6383", "#365fa0")),
+    "Daily": (("#211e1a", "#29241f", "#f3eadd", "#c2b6a2", "#e6a588"),
+              ("#f5f0e5", "#ebe3d4", "#292822", "#665f52", "#a14c35")),
+    "Console": (("#151a16", "#202820", "#edf0e8", "#aeb9aa", "#c7e987"),
+                ("#e9eee5", "#dce6d8", "#202820", "#4d604c", "#42612e")),
+}
+TRACK_LAYOUTS = ("Flat", "Paper", "Instrument", "Deck", "Daily", "Console")
+
+
+def home_slots(name, count, *, wide=True):
+    """Use the same draggable slot order in Settings and on Home."""
+    if count == 4:
+        if name == "Deck" and wide:
+            return ((0, 0, 2, 1), (0, 1, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1))
+        if name == "Daily" and wide:
+            return ((0, 0, 1, 2), (1, 0, 2, 1), (1, 1, 1, 1), (2, 1, 1, 1))
+        if name == "Console" and wide:
+            return ((0, 0, 2, 1), (0, 1, 1, 2), (1, 1, 1, 1), (1, 2, 1, 1))
+    return tuple((i // 2, i % 2, 1, 2 if i == count - 1 and i % 2 == 0 else 1)
+                 for i in range(count))
 
 
 def home_order(name, orders=None):
@@ -99,6 +139,9 @@ def configure_theme(appearance):
 
 
 def surface_colors():
+    design = DESIGN_PALETTES.get(current_layout())
+    if design:
+        return dict(zip(("root", "card", "text", "muted", "accent"), design[is_light_theme()]))
     if is_light_theme():
         return {"root": "#f4f1e9" if current_layout() == "Paper" else "#eef1f5", "card": "#ffffff", "text": "#202833", "muted": "#546274"}
     return {"root": "#111419", "card": "#1b2027", "text": "#edf1f7", "muted": "#9ca8b7"}
@@ -148,34 +191,69 @@ def _light_color(value, role, paper=False):
 
 
 def themed_stylesheet(source):
-    source = _design_stylesheet(source, current_layout())
-    if not is_light_theme():
+    layout = current_layout()
+    source = _design_stylesheet(source, layout)
+    if is_light_theme():
+        source = _light_stylesheet(source, layout in ("Paper", "Daily"))
+    return _direction_stylesheet(source, layout, is_light_theme())
+
+
+@lru_cache(maxsize=1024)
+def _direction_stylesheet(source, layout, light):
+    palette = DESIGN_PALETTES.get(layout)
+    if not palette:
         return source
-    return _light_stylesheet(source, current_layout() == "Paper")
+    _, card, text, muted, _ = palette[light]
+    family = {"Deck": "Segoe UI", "Daily": "Georgia", "Console": "Consolas"}[layout]
+    def adapt(match):
+        selector, body = match.groups()
+        # Icon fonts and explicit per-control overrides remain intact.
+        if selector.strip() in ("*", "QLabel", "QPushButton", "QListWidget", "QComboBox",
+                                 "QTextEdit", "QLineEdit", "QTableWidget", "QDialog, QMessageBox"):
+            if "font-family" not in body or "'Segoe UI'" in body:
+                body = re.sub(r"font-family\s*:[^;]+;", "", body) + f"font-family: '{family}';"
+            if selector.strip() in ("QListWidget", "QTableWidget", "QDialog, QMessageBox"):
+                body = re.sub(r"background(?:-color)?\s*:[^;]+;", "", body) + f"background: {card};"
+        def tint(declaration):
+            role, value = declaration.groups()
+            if role != "color":
+                return declaration.group()
+            color = QColor(value.strip())
+            if not color.isValid() or color.saturation() > 125:
+                return declaration.group()
+            primary = color.lightness() < 70 if light else color.lightness() > 185
+            return f"color: {text if primary else muted}"
+        return selector + "{" + _DECLARATION.sub(tint, body) + "}"
+    return re.sub(r"([^{}]+)\{([^{}]*)\}", adapt, source)
 
 
 @lru_cache(maxsize=1024)
 def _design_stylesheet(source, layout):
     """Adapt native controls without losing their authored state/focus selectors."""
-    if layout not in ("Flat", "Paper", "Instrument"):
+    if layout not in TRACK_LAYOUTS:
         return source
     radius = LAYOUT_THEMES[layout]["radius"]
-    source = re.sub(r"border-radius\s*:\s*[\d.]+px", f"border-radius: {radius}px", source)
+    if layout != "Deck":
+        source = re.sub(r"border-radius\s*:\s*[\d.]+px", f"border-radius: {radius}px", source)
     def control(block):
         selector, body = block.groups()
-        if "QTextEdit" in selector and ":" not in selector and layout in ("Flat", "Paper"):
+        if "QTextEdit" in selector and ":" not in selector and layout in ("Flat", "Paper", "Daily"):
             body = re.sub(r"background(?:-color)?\s*:[^;]+;", "background: transparent;", body)
             body = re.sub(r"border\s*:[^;]+;", "border: none;", body)
         if selector.strip() == "QPushButton":
-            if layout == "Paper":
+            if layout in ("Paper", "Daily"):
                 body = re.sub(r"background(?:-color)?\s*:[^;]+;", "background: transparent;", body)
                 body = re.sub(r"border\s*:[^;]+;", "border: none;", body)
             elif layout == "Instrument":
                 body = re.sub(r"border\s*:[^;]+;", "border: 1px solid rgba(255,255,255,0.18);", body)
         if "QSlider::groove:horizontal" in selector:
-            body = re.sub(r"height\s*:[^;]+;", f"height: {8 if layout == 'Instrument' else 2}px;", body)
+            height = {"Instrument": 8, "Console": 5, "Deck": 4}.get(layout, 2)
+            body = re.sub(r"height\s*:[^;]+;", f"height: {height}px;", body)
         elif "QSlider::handle:horizontal" in selector:
-            body = re.sub(r"width\s*:[^;]+;", f"width: {2 if layout == 'Instrument' else 8}px;", body)
+            width = {"Instrument": 2, "Console": 5, "Deck": 12}.get(layout, 8)
+            body = re.sub(r"width\s*:[^;]+;", f"width: {width}px;", body)
+            if layout == "Deck":
+                body += "border-radius: 6px;"
         return selector + "{" + body + "}"
     source = re.sub(r"([^{}]+)\{([^{}]*)\}", control, source)
     return source

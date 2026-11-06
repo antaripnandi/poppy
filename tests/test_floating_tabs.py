@@ -59,7 +59,7 @@ def test_floating_music_keeps_lyrics_and_notes_survive_round_trip(window, audit_
     dialog = window._floating_windows[0]
     window._switch_to_tab_by_name("Home", animate=False)
     window._on_media_changed({"title": "Next track", "artist": "Another artist"})
-    assert requested[-1] == ("Next track", "Another artist", "")
+    assert requested[-1] == ("Next track", "Another artist", "", 0)
     assert window.tab_music.lbl_title.toolTip() == "Next track"
     dialog.close()
     window._switch_to_tab_by_name("Notes", animate=False)
