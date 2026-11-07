@@ -666,6 +666,7 @@ class HomeTabView(QWidget):
             needed = minimum if self.screentime_widget.isHidden() else grid_height
             viewport_height += min(max(0, needed - viewport_height), max(0, max_height - available_height))
         self.home_scroll.setMinimumHeight(min(minimum, viewport_height))
+        self.body_layout.activate()  # Apply the new content minimum before the scroll area sizes it.
 
     def update_sessions_list(self, sessions, active_index):
         self.btn_player_drop.setVisible(len(sessions) > 1)
