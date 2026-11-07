@@ -135,10 +135,7 @@ def test_open_and_switch_tabs_without_snapping(qapp, monkeypatch):
     assert w.anim.duration() == 410
     assert w._expanded_opacity.opacity() == opacity
     assert w._anim_opacity.state() == QAbstractAnimation.State.Running
-    indicator = w.tab_strip._anim
-    assert indicator.state() == QAbstractAnimation.State.Running
-    indicator.setCurrentTime(indicator.duration())
-    assert w.tab_strip.indicator.geometry() == w.tab_strip.buttons[music_index].geometry()
+    assert [i for i, button in enumerate(w.tab_strip.buttons) if button.isChecked()] == [music_index]
 
 
 def test_drawer_fade_ends_with_geometry_and_cancels_on_close(qapp):
@@ -151,8 +148,10 @@ def test_drawer_fade_ends_with_geometry_and_cancels_on_close(qapp):
     w._anim_opacity.setCurrentTime(10)
     assert w._expanded_opacity.opacity() == 0.0
     mid = w.geometry()
+    outline = w._notch_path()
     w._transition_to(NotchState.COLLAPSED)
     assert w.geometry() == mid
+    assert w._notch_path() == outline
     QTest.qWait(75)
     assert w._anim_opacity.state() == QAbstractAnimation.State.Stopped
     assert not w._expanded_opacity.isEnabled()
@@ -211,7 +210,7 @@ def test_windows_reduced_motion_keeps_controls_functional(qapp, monkeypatch):
     music_index = w._active_tab_names.index("Music")
     w.tab_strip.buttons[music_index].click()
     assert w.tab_stack.currentWidget() is w.tab_music
-    assert w.tab_strip.indicator.geometry() == w.tab_strip.buttons[music_index].geometry()
+    assert w.tab_strip.buttons[music_index].isChecked()
 
 
 def test_settings_window_screentime_page(qapp):

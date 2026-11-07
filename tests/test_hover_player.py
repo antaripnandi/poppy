@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
 from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QMenu, QWidget
 from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.core.brightness_flyout import BrightnessFlyout
 from poppy.core.media_manager import MediaManager
@@ -441,6 +441,23 @@ def test_collapsed_artwork_resizes_and_notch_flare_matches_the_mask(audit_app):
         assert not window._notch_path().contains(QPointF(2, height / 2))
         assert not window.mask().contains(QPoint(2, height // 2))
     assert sizes[1] > sizes[0]
+    window.close()
+
+
+@pytest.mark.parametrize("style", ["Notch", "Pill"])
+def test_window_mask_preserves_antialiased_edges(audit_app, style):
+    window = DynamicNotchWindow({"appearance": {"style": style}})
+    window.show()
+    flags = QWidget.RenderFlag.DrawWindowBackground
+
+    def render(render_flags):
+        image = QImage(window.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        window.render(image, QPoint(), renderFlags=render_flags)
+        return image
+
+    assert render(flags) == render(flags | QWidget.RenderFlag.IgnoreMask)
+    assert not window.mask().contains(QPoint(0, window.height() - 1))
     window.close()
 
 

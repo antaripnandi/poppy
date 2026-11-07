@@ -22,7 +22,7 @@ from PySide6.QtCore import (
     Qt, QRect, QRectF, QSize, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QEvent, Signal
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
+    QPainter, QColor, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
     QShortcut, QKeySequence, QIcon
 )
 from PySide6.QtWidgets import (
@@ -173,6 +173,7 @@ class DynamicNotchWindow(QWidget):
         # State & Animation
         self.state = NotchState.COLLAPSED
         self._target_size = (self._collapsed_w, self._collapsed_h)
+        self._start_corner_radius = 14
         self.anim = QPropertyAnimation(self, b"geometry", self)
         self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.anim.finished.connect(self._on_animation_finished)
@@ -554,7 +555,7 @@ class DynamicNotchWindow(QWidget):
         header_bar.setSpacing(6)
         header_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Smooth Segmented Tab Strip with sliding indicator pill
+        # Direct tab navigation with a text-only selection.
         self._tab_name_to_stack_idx = {
             "Home": 0,
             "Music": 1,
@@ -567,7 +568,7 @@ class DynamicNotchWindow(QWidget):
             "Notes": 8
         }
         self._refresh_tab_names()
-        self.tab_strip = AnimatedTabStrip([(name, "") for name in self._active_tab_names], accent=self._theme["accent"], parent=self)
+        self.tab_strip = AnimatedTabStrip([(name, "") for name in self._active_tab_names], parent=self)
         self.tab_strip.tab_changed.connect(self._switch_tab)
         header_bar.addWidget(self.tab_strip)
         header_bar.addStretch()
@@ -2037,7 +2038,6 @@ class DynamicNotchWindow(QWidget):
             set_widget_style(QApplication.instance(), get_stylesheet(self._theme_name, app_cfg["layout"]))
             accent = self._theme["accent"]
             set_widget_style(self.lbl_coll_pomo, f"color: {accent}; font-size: 11px; font-weight: 600; min-width: 44px;")
-            self.tab_strip.set_accent(accent)
             self.tab_music.set_accent(accent)
             self.tab_timer.set_accent(accent)
             self.tab_calendar.set_accent(accent)
@@ -2303,6 +2303,7 @@ class DynamicNotchWindow(QWidget):
                 self._apply_geometry_for_state(new_state, animate=False)
             return
 
+        start_radius = self._outline_radius()
         self.anim.stop()
         self._peek_presence_timer.stop()
         self._leave_timer.stop()
@@ -2335,7 +2336,7 @@ class DynamicNotchWindow(QWidget):
         if new_state != NotchState.COLLAPSED and self._pill_level_timer.isActive():
             self._pill_level_timer.stop()
             self._dismiss_pill_level()
-        self._apply_geometry_for_state(new_state, animate=animate)
+        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius)
         self.update()
 
         if new_state == NotchState.EXPANDED:
@@ -2421,7 +2422,7 @@ class DynamicNotchWindow(QWidget):
             return 0
         return max(0, self.config.get("notch", {}).get("animation_duration_ms", 200))
 
-    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True):
+    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, *, start_radius: float | None = None):
         self._anim_opacity.stop()
         self._expanded_opacity.setEnabled(False)
         if not animate:
@@ -2430,7 +2431,7 @@ class DynamicNotchWindow(QWidget):
 
         target = self._geometry_for_state(state)
         duration = self._transition_duration() if animate else 0
-        if self._animate_geometry(target, duration) and state == NotchState.EXPANDED:
+        if self._animate_geometry(target, duration, start_radius=start_radius) and state == NotchState.EXPANDED:
             self._anim_opacity.setDuration(duration)
             # Hold content until the drawer has room. Use the same clock length
             # as geometry so the two effects finish together.
@@ -2441,7 +2442,8 @@ class DynamicNotchWindow(QWidget):
             self._expanded_opacity.setEnabled(True)
             self._anim_opacity.start()
 
-    def _animate_geometry(self, target: QRect, duration: int) -> bool:
+    def _animate_geometry(self, target: QRect, duration: int, *, start_radius: float | None = None) -> bool:
+        self._start_corner_radius = self._outline_radius() if start_radius is None else start_radius
         self.anim.stop()
         start = self.geometry()
         if duration <= 0 or start == target:
@@ -2472,11 +2474,22 @@ class DynamicNotchWindow(QWidget):
         self.view_peek.move((self.width() - self.view_peek.width()) // 2, 0)
 
     def _update_clickthrough_mask(self):
-        self.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))
+        region = QRegion(self._notch_path().toFillPolygon().toPolygon())
+        # Allow for polygon rounding and the painter's partially covered pixels.
+        region |= region.translated(-2, 0) | region.translated(2, 0)
+        region |= region.translated(0, -2) | region.translated(0, 2)
+        self.setMask(region.intersected(self.rect()))
+
+    def _outline_radius(self):
+        target = self._corner_radius if self.state == NotchState.EXPANDED else 14
+        if self.anim.state() == QPropertyAnimation.State.Running:
+            progress = self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration())
+            return self._start_corner_radius + (target - self._start_corner_radius) * progress
+        return target
 
     def _notch_path(self):
         w, h = float(self.width()), float(self.height())
-        radius = min(w / 2, h / 2, self._corner_radius if self.state == NotchState.EXPANDED else 14)
+        radius = min(w / 2, h / 2, self._outline_radius())
         path = QPainterPath()
         if self._style == "Notch":
             # Leave room within the window for reverse curves at the bezel.
@@ -2514,7 +2527,6 @@ class DynamicNotchWindow(QWidget):
                 return
         event.ignore()
 
-    # --- Painter Logic: NotchX Theme Surface & Hairline Highlight ---
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -2536,12 +2548,7 @@ class DynamicNotchWindow(QWidget):
         gradient = QLinearGradient(0, 0, self.width() if self.state == NotchState.PEEK else 0, h)
         gradient.setColorAt(0.0, grad_col)
         gradient.setColorAt(1.0, bg_col)
-        painter.setBrush(QBrush(gradient))
-
-        # Quiet hairline rim highlight
-        rim = QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 16)
-        painter.setPen(QPen(rim, 1.0) if self.state == NotchState.EXPANDED else Qt.PenStyle.NoPen)
-        painter.drawPath(path)
+        painter.fillPath(path, QBrush(gradient))
 
     def closeEvent(self, event):
         if self._shutting_down:

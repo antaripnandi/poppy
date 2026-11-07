@@ -206,15 +206,12 @@ class ScrollArea(QScrollArea):
 
 
 class AnimatedTabStrip(QWidget):
-    """
-    Compact text navigation with a short, direct selection transition.
-    """
+    """Compact tab navigation with text-only selection."""
     tab_changed = Signal(int)
 
     def __init__(self, tab_items: list[tuple[str, str]], accent="#0a84ff", parent=None):
         super().__init__(parent)
-        self._accent = accent
-        self._current_index = 0
+        self._current_index = -1
         self.buttons: list[QPushButton] = []
 
         set_widget_style(self, """
@@ -231,30 +228,10 @@ class AnimatedTabStrip(QWidget):
         self._layout.setSpacing(2)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        self.indicator = QWidget(self)
-        self.indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._update_indicator_style()
-
-        self._anim = QPropertyAnimation(self.indicator, b"geometry", self)
-        self._anim.setDuration(150)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._anim.finished.connect(self._sync_indicator)
-
-        for idx, (name, icon) in enumerate(tab_items):
-            label = f"{icon}  {name}" if icon else name
-            btn = QPushButton(label, self)
-            btn.setProperty("tabLabel", label)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(28)
-            btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i, animate=True))
-            self.buttons.append(btn)
-            self._layout.addWidget(btn)
-
-        self._update_buttons_style()
+        self.set_tabs(tab_items)
 
     def set_tabs(self, tab_items: list[tuple[str, str]]):
         """Dynamically replace tabs in the strip without recreating the widget."""
-        self._anim.stop()
         for btn in self.buttons:
             self._layout.removeWidget(btn)
             btn.deleteLater()
@@ -265,53 +242,27 @@ class AnimatedTabStrip(QWidget):
             btn = QPushButton(label, self)
             btn.setProperty("tabLabel", label)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(28)
-            btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i, animate=True))
+            btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda checked=False, i=idx: self.set_current_index(i))
             self.buttons.append(btn)
             self._layout.addWidget(btn)
 
-        self._current_index = 0
+        self._current_index = 0 if self.buttons else -1
         self._update_buttons_style()
-        if self.buttons:
-            self.indicator.show()
-            self._sync_indicator()
-        else:
-            self.indicator.hide()
-
-    def set_accent(self, accent: str):
-        self._accent = accent
-        self._update_indicator_style()
-        self._update_buttons_style()
-
-    def _update_indicator_style(self):
-        name = current_layout()
-        if name in ("Flat", "Daily"):
-            source = "background: transparent; border: none; border-bottom: 2px solid #b5c9bd;"
-        elif name == "Paper":
-            source = "background: transparent; border: none;"
-        elif name in ("Instrument", "Console"):
-            source = ("background: rgba(170,211,115,0.24); border: none;"
-                      if name == "Console" else "background: #343c3b; border: 1px solid #67766e; border-radius: 2px;")
-        elif name == "Deck":
-            source = "background: rgba(118,163,245,0.26); border: 1px solid rgba(163,197,255,0.25); border-radius: 10px;"
-        else:
-            source = "background: #2b2e2f; border: none; border-radius: 8px;"
-        set_widget_style(self.indicator, source)
 
     def apply_design(self):
-        self._update_indicator_style()
         self._update_buttons_style()
 
     def clear_selection(self):
-        self._anim.stop()
         self._current_index = -1
-        self.indicator.hide()
         self._update_buttons_style()
 
     def _update_buttons_style(self):
         name = current_layout()
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
+            btn.setChecked(is_active)
             color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
             font_weight = "600" if is_active else "500"
             btn.setFixedHeight(34 if name == "Deck" else 28)
@@ -353,48 +304,17 @@ class AnimatedTabStrip(QWidget):
         return QIcon(pixmap)
 
     def set_current_index(self, index: int, animate: bool = True, emit_signal: bool = True):
+        """Select a tab, accepting the legacy animate argument."""
         if not (0 <= index < len(self.buttons)):
             return
-        old_idx = self._current_index
-        animate = animate and self.isVisible() and system_animations_enabled()
-        if animate and index == old_idx and self._anim.state() == QPropertyAnimation.State.Running:
-            if emit_signal:
-                self.tab_changed.emit(index)
-            return
-        self._current_index = index
-        self._update_buttons_style()
-        self._layout.activate()
-        target = self.buttons[index].geometry()
-        self.indicator.show()
-        self._anim.stop()
-        if animate and index != old_idx and 0 <= old_idx < len(self.buttons):
-            self._anim.setStartValue(self.indicator.geometry())
-            self._anim.setEndValue(target)
-            self._anim.start()
+        if index != self._current_index:
+            self._current_index = index
+            self._update_buttons_style()
         else:
-            self.indicator.setGeometry(target)
+            self.buttons[index].setChecked(True)
 
         if emit_signal:
             self.tab_changed.emit(index)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self._anim.state() != QPropertyAnimation.State.Running:
-            self._sync_indicator()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._sync_indicator()
-
-    def hideEvent(self, event):
-        self._anim.stop()
-        super().hideEvent(event)
-
-    def _sync_indicator(self):
-        if 0 <= self._current_index < len(self.buttons):
-            self._layout.activate()
-            self.indicator.setGeometry(self.buttons[self._current_index].geometry())
-            self.indicator.lower()
 
 
 # React Bits RubberSegment Component Alias
