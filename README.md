@@ -109,3 +109,7 @@ python -m pytest tests -m live_service --live-services
 For tests or a separate development profile, set `POPPY_DATA_DIR` to a dedicated folder. Legacy data is not imported when this override is set.
 
 Native focus behavior, multi-monitor placement, capture exclusion, and hardware support depend on the target Windows device.
+
+## License
+
+Poppy's source is available under the [MIT License](LICENSE). Bundled third-party components carry their own licenses.

@@ -137,6 +137,7 @@ def main():
 
         bundle = work / "bundle" / "Poppy"
         write_notices(bundle / "Third-party")
+        shutil.copyfile(ROOT / "LICENSE", bundle / "LICENSE")
         shutil.copyfile(ROOT / "README.md", bundle / "README.md")
         sign_file(bundle / "Poppy.exe", args)
         subprocess.run([str(bundle / "Poppy.exe"), "--check-install"], check=True, timeout=30, cwd=work)
