@@ -4,7 +4,7 @@ Tests for Screen Time Manager, Settings integration, and Centered Pop-Out Animat
 
 import pytest
 from PySide6.QtWidgets import QApplication, QLayout
-from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QRect, QEasingCurve
+from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QRect, QEasingCurve
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from poppy.core.screentime_manager import ScreenTimeManager, format_duration
@@ -86,18 +86,21 @@ def test_expand_animation_smooth_center(qapp, tab):
     assert abs(start_center_x - end_center_x) < 1.0
     assert abs(start_center_x - expected_center_x) < 1.0
 
-    # Check intermediate frames during animation
+    # Check the visible outline and the drawer content separately.
+    host = w.geometry()
     duration = w.anim.duration()
     for pct in [0.0, 0.25, 0.5, 0.75, 1.0]:
         t = int(duration * pct)
         w.anim.setCurrentTime(t)
         qapp.processEvents()
-        frame_g = w.geometry()
+        frame_g = w._displayed_geometry()
         requested = w.anim.currentValue()
         assert QLayout.closestAcceptableSize(w, requested.size()) == requested.size()
         assert frame_g.size() == requested.size()
         frame_center = frame_g.x() + frame_g.width() / 2.0
         assert abs(frame_center - expected_center_x) <= 1.0
+        assert w.view_expanded.mapToGlobal(QPoint()) == end_v.topLeft()
+        assert w.geometry() == (host if w.anim.state() == QAbstractAnimation.State.Running else end_v)
 
 
 def test_open_and_switch_tabs_without_snapping(qapp, monkeypatch):
@@ -118,20 +121,23 @@ def test_open_and_switch_tabs_without_snapping(qapp, monkeypatch):
     qapp.processEvents()
     log = ResizeLog()
     w.installEventFilter(log)
+    compact = w.geometry()
     w._transition_to(NotchState.EXPANDED, target_tab="Home")
-    assert log.sizes == []
+    assert log.sizes == [w.geometry().size()]
+    assert w._displayed_geometry() == compact
 
     w.anim.setCurrentTime(90)
     w._anim_opacity.setCurrentTime(90)
-    mid = w.geometry()
+    mid = w._displayed_geometry()
     opacity = w._expanded_opacity.opacity()
     previous_target = w.anim.endValue()
     w._open_w += 60
     music_index = w._active_tab_names.index("Music")
     w.tab_strip.buttons[music_index].click()
     assert w.tab_stack.currentWidget() is w.tab_music
-    assert w.geometry() == mid
+    assert w._displayed_geometry() == mid
     assert w.anim.startValue() == mid and w.anim.endValue() != previous_target
+    assert w.view_expanded.mapToGlobal(QPoint()) == w.anim.endValue().topLeft()
     assert w.anim.duration() == 410
     assert w._expanded_opacity.opacity() == opacity
     assert w._anim_opacity.state() == QAbstractAnimation.State.Running
@@ -147,10 +153,10 @@ def test_drawer_fade_ends_with_geometry_and_cancels_on_close(qapp):
     w.anim.setCurrentTime(10)
     w._anim_opacity.setCurrentTime(10)
     assert w._expanded_opacity.opacity() == 0.0
-    mid = w.geometry()
+    mid = w._displayed_geometry()
     outline = w._notch_path()
     w._transition_to(NotchState.COLLAPSED)
-    assert w.geometry() == mid
+    assert w._displayed_geometry() == mid
     assert w._notch_path() == outline
     QTest.qWait(75)
     assert w._anim_opacity.state() == QAbstractAnimation.State.Stopped

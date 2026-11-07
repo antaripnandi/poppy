@@ -176,6 +176,7 @@ class DynamicNotchWindow(QWidget):
         self.state = NotchState.COLLAPSED
         self._target_size = (self._collapsed_w, self._collapsed_h)
         self._start_corner_radius = 14
+        self._start_outline_center = 0.0
         self._transition_frame: QRect | None = None
         self.anim = QPropertyAnimation(self, b"notchGeometry", self)
         self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -278,8 +279,8 @@ class DynamicNotchWindow(QWidget):
         # 1. Collapsed View: Minimalist Top Pill (pill-v2.png)
         # Symmetrical 3-zone architecture: Left (Media icon) - Center (Time) - Right (Visualizer)
         # =====================================================================
-        self._compact_clip = QWidget(self)
-        self.view_collapsed = QWidget(self._compact_clip)
+        self._surface_clip = QWidget(self)
+        self.view_collapsed = QWidget(self._surface_clip)
         self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
         v_coll_layout.setContentsMargins(20, 0, 20, 0)
@@ -354,7 +355,7 @@ class DynamicNotchWindow(QWidget):
         # =====================================================================
         # 2. Peek View (Hover HUD: Spotify / YouTube Media HUD)
         # =====================================================================
-        self.view_peek = QWidget(self._compact_clip)
+        self.view_peek = QWidget(self._surface_clip)
         self.view_peek.setFixedSize(*self.PEEK_SIZE)
         self.view_peek.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout = QHBoxLayout(self.view_peek)
@@ -532,7 +533,7 @@ class DynamicNotchWindow(QWidget):
         # =====================================================================
         # 3. Expanded View (NotchX Navigation & Full Tabbed Suite)
         # =====================================================================
-        self.view_expanded = QWidget(self)
+        self.view_expanded = QWidget(self._surface_clip)
         self.view_expanded.setFixedSize(self._open_w, self._open_h)
         self.view_expanded.setMinimumSize(0, 0)
         self._expanded_opacity = QGraphicsOpacityEffect(self.view_expanded)
@@ -697,7 +698,6 @@ class DynamicNotchWindow(QWidget):
         for name, _, _, _ in window_tools:
             tools.addWidget(getattr(self, name))
         v_exp_layout.addLayout(tools)
-        self.main_layout.addWidget(self.view_expanded)
         self.view_expanded.setVisible(False)
 
         # Activate initial tab (Home)
@@ -2268,7 +2268,7 @@ class DynamicNotchWindow(QWidget):
             return
 
         cursor_pos = QCursor.pos()
-        if self.geometry().contains(cursor_pos):
+        if self._displayed_geometry().contains(cursor_pos):
             return
 
         # Don't collapse if user is actively dragging a slider
@@ -2316,9 +2316,7 @@ class DynamicNotchWindow(QWidget):
             return
 
         start_radius = self._outline_radius()
-        fixed_host = new_state == NotchState.COLLAPSED or (
-            self.state == NotchState.COLLAPSED and new_state == NotchState.PEEK
-        )
+        start_center = self._outline_bounds().center().x() + self.x()
         self.anim.stop()
         self._peek_presence_timer.stop()
         self._leave_timer.stop()
@@ -2356,7 +2354,7 @@ class DynamicNotchWindow(QWidget):
             self._sync_system_controls()
             self.view_peek.layout().activate()
             self._elide_peek_metadata()
-        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius, fixed_host=fixed_host)
+        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius, start_center=start_center)
         self.update()
 
         if new_state == NotchState.EXPANDED:
@@ -2439,7 +2437,7 @@ class DynamicNotchWindow(QWidget):
         return max(0, self.config.get("notch", {}).get("animation_duration_ms", 200))
 
     def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, *,
-                                  start_radius: float | None = None, fixed_host: bool = False):
+                                  start_radius: float | None = None, start_center: float | None = None):
         self._anim_opacity.stop()
         self._expanded_opacity.setEnabled(False)
         if not animate:
@@ -2448,7 +2446,7 @@ class DynamicNotchWindow(QWidget):
 
         target = self._geometry_for_state(state)
         duration = self._transition_duration() if animate else 0
-        if self._animate_geometry(target, duration, start_radius=start_radius, fixed_host=fixed_host) and state == NotchState.EXPANDED:
+        if self._animate_geometry(target, duration, start_radius=start_radius, start_center=start_center) and state == NotchState.EXPANDED:
             self._anim_opacity.setDuration(duration)
             # Hold content until the drawer has room. Use the same clock length
             # as geometry so the two effects finish together.
@@ -2468,22 +2466,26 @@ class DynamicNotchWindow(QWidget):
         else:
             dirty = self._transition_frame.united(rect).translated(-self.pos())
             self._transition_frame = rect
-            self._position_compact_view()
+            self._position_surface_view()
             self.update(dirty.adjusted(-2, -2, 2, 2))
 
     notchGeometry = Property(QRect, _displayed_geometry, _set_displayed_geometry)
 
     def _animate_geometry(self, target: QRect, duration: int, *,
-                          start_radius: float | None = None, fixed_host: bool = False) -> bool:
+                          start_radius: float | None = None, start_center: float | None = None) -> bool:
         self._start_corner_radius = self._outline_radius() if start_radius is None else start_radius
+        self._start_outline_center = (
+            self._outline_bounds().center().x() + self.x() if start_center is None else start_center
+        )
         self.anim.stop()
         start = self._displayed_geometry()
         if duration <= 0 or start == target:
             self._release_transition_host()
             self.setGeometry(target)
-            self._position_compact_view()
+            self._position_surface_view()
             self._update_clickthrough_mask()
             return False
+        fixed_host = self.state != NotchState.ISLAND
         if not fixed_host:
             self._release_transition_host()
         # Clear the native region while resizing to avoid repeated DWM stalls.
@@ -2492,7 +2494,7 @@ class DynamicNotchWindow(QWidget):
         self.anim.setStartValue(start)
         self.anim.setEndValue(target)
         if fixed_host:
-            # Anchor the incoming compact view while its outline changes size.
+            # Anchor the incoming view while its outline changes size.
             host = self.geometry() if self._transition_frame is not None else start
             self._transition_frame = start
             host = host.united(target)
@@ -2502,16 +2504,16 @@ class DynamicNotchWindow(QWidget):
             screen_x = self._get_current_screen_geometry().x()
             host.setLeft(host.left() - (host.left() - screen_x) % quantum)
             self.setGeometry(host)
-        self._position_compact_view()
+        self._position_surface_view()
         self.anim.start()
         return True
 
     def _release_transition_host(self):
         if self._transition_frame is not None:
             rect, self._transition_frame = self._transition_frame, None
-            self._compact_clip.clearMask()
+            self._surface_clip.clearMask()
             self.setGeometry(rect)
-            self._position_compact_view()
+            self._position_surface_view()
 
     def _on_animation_finished(self):
         self._release_transition_host()
@@ -2519,26 +2521,29 @@ class DynamicNotchWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._position_compact_view()
+        self._position_surface_view()
         # NEVER call SetWindowRgn during a live animation frame
         if self._transition_frame is None and self.anim.state() != QPropertyAnimation.State.Running:
             self._recenter_window()
             self._update_clickthrough_mask()
 
-    def _position_compact_view(self):
-        self._compact_clip.setGeometry(self.rect())
-        if self.state not in (NotchState.PEEK, NotchState.COLLAPSED):
-            self._compact_clip.hide()
+    def _position_surface_view(self):
+        if self.state == NotchState.ISLAND:
+            self._surface_clip.hide()
             return
-        self._compact_clip.show()
-        view = self.view_peek if self.state == NotchState.PEEK else self.view_collapsed
+        self._surface_clip.setGeometry(self.rect())
+        self._surface_clip.show()
+        if self.state == NotchState.EXPANDED:
+            view = self.view_expanded
+        else:
+            view = self.view_peek if self.state == NotchState.PEEK else self.view_collapsed
         if self._transition_frame is None:
             view.move((self.width() - view.width()) // 2, 0)
             return
         anchor = self.anim.endValue().topLeft() - self.geometry().topLeft()
         view.move(anchor)
-        # Clip the parent so the hover fade still paints the card at full size.
-        self._compact_clip.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))
+        # Clip the parent so opacity effects still paint the view at full size.
+        self._surface_clip.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))
 
     def _update_clickthrough_mask(self):
         region = QRegion(self._notch_path().toFillPolygon().toPolygon())
@@ -2557,7 +2562,7 @@ class DynamicNotchWindow(QWidget):
     def _outline_bounds(self) -> QRectF:
         bounds = QRectF(self._displayed_geometry())
         if self._transition_frame is not None and self.anim.state() == QPropertyAnimation.State.Running:
-            start = QRectF(self.anim.startValue()).center().x()
+            start = self._start_outline_center
             end = QRectF(self.anim.endValue()).center().x()
             progress = self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration())
             bounds.moveLeft(start + (end - start) * progress - bounds.width() / 2)

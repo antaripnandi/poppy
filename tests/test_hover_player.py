@@ -452,7 +452,7 @@ def test_collapse_keeps_compact_content_at_its_final_position(audit_app, start_s
         assert window.geometry() == (target if percent == 100 else host)
     assert all(a.width() >= b.width() and a.height() >= b.height() for a, b in zip(frames, frames[1:]))
     assert frames[0] != frames[-1]
-    assert window._compact_clip.mask().isEmpty()
+    assert window._surface_clip.mask().isEmpty()
     assert not window.mask().isEmpty()
     window.close()
 
