@@ -435,6 +435,28 @@ def test_hover_reveal_keeps_window_and_content_centered(audit_app, style):
     window.close()
 
 
+@pytest.mark.parametrize("start_state", [NotchState.EXPANDED, NotchState.ISLAND])
+def test_collapse_keeps_compact_content_at_its_final_position(audit_app, start_state):
+    window = DynamicNotchWindow({"appearance": {"collapsed_width": 203}})
+    window._is_pinned = True
+    window.show()
+    window._transition_to(start_state, animate=False)
+    window._collapse_to_pill()
+    host = window.geometry()
+    target = window.anim.endValue()
+    frames = []
+    for percent in range(0, 101, 5):
+        window.anim.setCurrentTime(round(window.anim.duration() * percent / 100))
+        frames.append(window._displayed_geometry().size())
+        assert window.view_collapsed.mapToGlobal(QPoint()) == target.topLeft()
+        assert window.geometry() == (target if percent == 100 else host)
+    assert all(a.width() >= b.width() and a.height() >= b.height() for a, b in zip(frames, frames[1:]))
+    assert frames[0] != frames[-1]
+    assert window._compact_clip.mask().isEmpty()
+    assert not window.mask().isEmpty()
+    window.close()
+
+
 @pytest.mark.parametrize("surface", ["Home", "Music", "Peek"])
 def test_volume_drag_stops_when_the_mouse_grab_is_lost(audit_app, monkeypatch, surface):
     window = DynamicNotchWindow()

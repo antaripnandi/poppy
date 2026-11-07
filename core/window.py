@@ -176,7 +176,7 @@ class DynamicNotchWindow(QWidget):
         self.state = NotchState.COLLAPSED
         self._target_size = (self._collapsed_w, self._collapsed_h)
         self._start_corner_radius = 14
-        self._hover_frame: QRect | None = None
+        self._transition_frame: QRect | None = None
         self.anim = QPropertyAnimation(self, b"notchGeometry", self)
         self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.anim.finished.connect(self._on_animation_finished)
@@ -2316,7 +2316,9 @@ class DynamicNotchWindow(QWidget):
             return
 
         start_radius = self._outline_radius()
-        fixed_host = {self.state, new_state} == {NotchState.COLLAPSED, NotchState.PEEK}
+        fixed_host = new_state == NotchState.COLLAPSED or (
+            self.state == NotchState.COLLAPSED and new_state == NotchState.PEEK
+        )
         self.anim.stop()
         self._peek_presence_timer.stop()
         self._leave_timer.stop()
@@ -2458,15 +2460,16 @@ class DynamicNotchWindow(QWidget):
             self._anim_opacity.start()
 
     def _displayed_geometry(self) -> QRect:
-        return self.geometry() if self._hover_frame is None else self._hover_frame
+        return self.geometry() if self._transition_frame is None else self._transition_frame
 
     def _set_displayed_geometry(self, rect: QRect):
-        if self._hover_frame is None:
+        if self._transition_frame is None:
             self.setGeometry(rect)
         else:
-            self._hover_frame = rect
+            dirty = self._transition_frame.united(rect).translated(-self.pos())
+            self._transition_frame = rect
             self._position_compact_view()
-            self.update()
+            self.update(dirty.adjusted(-2, -2, 2, 2))
 
     notchGeometry = Property(QRect, _displayed_geometry, _set_displayed_geometry)
 
@@ -2476,22 +2479,22 @@ class DynamicNotchWindow(QWidget):
         self.anim.stop()
         start = self._displayed_geometry()
         if duration <= 0 or start == target:
-            self._release_hover_host()
+            self._release_transition_host()
             self.setGeometry(target)
             self._position_compact_view()
             self._update_clickthrough_mask()
             return False
         if not fixed_host:
-            self._release_hover_host()
+            self._release_transition_host()
         # Clear the native region while resizing to avoid repeated DWM stalls.
         self.clearMask()
         self.anim.setDuration(duration)
         self.anim.setStartValue(start)
         self.anim.setEndValue(target)
         if fixed_host:
-            # Keep the Windows surface and content origin fixed during hover.
-            host = self.geometry() if self._hover_frame is not None else start
-            self._hover_frame = start
+            # Anchor the incoming compact view while its outline changes size.
+            host = self.geometry() if self._transition_frame is not None else start
+            self._transition_frame = start
             host = host.united(target)
             # Start on a whole physical pixel so Qt's child and window
             # coordinates round the same way when the surface is released.
@@ -2503,22 +2506,22 @@ class DynamicNotchWindow(QWidget):
         self.anim.start()
         return True
 
-    def _release_hover_host(self):
-        if self._hover_frame is not None:
-            rect, self._hover_frame = self._hover_frame, None
+    def _release_transition_host(self):
+        if self._transition_frame is not None:
+            rect, self._transition_frame = self._transition_frame, None
             self._compact_clip.clearMask()
             self.setGeometry(rect)
             self._position_compact_view()
 
     def _on_animation_finished(self):
-        self._release_hover_host()
+        self._release_transition_host()
         self._update_clickthrough_mask()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_compact_view()
         # NEVER call SetWindowRgn during a live animation frame
-        if self._hover_frame is None and self.anim.state() != QPropertyAnimation.State.Running:
+        if self._transition_frame is None and self.anim.state() != QPropertyAnimation.State.Running:
             self._recenter_window()
             self._update_clickthrough_mask()
 
@@ -2529,7 +2532,7 @@ class DynamicNotchWindow(QWidget):
             return
         self._compact_clip.show()
         view = self.view_peek if self.state == NotchState.PEEK else self.view_collapsed
-        if self._hover_frame is None:
+        if self._transition_frame is None:
             view.move((self.width() - view.width()) // 2, 0)
             return
         anchor = self.anim.endValue().topLeft() - self.geometry().topLeft()
@@ -2553,7 +2556,7 @@ class DynamicNotchWindow(QWidget):
 
     def _outline_bounds(self) -> QRectF:
         bounds = QRectF(self._displayed_geometry())
-        if self._hover_frame is not None and self.anim.state() == QPropertyAnimation.State.Running:
+        if self._transition_frame is not None and self.anim.state() == QPropertyAnimation.State.Running:
             start = QRectF(self.anim.startValue()).center().x()
             end = QRectF(self.anim.endValue()).center().x()
             progress = self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration())
@@ -2603,7 +2606,7 @@ class DynamicNotchWindow(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        if self._hover_frame is not None:
+        if self._transition_frame is not None:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
             painter.fillRect(event.rect(), Qt.GlobalColor.transparent)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
