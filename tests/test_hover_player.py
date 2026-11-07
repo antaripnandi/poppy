@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent, QWheel
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMenu
 from poppy.core.window import DynamicNotchWindow, NotchState
+from poppy.core.brightness_flyout import BrightnessFlyout
 from poppy.core.media_manager import MediaManager
 from poppy.ui.theme import LAYOUT_THEMES
 from poppy.ui.settings_window import SettingsWindow
@@ -16,6 +17,43 @@ def settle(window, app):
     if window._peek_fade.state() == window._peek_fade.State.Running:
         window._peek_fade.setCurrentTime(window._peek_fade.duration())
     app.processEvents()
+
+
+@pytest.mark.parametrize("window_first", [False, True])
+def test_native_brightness_replaces_only_a_matching_shell_flyout(monkeypatch, window_first):
+    from poppy.core import brightness_flyout as module
+
+    shown = []
+    hidden = []
+    now = 100.0
+    compact = True
+    flyout = BrightnessFlyout(lambda: compact, lambda old, value: shown.append((old, value)))
+    monkeypatch.setattr(module, "monotonic", lambda: now)
+    monkeypatch.setattr(flyout, "_is_shell_indicator", lambda hwnd: hwnd == 42)
+    monkeypatch.setattr(flyout, "_hide_indicator", lambda hwnd: hidden.append(hwnd) or True)
+    flyout._record_level(70)
+    flyout._window_shown(None, None, 41, 0, 0, 0, 0)
+    if window_first:
+        flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+        assert not hidden
+        now += 0.05
+        flyout._record_level(60)
+    else:
+        flyout._record_level(60)
+        assert not shown
+        now += 0.05
+        flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+    assert hidden == [42] and shown == [(70, 60)]
+    now += 0.15
+    flyout._record_level(50)
+    assert shown[-1] == (60, 50)
+    compact = False
+    flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+    assert hidden == [42]
+    compact = True
+    now += 2
+    flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+    assert hidden == [42]
 
 
 def test_level_gestures_retarget_the_pill_and_restore_the_clock(audit_app, monkeypatch):

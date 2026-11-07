@@ -53,6 +53,7 @@ from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
+from poppy.core.brightness_flyout import BrightnessFlyout
 from poppy.core.system_features import (
     PrivacyMonitor, ScreenCaptureShield, BluetoothManager,
     ClipboardHistoryManager, AudioEndpointManager, AppLauncherIndexer, clipboard_allows_history
@@ -114,6 +115,7 @@ class DynamicNotchWindow(QWidget):
         self._current_media = {}
         self._has_media = False
         self._level_hotkeys = set()
+        self._brightness_flyout = None
         self._brightness_level = None
         self._pending_brightness_step = 0
         self._animate_levels = True
@@ -950,9 +952,12 @@ class DynamicNotchWindow(QWidget):
         for key in self.VOLUME_KEYS:
             if key not in self._level_hotkeys and user32.RegisterHotKey(hwnd, key, 0, key):
                 self._level_hotkeys.add(key)
+        if self._brightness_flyout is None:
+            self._brightness_flyout = BrightnessFlyout(self._can_show_pill_level, self._show_native_brightness)
+            self._brightness_flyout.start(hwnd)
 
     def nativeEvent(self, event_type, message):
-        if self._level_hotkeys and event_type == b"windows_generic_MSG":
+        if event_type == b"windows_generic_MSG" and (self._level_hotkeys or self._brightness_flyout):
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == 0x0312 and msg.wParam in self._level_hotkeys:  # WM_HOTKEY
                 if msg.wParam == 0xAD:
@@ -960,13 +965,24 @@ class DynamicNotchWindow(QWidget):
                 else:
                     self._step_volume(2 if msg.wParam == 0xAF else -2)
                 return True, 0
+            if msg.message == 0x218 and msg.wParam == 0x8013 and self._brightness_flyout:  # WM_POWERBROADCAST
+                if self._brightness_flyout.power_setting_changed(msg.lParam):
+                    return True, 1
         return super().nativeEvent(event_type, message)
 
+    def _can_show_pill_level(self):
+        return self.isVisible() and (self.state == NotchState.COLLAPSED or
+                                    (self.state == NotchState.PEEK and QApplication.activePopupWidget() is None))
+
+    def _show_native_brightness(self, previous, value):
+        self._brightness_level = value
+        self._show_pill_level("Brightness", Icons.BRIGHTNESS, previous, value)
+
     def _show_pill_level(self, name, icon, previous, value, *, muted=False):
-        if self.state == NotchState.PEEK and QApplication.activePopupWidget() is None:
-            self._transition_to(NotchState.COLLAPSED)
-        if self.state != NotchState.COLLAPSED or not self.isVisible():
+        if not self._can_show_pill_level():
             return
+        if self.state == NotchState.PEEK:
+            self._transition_to(NotchState.COLLAPSED)
         self._hover_peek_timer.stop()
         self._update_pill_level_ink()
         duration = min(120, self.config.get("notch", {}).get("animation_duration_ms", 200)) if self._animate_levels else 0
@@ -2556,6 +2572,9 @@ class DynamicNotchWindow(QWidget):
                 event.ignore()
                 return
         self._shutting_down = True
+        if self._brightness_flyout:
+            self._brightness_flyout.close()
+            self._brightness_flyout = None
         if self._level_hotkeys:
             hwnd = wintypes.HWND(int(self.winId()))
             for key in self._level_hotkeys:
