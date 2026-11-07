@@ -19,9 +19,10 @@ from poppy.ui.styles import (
     THEME_PRESETS, DEFAULT_THEME, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT,
     APPEARANCE_LAYOUT_VERSION, normalize_appearance,
 )
+from poppy.core import APP_VERSION
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
-from poppy.core.storage import data_path, write_json, spotify_cookie, protect_spotify_cookie
+from poppy.core.storage import data_dir, data_path, write_json, spotify_cookie, protect_spotify_cookie
 
 
 class OrderCard(CardFrame):
@@ -283,6 +284,7 @@ class SettingsWindow(QWidget):
     settings_saved = Signal(dict)
     appearance_live_updated = Signal(dict)
     screentime_reset_requested = Signal()
+    update_check_requested = Signal()
 
     def __init__(self, config: dict = None, parent=None):
         super().__init__(parent)
@@ -911,13 +913,13 @@ class SettingsWindow(QWidget):
 
         lbl_weath_hdr = QLabel("Weather")
         set_widget_style(lbl_weath_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
-        lbl_weath_sub = QLabel("Powered by Open-Meteo public forecast. Auto-detects via IP or specify any city.")
+        lbl_weath_sub = QLabel("Weather stays off until you choose a location.")
         set_widget_style(lbl_weath_sub, "font-size: 12px; color: #9ca3a5;")
         l_weath.addWidget(lbl_weath_hdr)
         l_weath.addWidget(lbl_weath_sub)
 
         self.txt_weather_city = QLineEdit()
-        self.txt_weather_city.setPlaceholderText("Auto-detect or type city (e.g. London, Tokyo, Delhi)")
+        self.txt_weather_city.setPlaceholderText("City or Auto-detect")
         self.txt_weather_city.setFixedWidth(220)
 
         self.combo_weather_unit = QComboBox()
@@ -925,7 +927,7 @@ class SettingsWindow(QWidget):
         self.combo_weather_unit.setFixedWidth(140)
 
         card_weath = _create_setting_card([
-            SettingRow("City / Location", "Auto-detect by IP or specify custom city", self.txt_weather_city),
+            SettingRow("Location", "Enter a city or type Auto-detect to look up your IP location", self.txt_weather_city),
             SettingRow("Temperature Unit", "Display temperatures in Celsius or Fahrenheit", self.combo_weather_unit)
         ])
         l_weath.addWidget(card_weath)
@@ -1044,7 +1046,7 @@ class SettingsWindow(QWidget):
 
         lbl_abt_hdr = QLabel("Poppy")
         set_widget_style(lbl_abt_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
-        lbl_abt_ver = QLabel("Windows 10 and 11")
+        lbl_abt_ver = QLabel(f"Version {APP_VERSION} · Windows 10 and 11")
         set_widget_style(lbl_abt_ver, "font-size: 12px; color: #9ca3a5;")
         lbl_abt_desc = QLabel("A small desktop panel for music, files, notes and focus.\n")
         set_widget_style(lbl_abt_desc, "font-size: 12px; color: #939a9c; ")
@@ -1087,10 +1089,18 @@ class SettingsWindow(QWidget):
             }
         """)
         btn_open_folder.clicked.connect(self._open_poppy_folder)
+        btn_open_data = QPushButton("Open data folder")
+        btn_open_data.clicked.connect(self._open_data_folder)
+        btn_updates = QPushButton("Check for updates")
+        btn_updates.clicked.connect(self.update_check_requested)
+        self.chk_update_notifications = ToggleSwitch(checked=True)
 
         card_abt = _create_setting_card([
             SettingRow("Configuration", "Open config.json directly in your default editor", btn_open_cfg),
-            SettingRow("App folder", "Browse Poppy installation and assets directory", btn_open_folder)
+            SettingRow("App folder", "Browse the Poppy installation", btn_open_folder),
+            SettingRow("User data", "Open the local folder for settings, notes and history", btn_open_data),
+            SettingRow("Updates", "Check GitHub for a newer installer", btn_updates),
+            SettingRow("Update notifications", "Check daily when running the installed app", self.chk_update_notifications),
         ])
         l_abt.addWidget(card_abt)
         l_abt.addStretch()
@@ -1169,11 +1179,19 @@ class SettingsWindow(QWidget):
             pass
 
     def _open_poppy_folder(self):
-        folder_path = Path(__file__).resolve().parent.parent
+        folder_path = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
         try:
             os.startfile(str(folder_path))
         except Exception:
             pass
+
+    def _open_data_folder(self):
+        folder = data_dir()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))
+        except OSError as error:
+            QMessageBox.warning(self, "Could not open user data", str(error))
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.Wheel and isinstance(watched, (QSlider, QSpinBox, QComboBox, ValueEdit)):
@@ -1306,6 +1324,7 @@ class SettingsWindow(QWidget):
         self._update_layout_preview()
 
     def _load_control_values(self):
+        self.chk_update_notifications.setChecked(self.config.get("updates", {}).get("automatic", True), animate=False)
         self.chk_clipboard_history.setChecked(self.config.get("clipboard", {}).get("enabled", False), animate=False)
         self.chk_capture_images.setChecked(self.config.get("capture", {}).get("enabled", False), animate=False)
         # 0. Appearance
@@ -1406,7 +1425,7 @@ class SettingsWindow(QWidget):
 
         # 6. Weather
         w_cfg = self.config.get("weather", {})
-        self.txt_weather_city.setText(w_cfg.get("city", "Auto-detect"))
+        self.txt_weather_city.setText(str(w_cfg.get("city") or ""))
         u_idx = 1 if w_cfg.get("unit", "celsius").lower() == "fahrenheit" else 0
         self.combo_weather_unit.setCurrentIndex(u_idx)
 
@@ -1448,11 +1467,12 @@ class SettingsWindow(QWidget):
             saved_dtab = sel_dtab_txt
 
         unit_str = "fahrenheit" if self.combo_weather_unit.currentIndex() == 1 else "celsius"
-        city_str = self.txt_weather_city.text().strip() or "Auto-detect"
+        city_str = self.txt_weather_city.text().strip()
 
         new_config = {
             "clipboard": {"enabled": self.chk_clipboard_history.isChecked()},
             "capture": {"enabled": self.chk_capture_images.isChecked()},
+            "updates": {"automatic": self.chk_update_notifications.isChecked()},
             "appearance": {
                 **self._appearance_values(),
                 "hidden_home_sections": [key for key, checkbox in self._home_section_checks.items()

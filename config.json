@@ -36,7 +36,7 @@
     "preview_text": true
   },
   "screentime": {
-    "enabled": true,
+    "enabled": false,
     "show_in_main_menu": true,
     "track_apps": true,
     "idle_threshold_seconds": 120,
@@ -55,8 +55,17 @@
     "background": "theme",
     "show_player_tiles": true
   },
+  "clipboard": {
+    "enabled": false
+  },
+  "capture": {
+    "enabled": false
+  },
+  "updates": {
+    "automatic": true
+  },
   "weather": {
-    "city": "chennai",
+    "city": "",
     "unit": "celsius"
   },
   "pomodoro": {

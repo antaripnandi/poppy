@@ -8,8 +8,8 @@ import winsound
 import threading
 import math
 from enum import Enum
-from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, Signal
+from poppy.core.storage import resource_path
 
 
 class PomoState(Enum):
@@ -186,7 +186,7 @@ class PomodoroManager(QObject):
 
         def _sound_worker():
             try:
-                sound_path = Path(__file__).resolve().parent.parent / "assets" / "sounds" / "chime.wav"
+                sound_path = resource_path("assets/sounds/chime.wav")
                 if sound_path.exists():
                     winsound.PlaySound(str(sound_path), winsound.SND_ASYNC | winsound.SND_FILENAME)
                     return

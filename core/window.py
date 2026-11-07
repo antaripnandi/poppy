@@ -109,6 +109,7 @@ class DynamicNotchWindow(QWidget):
     message_requested = Signal(str, str)
     quit_requested = Signal()
     settings_applied = Signal()
+    update_check_requested = Signal()
 
     def __init__(self, config: dict = None):
         super().__init__()
@@ -1949,6 +1950,7 @@ class DynamicNotchWindow(QWidget):
             self._settings_window.settings_saved.connect(self._on_settings_saved)
             self._settings_window.appearance_live_updated.connect(self._apply_live_appearance)
             self._settings_window.screentime_reset_requested.connect(self.screentime.reset_today)
+            self._settings_window.update_check_requested.connect(self.update_check_requested)
 
         # Keep the dialog and Done button inside the usable monitor area.
         screen = self._get_current_screen_geometry()

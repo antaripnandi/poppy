@@ -285,7 +285,8 @@ class BluetoothManager(QObject):
                     ('hRadio', wintypes.HANDLE)
                 ]
 
-            bth = ctypes.windll.LoadLibrary('bthprops.cpl')
+            bluetooth_api = Path(os.environ["SystemRoot"]) / "System32" / "bthprops.cpl"
+            bth = ctypes.WinDLL(str(bluetooth_api))
             bth.BluetoothFindFirstDevice.argtypes = [ctypes.POINTER(BLUETOOTH_DEVICE_SEARCH_PARAMS), ctypes.POINTER(BLUETOOTH_DEVICE_INFO)]
             bth.BluetoothFindFirstDevice.restype = wintypes.HANDLE
 
@@ -638,8 +639,7 @@ def set_autostart_state(enable: bool) -> bool:
         if enable:
             exe_path = sys.executable
             main_py = Path(__file__).resolve().parent.parent / "main.py"
-            # Use pythonw if available or regular python
-            cmd = f'"{exe_path}" "{main_py}"'
+            cmd = f'"{exe_path}"' if getattr(sys, "frozen", False) else f'"{exe_path}" "{main_py}"'
             winreg.SetValueEx(key, "Poppy", 0, winreg.REG_SZ, cmd)
         else:
             try:

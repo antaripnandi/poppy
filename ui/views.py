@@ -782,7 +782,10 @@ class HomeTabView(QWidget):
         hum = data.get("humidity", 0)
 
         self.lbl_weather_text.setText(text)
-        self.lbl_weather_text.setToolTip(f"{city}\n{temp}°C · {cond}\nHigh: {h}°C · Low: {l}°C\nHumidity: {hum}%\n(Click to Refresh)")
+        self.lbl_weather_text.setToolTip(
+            f"{city}\n{temp}°C · {cond}\nHigh: {h}°C · Low: {l}°C\nHumidity: {hum}%\n(Click to Refresh)"
+            if city else text
+        )
 
 class MusicTabView(QWidget):
     """Desktop media player and lyrics columns with real session switching."""

@@ -4,7 +4,15 @@ A Windows 10/11 desktop utility built with Python 3.11 and PySide6. Inspired by 
 
 The top-edge pill opens a drawer with media controls, a focus timer, a file shelf, and notes. Home is the front dashboard: time, music, CPU/GPU/RAM usage, battery, notes and the shelf. Every enabled tool has a directly visible tab.
 
-## Run
+## Install
+
+Run `Poppy-Setup-0.1.0-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+
+Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
+
+Installed Poppy checks GitHub after startup and daily while it runs. Use **Settings > About** or the tray menu to check manually. You can turn off scheduled checks in About. When a newer stable installer is available, you can open its release page and install it yourself.
+
+### Run from source
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -59,11 +67,32 @@ The drawer starts at 1120 × 500 logical pixels. Earlier default sizes migrate a
 
 Settings, notes, clipboard history, screen-time data, shelf state, lyrics cache, and new captures live in `%LOCALAPPDATA%\Poppy`. Existing files in `~/.poppy` are copied on first use without removing the originals. The checkout's `config.json` supplies initial settings when no user settings exist. Existing shelf items continue referencing their original paths.
 
-Clipboard text recording and automatic image staging are **off by default**. Enable them explicitly in **Settings > Tools**. Recording respects Windows clipboard-history exclusion formats. Captures and clipboard history are stored locally without encryption. Screenshot alerts follow **Settings > Notifications**, including the preview and focus settings.
+Use **Settings > About > Open data folder** to find your profile. Exit Poppy before copying the folder for backup or restoring it. Shelf entries referencing external files require those files at their original paths. The optional Spotify credential is tied to its Windows account and may need to be entered again on another computer.
+
+Fresh profiles leave clipboard text recording, automatic image staging, and screen-time tracking off. Enable the first two in **Settings > Tools** or enable tracking in **Settings > Screen Time**. Recording respects Windows clipboard-history exclusion formats. Captures, notes, and history are stored locally with your Windows profile permissions. They have no extra application-level encryption. Screenshot alerts follow **Settings > Notifications**, including the preview and focus settings.
 
 Clearing the shelf removes its entries, not the original files. Capture cleanup preserves files still staged on the shelf. Floating notes save on close and are restored after exiting Poppy with them open. Save failures leave note content available and display an error.
 
-Weather and lyrics providers receive location or track queries when those features are used. Windows Data Protection encrypts the optional Spotify lyrics cookie in the active settings file for the current Windows account. Discord presence is optional.
+Weather stays off until you choose a city or explicitly enter **Auto-detect** in Settings. Weather uses HTTPS, and Auto-detect sends a request to an IP location provider. Lyrics providers receive track queries while lyrics are in use. Windows Data Protection encrypts the optional Spotify lyrics cookie in the active settings file for the current Windows account. Poppy sends Spotify credentials only on the original authenticated requests. Discord presence is optional.
+
+## Build the installer
+
+Use Windows x64, 64-bit Python 3.11, and Inno Setup 7.
+
+```powershell
+python -m venv build\release-env
+.\build\release-env\Scripts\python.exe -m pip install --only-binary=:all: -r packaging\requirements.txt
+.\build\release-env\Scripts\python.exe packaging\build.py --iscc "C:\Path\To\Inno Setup 7\ISCC.exe"
+```
+
+The build stages application code, default settings, branding, and sound assets. It verifies the frozen runtime before compiling the installer and writes the setup file and its SHA-256 checksum to `dist`. The installer includes a runtime version inventory and available third-party license notices. To sign both executables before generating the checksum, supply `--signtool`, `--signer-thumbprint`, and `--timestamp-url`. The signing key stays in your Windows certificate store or its configured provider.
+
+### Publish an update
+
+1. Update `APP_VERSION` in `core/__init__.py`, run the tests, and build from the commit you intend to tag. Use a Git tag such as `v0.1.1` that matches the app version. [Semantic Versioning](https://semver.org/)
+2. Sign the app and installer with your publisher certificate and an RFC 3161 timestamp. Generate the installer checksum after signing it. [Microsoft signing and timestamps](https://learn.microsoft.com/windows/win32/seccrypto/time-stamping-authenticode-signatures)
+3. Test a clean install, an upgrade with an existing profile, and uninstall. Create a GitHub release draft for the tag, add release notes, and attach the matching `Poppy-Setup-<version>-x64.exe` and `.exe.sha256` files before publishing. Use a prerelease for test builds. [GitHub releases](https://docs.github.com/repositories/releasing-projects-on-github/managing-releases-in-a-repository)
+4. For automatic installation, use a signed package with a managed update channel such as Microsoft Store or MSIX App Installer, or design an updater that verifies signed metadata and artifacts before installing. Test interrupted updates, failed verification, and recovery before enabling it. [MSIX update settings](https://learn.microsoft.com/windows/msix/app-installer/update-settings) · [The Update Framework](https://theupdateframework.io/)
 
 ## Tests
 
@@ -79,4 +108,4 @@ python -m pytest tests -m live_service --live-services
 
 For tests or a separate development profile, set `POPPY_DATA_DIR` to a dedicated folder. Legacy data is not imported when this override is set.
 
-Native focus behavior, multi-monitor placement, capture exclusion, and hardware support still need testing on the target Windows device. The current source does not provide a verified standalone executable build.
+Native focus behavior, multi-monitor placement, capture exclusion, and hardware support depend on the target Windows device.

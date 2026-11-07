@@ -45,8 +45,11 @@ class WeatherManager(QObject):
 
     def _worker(self):
         wcfg = self.config.get("weather", {}) if self.config else {}
-        target_city = wcfg.get("city", "Auto-detect").strip()
+        target_city = str(wcfg.get("city") or "").strip()
         unit = wcfg.get("unit", "celsius").lower()
+        if not target_city:
+            self.weather_updated.emit({"display_text": "Set a weather location in Settings"})
+            return
 
         city = "Local"
         region = ""
@@ -54,7 +57,7 @@ class WeatherManager(QObject):
         lat, lon = None, None
 
         # 1a. If user supplied a specific city, geocode with Open-Meteo
-        if target_city and target_city.lower() != "auto-detect":
+        if target_city.lower() != "auto-detect":
             try:
                 enc_city = urllib.parse.quote(target_city)
                 geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={enc_city}&count=1"
@@ -72,10 +75,9 @@ class WeatherManager(QObject):
             except Exception:
                 pass
 
-        # 1b. Geolocation lookup fallback (IP-based)
-        if lat is None or lon is None:
+        # IP-based lookup is only used when the user chooses it.
+        else:
             geo_services = [
-                ("http://ip-api.com/json/", lambda d: (d.get("city", "Local"), d.get("regionName", ""), d.get("country", ""), d.get("lat"), d.get("lon")) if d.get("status") == "success" else None),
                 ("https://get.geojs.io/v1/ip/geo.json", lambda d: (d.get("city", "Local"), d.get("region", ""), d.get("country", ""), float(d.get("latitude")), float(d.get("longitude"))) if d.get("latitude") else None),
                 ("https://ipapi.co/json/", lambda d: (d.get("city", "Local"), d.get("region", ""), d.get("country_name", ""), float(d.get("latitude")), float(d.get("longitude"))) if d.get("latitude") else None),
             ]
@@ -93,7 +95,8 @@ class WeatherManager(QObject):
                     continue
 
         if lat is None or lon is None:
-            lat, lon = 13.08, 80.27  # Default if offline
+            self.weather_updated.emit({"display_text": "Weather location unavailable"})
+            return
 
         # 2. Open-Meteo Weather API
         temp_unit_param = "&temperature_unit=fahrenheit" if unit == "fahrenheit" else ""
@@ -137,8 +140,7 @@ class WeatherManager(QObject):
                 self._cached_data = data
                 self.weather_updated.emit(data)
         except Exception:
-            if self._cached_data:
-                self.weather_updated.emit(self._cached_data)
+            self.weather_updated.emit(self._cached_data or {"display_text": "Weather unavailable"})
 
     def _map_wmo_code(self, code: int, is_day: bool) -> tuple[str, str]:
         """Maps WMO Weather Codes to human text and Segoe Fluent glyphs."""

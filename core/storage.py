@@ -8,6 +8,10 @@ from pathlib import Path
 from PySide6.QtCore import QIODevice, QSaveFile
 
 
+def resource_path(name: str) -> Path:
+    return Path(__file__).resolve().parent.parent / name
+
+
 def data_dir() -> Path:
     override = os.environ.get("POPPY_DATA_DIR")
     if override:

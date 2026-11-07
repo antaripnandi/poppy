@@ -331,9 +331,9 @@ class LyricsManager(QObject):
             token_url = "https://open.spotify.com/get_access_token?reason=transport&productType=web-player"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Cookie": f"sp_dc={sp_dc.strip()}"
             }
             req = urllib.request.Request(token_url, headers=headers)
+            req.add_unredirected_header("Cookie", f"sp_dc={sp_dc.strip()}")
             with self._urlopen(req, timeout=4) as res:
                 tdata = json.loads(res.read().decode("utf-8"))
                 token = tdata.get("accessToken")
@@ -347,9 +347,9 @@ class LyricsManager(QObject):
             q = urllib.parse.quote(f"{clean_title} {clean_artist}")
             s_url = f"https://api.spotify.com/v1/search?q={q}&type=track&limit=1"
             s_req = urllib.request.Request(s_url, headers={
-                "Authorization": f"Bearer {token}",
                 "User-Agent": headers["User-Agent"]
             })
+            s_req.add_unredirected_header("Authorization", f"Bearer {token}")
             with self._urlopen(s_req, timeout=4) as s_res:
                 s_data = json.loads(s_res.read().decode("utf-8"))
                 items = s_data.get("tracks", {}).get("items", [])
@@ -360,10 +360,10 @@ class LyricsManager(QObject):
             # 3. Query Color Lyrics
             lyr_url = f"https://spclient.wg.spotify.com/color-lyrics/v2/track/{track_id}?format=json&vocalRemoval=false"
             lyr_req = urllib.request.Request(lyr_url, headers={
-                "Authorization": f"Bearer {token}",
                 "App-Platform": "WebPlayer",
                 "User-Agent": headers["User-Agent"]
             })
+            lyr_req.add_unredirected_header("Authorization", f"Bearer {token}")
             with self._urlopen(lyr_req, timeout=4) as lyr_res:
                 lyr_data = json.loads(lyr_res.read().decode("utf-8"))
                 lines_data = lyr_data.get("lyrics", {}).get("lines", [])
