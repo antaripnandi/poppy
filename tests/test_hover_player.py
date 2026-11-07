@@ -2,8 +2,8 @@
 
 import pytest
 from types import SimpleNamespace
-from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
-from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent, QWheelEvent
+from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice, QEvent
+from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMenu, QWidget
 from poppy.core.window import DynamicNotchWindow, NotchState
@@ -108,13 +108,17 @@ def test_level_gestures_retarget_the_pill_and_restore_the_clock(audit_app, monke
     center = QPointF(window.rect().center())
     pointer = QPointF(window.geometry().center())
 
-    def scroll(delta, modifiers=Qt.KeyboardModifier.NoModifier):
+    def scroll(delta, modifiers=Qt.KeyboardModifier.NoModifier, phase=Qt.ScrollPhase.NoScrollPhase):
         event = QWheelEvent(center, pointer, QPoint(), QPoint(0, delta),
-                            Qt.MouseButton.NoButton, modifiers, Qt.ScrollPhase.NoScrollPhase, False)
+                            Qt.MouseButton.NoButton, modifiers, phase, False)
         audit_app.sendEvent(window, event)
         assert event.isAccepted()
 
-    scroll(120)
+    for _ in range(7):
+        scroll(15)
+    scroll(120, phase=Qt.ScrollPhase.ScrollMomentum)
+    assert volume == [46]
+    scroll(15)
     assert volume[-1] == 48
     assert window.pill_level.isVisible() and not window.lbl_clock.isVisible()
     assert window.pill_level.accessibleDescription() == "48%"
@@ -408,16 +412,57 @@ def test_hover_reveal_keeps_window_and_content_centered(audit_app, style):
     window = DynamicNotchWindow({"appearance": {"style": style, "collapsed_width": 239}})
     window.show()
     window._on_media_changed({"title": "Track"})
-    center = window.x() + window.width() / 2
-    window._transition_to(NotchState.PEEK)
-    widths = []
-    for fraction in (0, 0.15, 0.35, 0.6, 1):
-        window.anim.setCurrentTime(round(window.anim.duration() * fraction))
-        audit_app.processEvents()
-        widths.append(window.width())
-        assert abs(window.x() + window.width() / 2 - center) <= 1
-        assert abs(window.view_peek.x() + window.view_peek.width() / 2 - window.width() / 2) <= 1
-    assert widths[0] < widths[1] < widths[-1]
+    center = window._outline_bounds().center().x() + window.x()
+    for state, view in ((NotchState.PEEK, window.view_peek), (NotchState.COLLAPSED, window.view_collapsed)):
+        window._transition_to(state)
+        host = window.geometry()
+        target = window.anim.endValue()
+        widths = []
+        for percent in range(0, 101, 5):
+            window.anim.setCurrentTime(round(window.anim.duration() * percent / 100))
+            widths.append(window._displayed_geometry().width())
+            assert abs(window._outline_bounds().center().x() + window.x() - center) <= 0.5
+            assert view.mapToGlobal(QPoint()) == target.topLeft()
+            assert window.geometry() == (target if percent == 100 else host)
+            if state == NotchState.PEEK and percent == 5:
+                window._peek_fade.setCurrentTime(window._peek_fade.duration() // 2)
+                artwork = window.peek_thumb.mapTo(window, QPoint(3, 15))
+                assert artwork.x() < window._outline_bounds().left() - 1
+                frame = window.grab().toImage()
+                assert frame.pixelColor(artwork * frame.devicePixelRatio()).alpha() == 0
+        assert widths == sorted(widths, reverse=state == NotchState.COLLAPSED)
+        assert widths[0] != widths[-1]
+    window.close()
+
+
+@pytest.mark.parametrize("surface", ["Home", "Music", "Peek"])
+def test_volume_drag_stops_when_the_mouse_grab_is_lost(audit_app, monkeypatch, surface):
+    window = DynamicNotchWindow()
+    writes = []
+    monkeypatch.setattr(window.audio_ctrl, "set_volume", writes.append)
+    monkeypatch.setattr(window.audio_ctrl, "get_mute", lambda: False)
+    window._is_pinned = True
+    window.show()
+    if surface == "Peek":
+        window._transition_to(NotchState.PEEK, animate=False)
+        window.btn_peek_volume.click()
+        slider = window.peek_volume
+    else:
+        window._transition_to(NotchState.EXPANDED, target_tab=surface, animate=False)
+        slider = window.tab_home.slider_vol if surface == "Home" else window.tab_music.vol_slider
+
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=slider.rect().center())
+    assert slider.isSliderDown()
+    writes.clear()
+    audit_app.sendEvent(slider, QEvent(QEvent.Type.UngrabMouse))
+    endpoint = QPoint(slider.width() - 1, 0)
+    for buttons in (Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton):
+        event = QMouseEvent(QEvent.Type.MouseMove, QPointF(endpoint), QPointF(slider.mapToGlobal(endpoint)),
+                            Qt.MouseButton.NoButton, buttons, Qt.KeyboardModifier.NoModifier)
+        audit_app.sendEvent(slider, event)
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=endpoint)
+    assert not slider.isSliderDown()
+    assert writes == []
     window.close()
 
 

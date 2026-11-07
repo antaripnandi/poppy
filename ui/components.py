@@ -952,6 +952,11 @@ class CapsuleSlider(QSlider):
     def isSliderDown(self) -> bool:
         return self._is_down
 
+    def event(self, event):
+        if event.type() in (QEvent.Type.UngrabMouse, QEvent.Type.Hide):
+            self._is_down = False
+        return super().event(event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._is_down = True
@@ -961,10 +966,11 @@ class CapsuleSlider(QSlider):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._is_down:
+        if self._is_down and event.buttons() & Qt.MouseButton.LeftButton:
             self._update_val_from_x(event.position().x())
             event.accept()
             return
+        self._is_down = False
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -975,9 +981,10 @@ class CapsuleSlider(QSlider):
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
-        delta = 5 if event.angleDelta().y() > 0 else -5
-        self.setValue(max(self.minimum(), min(self.maximum(), self.value() + delta)))
-        event.accept()
+        if event.phase() == Qt.ScrollPhase.ScrollMomentum:
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
     def _update_val_from_x(self, x: float):
         w = max(1.0, float(self.width()))
@@ -1091,6 +1098,12 @@ class ClickableSlider(QSlider):
         super().__init__(orientation, parent)
         self._track_drag = False
 
+    def event(self, event):
+        if event.type() in (QEvent.Type.UngrabMouse, QEvent.Type.Hide):
+            self._track_drag = False
+            self.setSliderDown(False)
+        return super().event(event)
+
     def _value_at(self, point):
         option = QStyleOptionSlider()
         self.initStyleOption(option)
@@ -1123,6 +1136,14 @@ class ClickableSlider(QSlider):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if not event.buttons() & Qt.MouseButton.LeftButton:
+            self._track_drag = False
+            self.setSliderDown(False)
+            event.ignore()
+            return
+        if not self.isSliderDown():
+            event.ignore()
+            return
         if self._track_drag:
             self._move_to(event.position())
             event.accept()
@@ -1145,6 +1166,9 @@ class ClickableSlider(QSlider):
             self.seek_clicked.emit(self.value())
 
     def wheelEvent(self, event):
+        if event.phase() == Qt.ScrollPhase.ScrollMomentum:
+            event.ignore()
+            return
         before = self.value()
         super().wheelEvent(event)
         if self.value() != before and not self.isSliderDown():

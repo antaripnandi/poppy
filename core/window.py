@@ -17,9 +17,10 @@ import psutil
 import atexit
 from enum import Enum
 from datetime import datetime
+from fractions import Fraction
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QSize, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QEvent, Signal
+    Qt, QRect, QRectF, QSize, QPoint, Property, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QEvent, Signal
 )
 from PySide6.QtGui import (
     QPainter, QColor, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
@@ -119,6 +120,7 @@ class DynamicNotchWindow(QWidget):
         self._native_brightness_feedback = False
         self._brightness_level = None
         self._pending_brightness_step = 0
+        self._volume_scroll_delta = 0
 
         # Frameless, Always on Top, Hidden from Alt+Tab / Taskbar
         self.setWindowFlags(
@@ -174,7 +176,8 @@ class DynamicNotchWindow(QWidget):
         self.state = NotchState.COLLAPSED
         self._target_size = (self._collapsed_w, self._collapsed_h)
         self._start_corner_radius = 14
-        self.anim = QPropertyAnimation(self, b"geometry", self)
+        self._hover_frame: QRect | None = None
+        self.anim = QPropertyAnimation(self, b"notchGeometry", self)
         self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.anim.finished.connect(self._on_animation_finished)
 
@@ -275,7 +278,8 @@ class DynamicNotchWindow(QWidget):
         # 1. Collapsed View: Minimalist Top Pill (pill-v2.png)
         # Symmetrical 3-zone architecture: Left (Media icon) - Center (Time) - Right (Visualizer)
         # =====================================================================
-        self.view_collapsed = QWidget(self)
+        self._compact_clip = QWidget(self)
+        self.view_collapsed = QWidget(self._compact_clip)
         self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
         v_coll_layout.setContentsMargins(20, 0, 20, 0)
@@ -346,12 +350,11 @@ class DynamicNotchWindow(QWidget):
         self._pill_level_timer.setSingleShot(True)
         self._pill_level_timer.setInterval(1000)
         self._pill_level_timer.timeout.connect(self._dismiss_pill_level)
-        self.main_layout.addWidget(self.view_collapsed)
 
         # =====================================================================
         # 2. Peek View (Hover HUD: Spotify / YouTube Media HUD)
         # =====================================================================
-        self.view_peek = QWidget(self)
+        self.view_peek = QWidget(self._compact_clip)
         self.view_peek.setFixedSize(*self.PEEK_SIZE)
         self.view_peek.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout = QHBoxLayout(self.view_peek)
@@ -1011,7 +1014,7 @@ class DynamicNotchWindow(QWidget):
         self.pill_level.hide()
         for widget in self._collapsed_contents:
             widget.show()
-        if self.state == NotchState.COLLAPSED and self.geometry().contains(QCursor.pos()):
+        if self.state == NotchState.COLLAPSED and self._displayed_geometry().contains(QCursor.pos()):
             self._hover_peek_timer.start(140)
 
     def _show_volume(self, volume, muted):
@@ -1036,7 +1039,7 @@ class DynamicNotchWindow(QWidget):
         anchor = button.mapToGlobal(button.rect().center())
         screen = QGuiApplication.screenAt(anchor)
         bounds = screen.availableGeometry() if screen else self._get_current_screen_geometry()
-        y = self.geometry().bottom() + 5
+        y = self._displayed_geometry().bottom() + 5
         chrome = menu.sizeHint().height() - self.peek_volume.height()
         track_height = max(30, min(144, bounds.bottom() + 1 - y - chrome))
         self.peek_volume.setFixedHeight(track_height)
@@ -2119,8 +2122,9 @@ class DynamicNotchWindow(QWidget):
             return
         from PySide6.QtGui import QCursor
         # If cursor is STILL geometrically within the window, ignore child switch events
-        if self.geometry().contains(QCursor.pos()):
+        if self._displayed_geometry().contains(QCursor.pos()):
             return
+        self._volume_scroll_delta = 0
         if self.state == NotchState.ISLAND:
             self._island_timer.start(1800)
         elif self.state == NotchState.PEEK:
@@ -2130,7 +2134,7 @@ class DynamicNotchWindow(QWidget):
     def _on_hover_peek_timeout(self):
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
         if (self.state == NotchState.COLLAPSED and auto_peek and not self._pill_level_timer.isActive()
-                and self.geometry().contains(QCursor.pos())):
+                and self._displayed_geometry().contains(QCursor.pos())):
             if self.anim.state() == QPropertyAnimation.State.Running:
                 self._hover_peek_timer.start(70)
                 return
@@ -2154,7 +2158,7 @@ class DynamicNotchWindow(QWidget):
         pointer = QCursor.pos()
         local = self.mapFromGlobal(pointer)
         mask = self.mask()
-        if self.rect().contains(local) and (mask.isEmpty() or mask.contains(local)):
+        if self._displayed_geometry().contains(pointer) and (mask.isEmpty() or mask.contains(local)):
             return True
         if self.peek_volume_menu.isVisible() and self.peek_volume_menu.geometry().contains(pointer):
             return True
@@ -2186,12 +2190,25 @@ class DynamicNotchWindow(QWidget):
     def wheelEvent(self, event):
         if self.state in (NotchState.COLLAPSED, NotchState.PEEK):
             delta = event.angleDelta().y()
+            phase = event.phase()
+            if phase in (Qt.ScrollPhase.ScrollBegin, Qt.ScrollPhase.ScrollEnd):
+                self._volume_scroll_delta = 0
+            if phase == Qt.ScrollPhase.ScrollMomentum:
+                event.accept()
+                return
             if delta and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                self._volume_scroll_delta = 0
                 self._step_brightness(5 if delta > 0 else -5)
                 event.accept()
                 return
             if delta and event.modifiers() == Qt.KeyboardModifier.NoModifier and self.config.get("notch", {}).get("scroll_volume", True):
-                self._step_volume(2 if delta > 0 else -2)
+                if self._volume_scroll_delta * delta < 0:
+                    self._volume_scroll_delta = 0
+                self._volume_scroll_delta += delta
+                if abs(self._volume_scroll_delta) >= 120:
+                    direction = 1 if self._volume_scroll_delta > 0 else -1
+                    self._volume_scroll_delta = direction * (abs(self._volume_scroll_delta) % 120)
+                    self._step_volume(2 * direction)
                 event.accept()
                 return
         super().wheelEvent(event)
@@ -2299,6 +2316,7 @@ class DynamicNotchWindow(QWidget):
             return
 
         start_radius = self._outline_radius()
+        fixed_host = {self.state, new_state} == {NotchState.COLLAPSED, NotchState.PEEK}
         self.anim.stop()
         self._peek_presence_timer.stop()
         self._leave_timer.stop()
@@ -2311,8 +2329,6 @@ class DynamicNotchWindow(QWidget):
             self._thumb_anim.stop()
             self._thumb_opacity_fx.setEnabled(False)
 
-        if new_state == NotchState.PEEK:
-            self._position_peek_view()
         self.view_collapsed.setVisible(new_state == NotchState.COLLAPSED)
         self.view_peek.setVisible(new_state == NotchState.PEEK)
         self.view_island.setVisible(new_state == NotchState.ISLAND)
@@ -2327,11 +2343,18 @@ class DynamicNotchWindow(QWidget):
             self._switch_to_tab_by_name(selected_tab, animate=False)
 
         self.state = new_state
+        if new_state not in (NotchState.COLLAPSED, NotchState.PEEK):
+            self._volume_scroll_delta = 0
         self._sync_brightness_flyout()
         if new_state != NotchState.COLLAPSED and self._pill_level_timer.isActive():
             self._pill_level_timer.stop()
             self._dismiss_pill_level()
-        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius)
+        if new_state == NotchState.PEEK:
+            self._show_peek_timeline()
+            self._sync_system_controls()
+            self.view_peek.layout().activate()
+            self._elide_peek_metadata()
+        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius, fixed_host=fixed_host)
         self.update()
 
         if new_state == NotchState.EXPANDED:
@@ -2342,13 +2365,9 @@ class DynamicNotchWindow(QWidget):
         elif new_state == NotchState.PEEK:
             self.view_peek.setFocus(Qt.FocusReason.OtherFocusReason)
             self._peek_presence_timer.start()
-            self._show_peek_timeline()
-            self._sync_system_controls()
-            self.view_peek.layout().activate()
-            self._elide_peek_metadata()
             if self.anim.state() == QPropertyAnimation.State.Running:
                 self._peek_opacity.setEnabled(True)
-                self._peek_fade.setDuration(min(160, self.anim.duration()))
+                self._peek_fade.setDuration(self.anim.duration())
                 self._peek_fade.setStartValue(0.0)
                 self._peek_fade.setEndValue(1.0)
                 self._peek_fade.start()
@@ -2417,7 +2436,8 @@ class DynamicNotchWindow(QWidget):
             return 0
         return max(0, self.config.get("notch", {}).get("animation_duration_ms", 200))
 
-    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, *, start_radius: float | None = None):
+    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, *,
+                                  start_radius: float | None = None, fixed_host: bool = False):
         self._anim_opacity.stop()
         self._expanded_opacity.setEnabled(False)
         if not animate:
@@ -2426,7 +2446,7 @@ class DynamicNotchWindow(QWidget):
 
         target = self._geometry_for_state(state)
         duration = self._transition_duration() if animate else 0
-        if self._animate_geometry(target, duration, start_radius=start_radius) and state == NotchState.EXPANDED:
+        if self._animate_geometry(target, duration, start_radius=start_radius, fixed_host=fixed_host) and state == NotchState.EXPANDED:
             self._anim_opacity.setDuration(duration)
             # Hold content until the drawer has room. Use the same clock length
             # as geometry so the two effects finish together.
@@ -2437,36 +2457,85 @@ class DynamicNotchWindow(QWidget):
             self._expanded_opacity.setEnabled(True)
             self._anim_opacity.start()
 
-    def _animate_geometry(self, target: QRect, duration: int, *, start_radius: float | None = None) -> bool:
+    def _displayed_geometry(self) -> QRect:
+        return self.geometry() if self._hover_frame is None else self._hover_frame
+
+    def _set_displayed_geometry(self, rect: QRect):
+        if self._hover_frame is None:
+            self.setGeometry(rect)
+        else:
+            self._hover_frame = rect
+            self._position_compact_view()
+            self.update()
+
+    notchGeometry = Property(QRect, _displayed_geometry, _set_displayed_geometry)
+
+    def _animate_geometry(self, target: QRect, duration: int, *,
+                          start_radius: float | None = None, fixed_host: bool = False) -> bool:
         self._start_corner_radius = self._outline_radius() if start_radius is None else start_radius
         self.anim.stop()
-        start = self.geometry()
+        start = self._displayed_geometry()
         if duration <= 0 or start == target:
+            self._release_hover_host()
             self.setGeometry(target)
+            self._position_compact_view()
             self._update_clickthrough_mask()
             return False
+        if not fixed_host:
+            self._release_hover_host()
         # Clear the native region while resizing to avoid repeated DWM stalls.
         self.clearMask()
         self.anim.setDuration(duration)
         self.anim.setStartValue(start)
         self.anim.setEndValue(target)
+        if fixed_host:
+            # Keep the Windows surface and content origin fixed during hover.
+            host = self.geometry() if self._hover_frame is not None else start
+            self._hover_frame = start
+            host = host.united(target)
+            # Start on a whole physical pixel so Qt's child and window
+            # coordinates round the same way when the surface is released.
+            quantum = Fraction(self.devicePixelRatioF()).limit_denominator(100).denominator
+            screen_x = self._get_current_screen_geometry().x()
+            host.setLeft(host.left() - (host.left() - screen_x) % quantum)
+            self.setGeometry(host)
+        self._position_compact_view()
         self.anim.start()
         return True
 
+    def _release_hover_host(self):
+        if self._hover_frame is not None:
+            rect, self._hover_frame = self._hover_frame, None
+            self._compact_clip.clearMask()
+            self.setGeometry(rect)
+            self._position_compact_view()
+
     def _on_animation_finished(self):
+        self._release_hover_host()
         self._update_clickthrough_mask()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.state == NotchState.PEEK:
-            self._position_peek_view()
+        self._position_compact_view()
         # NEVER call SetWindowRgn during a live animation frame
-        if not (self.anim and self.anim.state() == QPropertyAnimation.State.Running):
+        if self._hover_frame is None and self.anim.state() != QPropertyAnimation.State.Running:
             self._recenter_window()
             self._update_clickthrough_mask()
 
-    def _position_peek_view(self):
-        self.view_peek.move((self.width() - self.view_peek.width()) // 2, 0)
+    def _position_compact_view(self):
+        self._compact_clip.setGeometry(self.rect())
+        if self.state not in (NotchState.PEEK, NotchState.COLLAPSED):
+            self._compact_clip.hide()
+            return
+        self._compact_clip.show()
+        view = self.view_peek if self.state == NotchState.PEEK else self.view_collapsed
+        if self._hover_frame is None:
+            view.move((self.width() - view.width()) // 2, 0)
+            return
+        anchor = self.anim.endValue().topLeft() - self.geometry().topLeft()
+        view.move(anchor)
+        # Clip the parent so the hover fade still paints the card at full size.
+        self._compact_clip.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))
 
     def _update_clickthrough_mask(self):
         region = QRegion(self._notch_path().toFillPolygon().toPolygon())
@@ -2482,8 +2551,18 @@ class DynamicNotchWindow(QWidget):
             return self._start_corner_radius + (target - self._start_corner_radius) * progress
         return target
 
+    def _outline_bounds(self) -> QRectF:
+        bounds = QRectF(self._displayed_geometry())
+        if self._hover_frame is not None and self.anim.state() == QPropertyAnimation.State.Running:
+            start = QRectF(self.anim.startValue()).center().x()
+            end = QRectF(self.anim.endValue()).center().x()
+            progress = self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration())
+            bounds.moveLeft(start + (end - start) * progress - bounds.width() / 2)
+        return bounds.translated(-self.geometry().topLeft())
+
     def _notch_path(self):
-        w, h = float(self.width()), float(self.height())
+        bounds = self._outline_bounds()
+        w, h = float(bounds.width()), float(bounds.height())
         radius = min(w / 2, h / 2, self._outline_radius())
         path = QPainterPath()
         if self._style == "Notch":
@@ -2502,7 +2581,7 @@ class DynamicNotchWindow(QWidget):
             path.closeSubpath()
         else:
             path.addRoundedRect(0, 0, w, h, radius, radius)
-        return path
+        return path.translated(bounds.x(), bounds.y())
 
     # --- Drag & Drop Handlers ---
     def dragEnterEvent(self, event):
@@ -2524,9 +2603,13 @@ class DynamicNotchWindow(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        if self._hover_frame is not None:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            painter.fillRect(event.rect(), Qt.GlobalColor.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        h = float(self.height())
+        bounds = self._outline_bounds()
         path = self._notch_path()
 
         # Gradient / Surface Fill from active theme
@@ -2540,7 +2623,8 @@ class DynamicNotchWindow(QWidget):
             if self._appearance.get("layout") == "Paper" and not is_light_theme():
                 bg_col = QColor((bg_col.red() * 3 + 44) // 4, (bg_col.green() * 3 + 40) // 4, (bg_col.blue() * 3 + 32) // 4)
             grad_col = bg_col
-        gradient = QLinearGradient(0, 0, self.width() if self.state == NotchState.PEEK else 0, h)
+        dx = bounds.width() if self.state == NotchState.PEEK else 0
+        gradient = QLinearGradient(bounds.x(), bounds.y(), bounds.x() + dx, bounds.y() + bounds.height())
         gradient.setColorAt(0.0, grad_col)
         gradient.setColorAt(1.0, bg_col)
         painter.fillPath(path, QBrush(gradient))
