@@ -13,6 +13,15 @@ import time
 from PySide6.QtCore import QObject, Signal
 
 
+def system_animations_enabled() -> bool:
+    """Read the Windows accessibility preference for app animations."""
+    user32 = getattr(getattr(ctypes, "windll", None), "user32", None)
+    enabled = wintypes.BOOL(True)
+    if user32 and user32.SystemParametersInfoW(0x1042, 0, byref(enabled), 0):
+        return bool(enabled.value)
+    return True
+
+
 class GUID(ctypes.Structure):
     _fields_ = [
         ('Data1', wintypes.DWORD),

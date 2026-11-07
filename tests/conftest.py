@@ -55,6 +55,8 @@ def isolate_runtime(tmp_path, monkeypatch, audit_app):
     monkeypatch.setattr(BluetoothManager, "_get_devices", staticmethod(lambda: []))
     monkeypatch.setattr(extended_views, "current_desktop_windows", lambda: [])
     monkeypatch.setattr(DynamicNotchWindow, "_sync_system_controls", lambda *args, **kwargs: None)
+    monkeypatch.setattr("poppy.core.window.system_animations_enabled", lambda: True)
+    monkeypatch.setattr("poppy.ui.components.system_animations_enabled", lambda: True)
     baseline = set(audit_app.topLevelWidgets())
     yield
     for widget in set(audit_app.topLevelWidgets()) - baseline:

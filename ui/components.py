@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors
 from poppy.ui.icons import Icons, get_fluent_font_family
-from poppy.core.system_controls import AudioPeakMeter
+from poppy.core.system_controls import AudioPeakMeter, system_animations_enabled
 
 
 def _accent_to_rgba(hex_color: str, alpha: float) -> str:
@@ -82,6 +82,7 @@ class ToggleSwitch(QWidget):
         self._checked = bool(checked)
         self._accent = accent
         self._thumb_pos = 18.0 if checked else 2.0
+        self.setAccessibleDescription("On" if self._checked else "Off")
 
         self._anim = QPropertyAnimation(self, b"thumb_position", self)
         self._anim.setDuration(160)
@@ -92,20 +93,22 @@ class ToggleSwitch(QWidget):
 
     def setChecked(self, checked: bool, animate: bool = True):
         checked = bool(checked)
-        if self._checked == checked:
+        changed = self._checked != checked
+        if not changed and animate:
             return
+        self._anim.stop()
         self._checked = checked
         target = 18.0 if checked else 2.0
-        if animate and self.isVisible():
-            self._anim.stop()
+        if animate and self.isVisible() and system_animations_enabled():
             self._anim.setStartValue(self._thumb_pos)
             self._anim.setEndValue(target)
             self._anim.start()
         else:
             self._thumb_pos = target
             self.update()
-        self.toggled.emit(self._checked)
         self.setAccessibleDescription("On" if self._checked else "Off")
+        if changed:
+            self.toggled.emit(self._checked)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -228,14 +231,14 @@ class AnimatedTabStrip(QWidget):
         self._layout.setSpacing(2)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Rubber indicator thumb behind buttons
         self.indicator = QWidget(self)
         self.indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._update_indicator_style()
 
         self._anim = QPropertyAnimation(self.indicator, b"geometry", self)
-        self._anim.setDuration(240)
+        self._anim.setDuration(150)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(self._sync_indicator)
 
         for idx, (name, icon) in enumerate(tab_items):
             label = f"{icon}  {name}" if icon else name
@@ -251,6 +254,7 @@ class AnimatedTabStrip(QWidget):
 
     def set_tabs(self, tab_items: list[tuple[str, str]]):
         """Dynamically replace tabs in the strip without recreating the widget."""
+        self._anim.stop()
         for btn in self.buttons:
             self._layout.removeWidget(btn)
             btn.deleteLater()
@@ -269,7 +273,10 @@ class AnimatedTabStrip(QWidget):
         self._current_index = 0
         self._update_buttons_style()
         if self.buttons:
-            self.indicator.setGeometry(self.buttons[0].geometry())
+            self.indicator.show()
+            self._sync_indicator()
+        else:
+            self.indicator.hide()
 
     def set_accent(self, accent: str):
         self._accent = accent
@@ -349,36 +356,43 @@ class AnimatedTabStrip(QWidget):
         if not (0 <= index < len(self.buttons)):
             return
         old_idx = self._current_index
+        animate = animate and self.isVisible() and system_animations_enabled()
+        if animate and index == old_idx and self._anim.state() == QPropertyAnimation.State.Running:
+            if emit_signal:
+                self.tab_changed.emit(index)
+            return
         self._current_index = index
         self._update_buttons_style()
-
-        target_btn = self.buttons[index]
-        target_geom = target_btn.geometry()
-
+        self._layout.activate()
+        target = self.buttons[index].geometry()
         self.indicator.show()
-        if animate and old_idx != index and self.isVisible() and 0 <= old_idx < len(self.buttons):
-            self._anim.stop()
-            self._anim.setDuration(150)
-            self._anim.setKeyValues([(0.0, self.indicator.geometry()), (1.0, target_geom)])
+        self._anim.stop()
+        if animate and index != old_idx and 0 <= old_idx < len(self.buttons):
+            self._anim.setStartValue(self.indicator.geometry())
+            self._anim.setEndValue(target)
             self._anim.start()
         else:
-            self._anim.stop()
-            self.indicator.setGeometry(target_geom)
+            self.indicator.setGeometry(target)
 
         if emit_signal:
             self.tab_changed.emit(index)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if 0 <= self._current_index < len(self.buttons):
-            self.indicator.setGeometry(self.buttons[self._current_index].geometry())
+        if self._anim.state() != QPropertyAnimation.State.Running:
+            self._sync_indicator()
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(20, self._sync_indicator)
+        self._sync_indicator()
+
+    def hideEvent(self, event):
+        self._anim.stop()
+        super().hideEvent(event)
 
     def _sync_indicator(self):
         if 0 <= self._current_index < len(self.buttons):
+            self._layout.activate()
             self.indicator.setGeometry(self.buttons[self._current_index].geometry())
             self.indicator.lower()
 
@@ -594,7 +608,8 @@ class PillLevel(QWidget):
     def show_level(self, name, icon, previous, value, duration, *, muted=False):
         continuing = self.isVisible() and self.accessibleName() == name
         label = "Muted" if muted else f"{value}%"
-        if continuing and self._icon == icon and self._label == label:
+        if (continuing and self._icon == icon and self._label == label
+                and (duration or self._motion.state() != QVariantAnimation.State.Running)):
             return
         start = self._value if continuing else previous
         self._motion.stop()
@@ -672,20 +687,25 @@ class AudioVisualizerBars(QWidget):
         self._timer.timeout.connect(self._animate_bars)
 
     def set_playing(self, playing: bool):
-        if self._is_playing != playing:
-            self._is_playing = playing
-            if playing:
-                if not self._meter:
-                    try:
-                        self._meter = AudioPeakMeter.get_instance()
-                    except Exception:
-                        self._meter = None
-                self._timer.start()
-            else:
-                # Keep timer running briefly for smooth analog decay towards resting height
-                if not self._timer.isActive():
-                    self._timer.start()
-            self.update()
+        if self._is_playing == playing:
+            return
+        self._is_playing = playing
+        self._sync_motion()
+
+    def _sync_motion(self):
+        if not self.isVisible() or not system_animations_enabled():
+            self._timer.stop()
+            self._heights = [2.5] * 4
+        elif self._is_playing:
+            if not self._meter:
+                try:
+                    self._meter = AudioPeakMeter.get_instance()
+                except Exception:
+                    self._meter = None
+            self._timer.start()
+        elif any(height > 2.55 for height in self._heights):
+            self._timer.start()
+        self.update()
 
     def set_muted(self, muted):
         self._muted = muted
@@ -729,11 +749,11 @@ class AudioVisualizerBars(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self._is_playing:
-            self._timer.start()
+        self._sync_motion()
 
     def hideEvent(self, event):
         self._timer.stop()
+        self._heights = [2.5] * 4
         super().hideEvent(event)
 
     def set_ink(self, color):
@@ -1496,7 +1516,7 @@ class SpotifyLyricsWidget(QFrame):
         layout.addWidget(self.content_stack, stretch=1)
 
         # Smooth Scroll Animation
-        self._scroll_anim = QPropertyAnimation(self.scroll_area.verticalScrollBar(), b"value")
+        self._scroll_anim = QPropertyAnimation(self.scroll_area.verticalScrollBar(), b"value", self)
         self._scroll_anim.setDuration(240)
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
@@ -1695,13 +1715,17 @@ class SpotifyLyricsWidget(QFrame):
             btn = self._line_buttons[idx]
             viewport_h = self.scroll_area.viewport().height()
             target_y = btn.y() - (viewport_h // 2) + (btn.height() // 2)
-            max_y = self.scroll_area.verticalScrollBar().maximum()
-            target_y = max(0, min(max_y, target_y))
+            bar = self.scroll_area.verticalScrollBar()
+            target_y = max(0, min(bar.maximum(), target_y))
 
             self._scroll_anim.stop()
-            self._scroll_anim.setStartValue(self.scroll_area.verticalScrollBar().value())
-            self._scroll_anim.setEndValue(target_y)
-            self._scroll_anim.start()
+            if bar.value() != target_y:
+                if system_animations_enabled():
+                    self._scroll_anim.setStartValue(bar.value())
+                    self._scroll_anim.setEndValue(target_y)
+                    self._scroll_anim.start()
+                else:
+                    bar.setValue(target_y)
 
     def _clear_lines(self):
         self._layout_scroll_timer.stop()

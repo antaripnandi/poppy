@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, home_order, home_slots
 from poppy.ui.components import (
-    IconButton, CircularProgressRing, AudioVisualizerBars, MetricLabel,
+    IconButton, CircularProgressRing, MetricLabel,
     CardFrame, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
     ScreenTimeHomeWidget, CapsuleSlider, ScrollArea, PlaybackSlider
 )
@@ -969,8 +969,6 @@ class MusicTabView(QWidget):
         self.lyrics_widget.setMinimumWidth(180)
         self.lyrics_widget.seek_requested.connect(self.seek_requested.emit)
         columns.addWidget(self.lyrics_widget, 1)
-        self.bars = AudioVisualizerBars(self)
-        self.bars.hide()
         self.btn_prev_session, self.btn_next_session = QPushButton(self), QPushButton(self)
         self.btn_shuffle, self.btn_repeat = QPushButton(self), QPushButton(self)
         self.txt_lyrics, self.lbl_album_info = QLabel(self), QLabel(self)

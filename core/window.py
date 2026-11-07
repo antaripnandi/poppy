@@ -1,7 +1,7 @@
 """
 Poppy Dynamic Notch Window
 Faithfully inspired by NotchX (by Navneet Kaur / Raho Osman) and macOS Dynamic Island.
-Features hardware-accelerated rendering, smooth spring animations, deep Windows GSMTC media
+Features animated notch transitions, deep Windows GSMTC media
 integration, Discord RPC, Pomodoro focus tracking, and dedicated settings app.
 
 States:
@@ -19,7 +19,7 @@ from enum import Enum
 from datetime import datetime
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer, QEvent, Signal
+    Qt, QRect, QRectF, QSize, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QEvent, Signal
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
@@ -52,7 +52,7 @@ from poppy.core.lyrics_manager import LyricsManager
 from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
-from poppy.core.system_controls import SystemAudioController, SystemBrightnessController
+from poppy.core.system_controls import SystemAudioController, SystemBrightnessController, system_animations_enabled
 from poppy.core.brightness_flyout import BrightnessFlyout
 from poppy.core.system_features import (
     PrivacyMonitor, ScreenCaptureShield, BluetoothManager,
@@ -119,7 +119,6 @@ class DynamicNotchWindow(QWidget):
         self._native_brightness_feedback = False
         self._brightness_level = None
         self._pending_brightness_step = 0
-        self._animate_levels = True
 
         # Frameless, Always on Top, Hidden from Alt+Tab / Taskbar
         self.setWindowFlags(
@@ -174,8 +173,7 @@ class DynamicNotchWindow(QWidget):
         # State & Animation
         self.state = NotchState.COLLAPSED
         self._target_size = (self._collapsed_w, self._collapsed_h)
-        self.anim = QPropertyAnimation(self, b"geometry")
-        self.anim.setDuration(self.config.get("notch", {}).get("animation_duration_ms", 200))
+        self.anim = QPropertyAnimation(self, b"geometry", self)
         self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.anim.finished.connect(self._on_animation_finished)
 
@@ -474,12 +472,14 @@ class DynamicNotchWindow(QWidget):
         # Draggable Thumbnail Preview (44x44, rounded 8px)
         self.island_thumb = DraggableThumbnail(size=44, border_radius=8, parent=self)
         self._thumb_opacity_fx = QGraphicsOpacityEffect(self.island_thumb)
+        self._thumb_opacity_fx.setEnabled(False)
         self.island_thumb.setGraphicsEffect(self._thumb_opacity_fx)
-        self._thumb_anim = QPropertyAnimation(self._thumb_opacity_fx, b"opacity")
+        self._thumb_anim = QPropertyAnimation(self._thumb_opacity_fx, b"opacity", self)
         self._thumb_anim.setDuration(240)
         self._thumb_anim.setStartValue(0.0)
         self._thumb_anim.setEndValue(1.0)
         self._thumb_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._thumb_anim.finished.connect(lambda: self._thumb_opacity_fx.setEnabled(False))
         v_isl_layout.addWidget(self.island_thumb)
 
         # Meta info
@@ -541,7 +541,6 @@ class DynamicNotchWindow(QWidget):
         self._expanded_opacity.setOpacity(1.0)
         self._expanded_opacity.setEnabled(False)
         self._anim_opacity = QPropertyAnimation(self._expanded_opacity, b"opacity", self)
-        self._anim_opacity.setDuration(260)
         self._anim_opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim_opacity.finished.connect(lambda: self._expanded_opacity.setEnabled(False))
         v_exp_layout = QVBoxLayout(self.view_expanded)
@@ -743,8 +742,15 @@ class DynamicNotchWindow(QWidget):
         self._switch_to_tab_by_name(previous if previous in self._enabled_tab_names else self._active_tab_names[0], animate=False)
 
     def _resize_expanded_panel(self):
-        if self.state == NotchState.EXPANDED:
+        if self.state != NotchState.EXPANDED:
+            return
+        if self.anim.state() != QPropertyAnimation.State.Running:
             self._apply_geometry_for_state(self.state, animate=False)
+            return
+        target = self._geometry_for_state(self.state)
+        if target != self.anim.endValue():
+            remaining = self.anim.duration() - self.anim.currentTime()
+            self._animate_geometry(target, remaining)
 
     def _on_lyrics_visibility_changed(self, visible):
         data = self._current_media
@@ -851,6 +857,8 @@ class DynamicNotchWindow(QWidget):
         self.lbl_isl_sub.setToolTip(text)
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.hide()
+        self._thumb_anim.stop()
+        self._thumb_opacity_fx.setEnabled(False)
         self._present_island()
 
     def _update_clock(self):
@@ -946,9 +954,6 @@ class DynamicNotchWindow(QWidget):
 
     def start_system_level_controls(self):
         user32 = ctypes.windll.user32
-        animation = wintypes.BOOL(True)
-        if user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(animation), 0):  # SPI_GETCLIENTAREAANIMATION
-            self._animate_levels = bool(animation.value)
         hwnd = wintypes.HWND(int(self.winId()))
         for key in self.VOLUME_KEYS:
             if key not in self._level_hotkeys and user32.RegisterHotKey(hwnd, key, 0, key):
@@ -991,7 +996,7 @@ class DynamicNotchWindow(QWidget):
             self._transition_to(NotchState.COLLAPSED)
         self._hover_peek_timer.stop()
         already_visible = self.pill_level.isVisible()
-        duration = min(120, self.config.get("notch", {}).get("animation_duration_ms", 200)) if self._animate_levels else 0
+        duration = min(120, self._transition_duration())
         self.pill_level.show_level(name, icon, previous, value, duration, muted=muted)
         if not already_visible:
             self._update_pill_level_ink()
@@ -1043,12 +1048,15 @@ class DynamicNotchWindow(QWidget):
         size = menu.sizeHint()
         x = max(bounds.left(), min(anchor.x() - size.width() // 2, bounds.right() - size.width() + 1))
         y = max(bounds.top(), min(y, bounds.bottom() - menu.height() + 1))
-        self._peek_volume_opacity.setOpacity(0.35)
-        self._peek_volume_opacity.setEnabled(True)
+        animate = system_animations_enabled()
+        if animate:
+            self._peek_volume_opacity.setOpacity(0.35)
+        self._peek_volume_opacity.setEnabled(animate)
         menu.popup(QPoint(x, y))
         self._sync_brightness_flyout()
         self.peek_volume.setFocus(Qt.FocusReason.PopupFocusReason)
-        self._peek_volume_fade.start()
+        if animate:
+            self._peek_volume_fade.start()
 
     def _finish_peek_volume(self):
         self._peek_volume_fade.stop()
@@ -1630,7 +1638,6 @@ class DynamicNotchWindow(QWidget):
 
     def _on_playback_changed(self, is_playing: bool):
         self.coll_visualizer.set_playing(is_playing)
-        self.tab_music.bars.set_playing(is_playing)
         if hasattr(self.tab_music, "set_playback_state"):
             self.tab_music.set_playback_state(is_playing)
 
@@ -1830,7 +1837,7 @@ class DynamicNotchWindow(QWidget):
             self.trigger_island("Screenshot staged", "Ready in Shelf.")
             return
 
-        # Setup Island view
+        preview_visible = self.state == NotchState.ISLAND and self.island_thumb.isVisible()
         self.lbl_isl_title.setText("Screenshot staged")
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.show()
@@ -1840,9 +1847,14 @@ class DynamicNotchWindow(QWidget):
         self.lbl_isl_sub.setToolTip("Drag the preview to another app or use Copy")
         self.btn_isl_chat.setText("Copy")
 
-        # Thumbnail flying / entrance animation
-        self._thumb_opacity_fx.setOpacity(0.0)
-        self._thumb_anim.start()
+        if not system_animations_enabled():
+            self._thumb_anim.stop()
+            self._thumb_opacity_fx.setEnabled(False)
+        elif not preview_visible:
+            self._thumb_anim.stop()
+            self._thumb_opacity_fx.setOpacity(0.0)
+            self._thumb_opacity_fx.setEnabled(True)
+            self._thumb_anim.start()
 
         # If drawer is not already expanded, expand to Island
         self._present_island()
@@ -1930,7 +1942,7 @@ class DynamicNotchWindow(QWidget):
     def open_settings(self, page_name: str = None):
         """Open the dedicated Poppy Settings application window."""
         # Immediately collapse the notch drawer to sleek pill mode so Settings is completely unobscured
-        self._transition_to(NotchState.COLLAPSED)
+        self._transition_to(NotchState.COLLAPSED, animate=False)
         self.clearFocus()
 
         if self._settings_window is None:
@@ -2075,10 +2087,6 @@ class DynamicNotchWindow(QWidget):
             self.pomodoro.break_duration = pomo.get("break_duration", 300)
             self.pomodoro.long_break_duration = pomo.get("long_break_duration", 900)
             self.pomodoro.sound_enabled = pomo.get("sound_enabled", True)
-
-        notch_cfg = self.config.get("notch", {})
-        if notch_cfg:
-            self.anim.setDuration(notch_cfg.get("animation_duration_ms", 200))
 
         rpc_cfg = self.config.get("discord_rpc", {})
         if rpc_cfg:
@@ -2227,7 +2235,7 @@ class DynamicNotchWindow(QWidget):
         self._transition_to(NotchState.COLLAPSED)
 
     def _start_click_outside_timer(self):
-        if self.state == NotchState.EXPANDED:
+        if not self._shutting_down and self.state == NotchState.EXPANDED:
             self._click_outside_timer.start()
 
     def _check_click_outside(self):
@@ -2287,90 +2295,64 @@ class DynamicNotchWindow(QWidget):
                     self._collapse_to_pill()
         super().changeEvent(event)
 
-    def _transition_to(self, new_state: NotchState, target_tab: str = None):
+    def _transition_to(self, new_state: NotchState, target_tab: str = None, *, animate: bool = True):
         if self.state == new_state:
             if target_tab:
                 self._switch_to_tab_by_name(target_tab, animate=False)
+            if not animate:
+                self._apply_geometry_for_state(new_state, animate=False)
             return
 
-        old_state = self.state
+        self.anim.stop()
         self._peek_presence_timer.stop()
         self._leave_timer.stop()
+        self._click_outside_timer.stop()
         self.peek_volume_menu.hide()
         self._peek_fade.stop()
         self._peek_opacity.setEnabled(False)
+        if self.state == NotchState.ISLAND:
+            self._island_timer.stop()
+            self._thumb_anim.stop()
+            self._thumb_opacity_fx.setEnabled(False)
+
+        if new_state == NotchState.PEEK:
+            self._position_peek_view()
+        self.view_collapsed.setVisible(new_state == NotchState.COLLAPSED)
+        self.view_peek.setVisible(new_state == NotchState.PEEK)
+        self.view_island.setVisible(new_state == NotchState.ISLAND)
+        self.view_expanded.setVisible(new_state == NotchState.EXPANDED)
+
+        if new_state == NotchState.EXPANDED:
+            # Select the page before enabling expanded layout resize requests.
+            default_tab = self.config.get("notch", {}).get("default_tab", "Home")
+            selected_tab = target_tab or (default_tab if default_tab in self._tab_name_to_stack_idx else "Home")
+            if selected_tab not in self._enabled_tab_names:
+                selected_tab = self._active_tab_names[0]
+            self._switch_to_tab_by_name(selected_tab, animate=False)
+
         self.state = new_state
         self._sync_brightness_flyout()
         if new_state != NotchState.COLLAPSED and self._pill_level_timer.isActive():
             self._pill_level_timer.stop()
             self._dismiss_pill_level()
+        self._apply_geometry_for_state(new_state, animate=animate)
+        self.update()
 
-        # Capture geometry BEFORE any view visibility changes
-        start_rect = self.geometry()
-        if self.anim and self.anim.state() == QPropertyAnimation.State.Running:
-            self.anim.stop()
-            start_rect = self.geometry()
-
-        if new_state == NotchState.COLLAPSED:
-            self._target_size = (self._collapsed_w, self._collapsed_h)
-            self.view_collapsed.setVisible(True)
-            self.view_peek.setVisible(False)
-            self.view_island.setVisible(False)
-            self.view_expanded.setVisible(False)
-            self._click_outside_timer.stop()
-        elif new_state == NotchState.PEEK:
-            self._target_size = self.PEEK_SIZE
-            self.view_collapsed.setVisible(False)
-            self.view_peek.setVisible(True)
-            self._position_peek_view()
-            self.view_peek.setFocus(Qt.FocusReason.OtherFocusReason)
-            self.view_island.setVisible(False)
-            self.view_expanded.setVisible(False)
-            self._click_outside_timer.stop()
-        elif new_state == NotchState.ISLAND:
-            self._target_size = (420, 64)
-            self.view_collapsed.setVisible(False)
-            self.view_peek.setVisible(False)
-            self.view_island.setVisible(True)
-            self.view_expanded.setVisible(False)
-            self._click_outside_timer.stop()
-        elif new_state == NotchState.EXPANDED:
-            self._target_size = (self._open_w, self._open_h)
-            self.view_collapsed.setVisible(False)
-            self.view_peek.setVisible(False)
-            self.view_island.setVisible(False)
-            self.view_expanded.setVisible(True)
+        if new_state == NotchState.EXPANDED:
             self._sync_system_controls(force=True)
-
-            # Smart Default Tab auto-selection
-            dtab = self.config.get("notch", {}).get("default_tab", "Smart")
-            selected_tab = "Home"
-            if dtab == "Smart":
-                selected_tab = "Home"
-            elif hasattr(self, "_tab_name_to_stack_idx") and dtab in self._tab_name_to_stack_idx:
-                selected_tab = dtab
-            selected_tab = target_tab or selected_tab
-            if selected_tab not in self._enabled_tab_names:
-                selected_tab = self._active_tab_names[0]
-            self._switch_to_tab_by_name(selected_tab, animate=False)
-
             self.raise_()
             self.activateWindow()
-            self._click_outside_timer.stop()
-            QTimer.singleShot(220, self._start_click_outside_timer)
-
-        self._apply_geometry_for_state(new_state, animate=True, start_rect=start_rect)
-        if new_state == NotchState.PEEK:
+            QTimer.singleShot(220, self, self._start_click_outside_timer)
+        elif new_state == NotchState.PEEK:
+            self.view_peek.setFocus(Qt.FocusReason.OtherFocusReason)
             self._peek_presence_timer.start()
             self._show_peek_timeline()
             self._sync_system_controls()
             self.view_peek.layout().activate()
             self._elide_peek_metadata()
-            duration = min(160, self.config.get("notch", {}).get("animation_duration_ms", 200))
-            if duration > 0:
+            if self.anim.state() == QPropertyAnimation.State.Running:
                 self._peek_opacity.setEnabled(True)
-                self._peek_opacity.setOpacity(0.0)
-                self._peek_fade.setDuration(duration)
+                self._peek_fade.setDuration(min(160, self.anim.duration()))
                 self._peek_fade.setStartValue(0.0)
                 self._peek_fade.setEndValue(1.0)
                 self._peek_fade.start()
@@ -2401,7 +2383,8 @@ class DynamicNotchWindow(QWidget):
         if self.x() != expected_x or self.y() != expected_y:
             self.move(expected_x, expected_y)
 
-    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, start_rect: QRect = None):
+    def _geometry_for_state(self, state: NotchState) -> QRect:
+        screen = self._get_current_screen_geometry()
         if state == NotchState.COLLAPSED:
             self._target_size = (self._collapsed_w, self._collapsed_h)
         elif state == NotchState.PEEK:
@@ -2410,7 +2393,6 @@ class DynamicNotchWindow(QWidget):
             self._target_size = (420, 64)
         elif state == NotchState.EXPANDED:
             page = self.tab_stack.currentWidget()
-            screen = self._get_current_screen_geometry()
             max_height = screen.height() - 56 - max(0, self._top_offset)
             layout = self.view_expanded.layout()
             layout.activate()
@@ -2428,69 +2410,51 @@ class DynamicNotchWindow(QWidget):
             self._target_size = (w, min(h, max_height))
             self.view_expanded.setFixedSize(*self._target_size)
 
-        screen = self._get_current_screen_geometry()
         w, h = self._target_size
         top_offset = getattr(self, "_top_offset", 0)
         x = screen.x() + (screen.width() - w) // 2
         y = screen.y() + top_offset if self._style == "Notch" else screen.y() + max(8, 8 + top_offset)
-        target_rect = QRect(x, y, w, h)
+        return QRect(x, y, w, h)
 
-        if animate:
-            self.anim.stop()
-            if hasattr(self, "_anim_opacity"):
-                self._anim_opacity.stop()
+    def _transition_duration(self) -> int:
+        if not system_animations_enabled():
+            return 0
+        return max(0, self.config.get("notch", {}).get("animation_duration_ms", 200))
 
-            # Align start_rect mathematically around target_rect's exact center axis
-            target_center_x = target_rect.x() + target_rect.width() // 2
-            if start_rect is not None:
-                sw = max(1, start_rect.width())
-                start_rect = QRect(target_center_x - sw // 2, start_rect.y(), sw, start_rect.height())
-                self.setGeometry(start_rect)
-            else:
-                cur_geo = self.geometry()
-                sw = max(1, cur_geo.width())
-                start_rect = QRect(target_center_x - sw // 2, cur_geo.y(), sw, cur_geo.height())
-                self.setGeometry(start_rect)
+    def _apply_geometry_for_state(self, state: NotchState, animate: bool = True):
+        self._anim_opacity.stop()
+        self._expanded_opacity.setEnabled(False)
+        if not animate:
+            self._peek_fade.stop()
+            self._peek_opacity.setEnabled(False)
 
-            # Organic spring physics matching macOS Dynamic Island & NotchX
-            if state == NotchState.COLLAPSED:
-                duration = 200
-                curve = QEasingCurve(QEasingCurve.Type.OutCubic)
-            elif state in (NotchState.PEEK, NotchState.ISLAND):
-                duration = 240
-                curve = QEasingCurve(QEasingCurve.Type.OutCubic)
-            else:  # EXPANDED
-                duration = 240
-                curve = QEasingCurve(QEasingCurve.Type.OutCubic)
-                if hasattr(self, "_expanded_opacity"):
-                    self._expanded_opacity.setEnabled(True)
-                    self._expanded_opacity.setOpacity(0.0)
-                    self._anim_opacity.stop()
-                    self._anim_opacity.setDuration(170)
-                    self._anim_opacity.setStartValue(0.0)
-                    self._anim_opacity.setEndValue(1.0)
-                    self._anim_opacity.setEasingCurve(curve)
-                    # Smoothly fade content into view as the container blooms outward from center
-                    QTimer.singleShot(60, self._anim_opacity.start)
+        target = self._geometry_for_state(state)
+        duration = self._transition_duration() if animate else 0
+        if self._animate_geometry(target, duration) and state == NotchState.EXPANDED:
+            self._anim_opacity.setDuration(duration)
+            # Hold content until the drawer has room. Use the same clock length
+            # as geometry so the two effects finish together.
+            delay = min(60, duration / 4) / duration
+            key = self._anim_opacity.easingCurve().valueForProgress(delay)
+            self._anim_opacity.setKeyValues([(0.0, 0.0), (key, 0.0), (1.0, 1.0)])
+            self._expanded_opacity.setOpacity(0.0)
+            self._expanded_opacity.setEnabled(True)
+            self._anim_opacity.start()
 
-            self.anim.setDuration(duration)
-            self.anim.setDuration(self.config.get("notch", {}).get("animation_duration_ms", duration))
-            self.anim.setEasingCurve(curve)
-            # Clear mask during animation to eliminate SetWindowRgn DWM pipeline stalls
-            self.clearMask()
-            self.anim.setStartValue(start_rect)
-            self.anim.setEndValue(target_rect)
-            self.anim.start()
-        else:
-            self.anim.stop()
-            if hasattr(self, "_anim_opacity"):
-                self._anim_opacity.stop()
-            if hasattr(self, "_expanded_opacity"):
-                self._expanded_opacity.setOpacity(1.0)
-                self._expanded_opacity.setEnabled(False)
-            self.setGeometry(target_rect)
-            self._recenter_window()
+    def _animate_geometry(self, target: QRect, duration: int) -> bool:
+        self.anim.stop()
+        start = self.geometry()
+        if duration <= 0 or start == target:
+            self.setGeometry(target)
             self._update_clickthrough_mask()
+            return False
+        # Clear the native region while resizing to avoid repeated DWM stalls.
+        self.clearMask()
+        self.anim.setDuration(duration)
+        self.anim.setStartValue(start)
+        self.anim.setEndValue(target)
+        self.anim.start()
+        return True
 
     def _on_animation_finished(self):
         self._update_clickthrough_mask()
@@ -2601,6 +2565,8 @@ class DynamicNotchWindow(QWidget):
             self._level_hotkeys.clear()
         for timer in self.findChildren(QTimer):
             timer.stop()
+        for animation in self.findChildren(QVariantAnimation):
+            animation.stop()
         self.screentime.close()
         self.lyrics_manager.close()
         self.media_manager.stop()
