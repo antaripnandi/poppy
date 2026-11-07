@@ -2,7 +2,7 @@
 
 import pytest
 from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
-from PySide6.QtGui import QColor, QImage, QContextMenuEvent
+from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMenu
 from poppy.core.window import DynamicNotchWindow, NotchState
@@ -139,20 +139,49 @@ def test_peek_collapses_if_windows_misses_the_leave_event(audit_app, monkeypatch
     window.close()
 
 
-def test_idle_pill_shows_only_clock_before_and_after_a_media_session(audit_app, monkeypatch):
+def test_idle_hover_opens_and_stays_open_when_a_media_session_ends(audit_app, monkeypatch):
     from poppy.core.window import QCursor
-    window = DynamicNotchWindow()
+    window = DynamicNotchWindow({"notch": {"auto_hover_peek": False}})
     window.show()
-    monkeypatch.setattr(QCursor, "pos", lambda: window.geometry().center())
+    pointer = window.geometry().center()
+    monkeypatch.setattr(QCursor, "pos", lambda: pointer)
     media_widgets = (window.coll_thumb, window.coll_visualizer, window.coll_status_dot)
+    transport = (window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next, window.peek_seek)
     assert all(widget.isHidden() for widget in media_widgets)
     assert window.lbl_clock.isVisible()
+
+    local = QPointF(window.mapFromGlobal(pointer))
+    enter = QEnterEvent(local, local, QPointF(pointer))
+    window.enterEvent(enter)
+    assert not window._hover_peek_timer.isActive()
     window._on_hover_peek_timeout()
     assert window.state == NotchState.COLLAPSED
-    window._on_media_changed({"title": "Video"})
-    assert all(widget.isVisible() for widget in media_widgets)
-    window._transition_to(NotchState.PEEK)
+
+    window.config["notch"]["auto_hover_peek"] = True
+    window.enterEvent(enter)
+    assert window._hover_peek_timer.isActive()
+    window._on_hover_peek_timeout()
+    settle(window, audit_app)
+    assert window.state == NotchState.PEEK
+    assert window.lbl_peek_title.text() == "Nothing playing"
+    assert window.peek_visualizer.isHidden()
+    assert all(not button.isEnabled() for button in transport)
+    window.btn_peek_volume.click()
+    assert window.peek_volume_menu.isVisible()
+
+    window._on_media_changed({"title": "Video", "can_seek": True, "position_sec": 15, "duration_sec": 45})
+    assert window.lbl_peek_title.text() == "Video"
+    assert all(button.isEnabled() for button in transport)
     window._on_media_changed({"title": "No Media Playing"})
+    assert window.state == NotchState.PEEK
+    assert window.peek_volume_menu.isVisible()
+    assert window.lbl_peek_title.text() == "Nothing playing"
+    assert all(not button.isEnabled() for button in transport)
+    assert window.peek_seek.value() == 0
+
+    window.peek_volume_menu.hide()
+    pointer = window.geometry().topLeft() - QPoint(100, 100)
+    window._on_leave_timeout()
     settle(window, audit_app)
     assert window.state == NotchState.COLLAPSED
     assert all(widget.isHidden() for widget in media_widgets)

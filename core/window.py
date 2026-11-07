@@ -351,7 +351,7 @@ class DynamicNotchWindow(QWidget):
         self.peek_thumb.setFixedSize(82, 82)
         self.peek_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.peek_thumb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.peek_thumb.setToolTip("Open Poppy. Right-click for more playback controls.")
+        self.peek_thumb.setToolTip("Open Poppy. Right-click for sound options.")
         layout.addWidget(self.peek_thumb, 0, Qt.AlignmentFlag.AlignVCenter)
 
         player = QVBoxLayout()
@@ -369,6 +369,7 @@ class DynamicNotchWindow(QWidget):
             metadata.addWidget(label)
         header.addLayout(metadata, 1)
         self.peek_visualizer = AudioVisualizerBars(self.view_peek)
+        self.peek_visualizer.hide()
         header.addWidget(self.peek_visualizer, 0, Qt.AlignmentFlag.AlignTop)
         player.addLayout(header)
 
@@ -1459,8 +1460,7 @@ class DynamicNotchWindow(QWidget):
         self._has_media = available
         for widget in (self.coll_thumb, self.coll_visualizer, self.coll_status_dot):
             widget.setVisible(available)
-        if not available and self.state == NotchState.PEEK:
-            self._collapse_to_pill()
+        self.peek_visualizer.setVisible(available)
         self.lbl_peek_title.setToolTip(title if available else "")
         self.lbl_peek_artist.setToolTip(artist if available else "")
         for button in (self.btn_peek_prev, self.btn_peek_play, self.btn_peek_next):
@@ -1513,6 +1513,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.btn_ctrl_play.setToolTip("Pause" if is_playing else "Play")
 
     def _set_peek_playing(self, playing):
+        playing = playing and self._has_media
         self.peek_visualizer.set_playing(playing)
         label = "Pause" if playing else "Play"
         self.btn_peek_play.setAccessibleName(label)
@@ -1544,7 +1545,16 @@ class DynamicNotchWindow(QWidget):
             if action != "Play":
                 painter.drawRoundedRect(QRectF(14, 2.5, 2.5, 13), 0.6, 0.6)
         painter.end()
-        return QIcon(pixmap)
+        disabled = QPixmap(pixmap.size())
+        disabled.setDevicePixelRatio(pixmap.devicePixelRatio())
+        disabled.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(disabled)
+        painter.setOpacity(0.32)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+        icon = QIcon(pixmap)
+        icon.addPixmap(disabled, QIcon.Mode.Disabled)
+        return icon
 
     def _size_collapsed_art(self):
         size = max(12, min(round(self._collapsed_h * 0.70), round(self._collapsed_w * 0.11)))
@@ -1571,9 +1581,9 @@ class DynamicNotchWindow(QWidget):
             self._show_peek_timeline()
 
     def _show_peek_timeline(self):
-        if self.peek_seek.isSliderDown():
+        if self._has_media and self.peek_seek.isSliderDown():
             return
-        position, duration = self._peek_timeline
+        position, duration = self._peek_timeline if self._has_media else (0, 0)
         self.peek_seek.setEnabled(bool(duration > 0 and self._current_media.get("can_seek")))
         self.peek_seek.setRange(0, max(1, round(duration)))
         self.peek_seek.setValue(round(position) if duration > 0 else 0)
@@ -1616,7 +1626,8 @@ class DynamicNotchWindow(QWidget):
         self._peek_transport_icons = {action: self._peek_transport_icon(action, ink)
                                       for action in ("Previous", "Play", "Pause", "Next")}
         self.btn_peek_prev.setIcon(self._peek_transport_icons["Previous"])
-        self.btn_peek_play.setIcon(self._peek_transport_icons["Pause" if self._current_media.get("is_playing") else "Play"])
+        action = "Pause" if self._has_media and self._current_media.get("is_playing") else "Play"
+        self.btn_peek_play.setIcon(self._peek_transport_icons[action])
         self.btn_peek_next.setIcon(self._peek_transport_icons["Next"])
         for button in (self.btn_peek_prev, self.btn_peek_next, self.btn_peek_volume, self.btn_peek_play):
             size = 18 if button is self.btn_peek_play else 14
@@ -1660,11 +1671,10 @@ class DynamicNotchWindow(QWidget):
     def _elide_peek_metadata(self):
         data = self._current_media
         title = data.get("title", "")
-        available = title not in ("No Media Playing", "Unknown Title", "")
-        artist = data.get("artist", "") if available else "Play audio in a media app"
-        if available and not artist:
+        artist = data.get("artist", "") if self._has_media else "Play media to start"
+        if self._has_media and not artist:
             artist = data.get("display_name", "")
-        for label, text in ((self.lbl_peek_title, title if available else "Nothing playing"),
+        for label, text in ((self.lbl_peek_title, title if self._has_media else "Nothing playing"),
                             (self.lbl_peek_artist, artist)):
             label.setText(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(1, label.width())))
 
@@ -1964,7 +1974,7 @@ class DynamicNotchWindow(QWidget):
             super().enterEvent(event)
             return
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
-        if self.state == NotchState.COLLAPSED and auto_peek and self._has_media:
+        if self.state == NotchState.COLLAPSED and auto_peek:
             self._hover_peek_timer.start(140)
         super().enterEvent(event)
 
@@ -1984,8 +1994,8 @@ class DynamicNotchWindow(QWidget):
         super().leaveEvent(event)
 
     def _on_hover_peek_timeout(self):
-        from PySide6.QtGui import QCursor
-        if self.state == NotchState.COLLAPSED and self._has_media and self.geometry().contains(QCursor.pos()):
+        auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
+        if self.state == NotchState.COLLAPSED and auto_peek and self.geometry().contains(QCursor.pos()):
             if self.anim.state() == QPropertyAnimation.State.Running:
                 self._hover_peek_timer.start(70)
                 return
