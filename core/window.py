@@ -12,6 +12,7 @@ States:
 
 import os
 import ctypes
+from ctypes import wintypes
 import psutil
 import atexit
 from enum import Enum
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, surface_colors, is_light_theme, resolve_light_mode, LAYOUT_THEMES, home_order, contrast_ink
 from poppy.ui.components import (
-    IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail,
+    IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail, PillLevel,
     AnimatedTabStrip, AnimatedStackedWidget, CardFrame, ClickableSlider
 )
 from poppy.ui.icons import Icons, get_fluent_font_family
@@ -102,6 +103,7 @@ class _NotchLayout(QVBoxLayout):
 
 class DynamicNotchWindow(QWidget):
     PEEK_SIZE = (316, 108)
+    VOLUME_KEYS = (0xAD, 0xAE, 0xAF)  # VK_VOLUME_MUTE, DOWN, UP
     message_requested = Signal(str, str)
     quit_requested = Signal()
     settings_applied = Signal()
@@ -111,6 +113,10 @@ class DynamicNotchWindow(QWidget):
         self.config = config or {}
         self._current_media = {}
         self._has_media = False
+        self._level_hotkeys = set()
+        self._brightness_level = None
+        self._pending_brightness_step = 0
+        self._animate_levels = True
 
         # Frameless, Always on Top, Hidden from Alt+Tab / Taskbar
         self.setWindowFlags(
@@ -336,6 +342,13 @@ class DynamicNotchWindow(QWidget):
         for widget in (self.coll_thumb, self.coll_visualizer, self.coll_status_dot):
             widget.hide()
 
+        self._collapsed_contents = (left_box, center_box, right_box)
+        self.pill_level = PillLevel(self.view_collapsed)
+        self.pill_level.hide()
+        self._pill_level_timer = QTimer(self)
+        self._pill_level_timer.setSingleShot(True)
+        self._pill_level_timer.setInterval(1000)
+        self._pill_level_timer.timeout.connect(self._dismiss_pill_level)
         self.main_layout.addWidget(self.view_collapsed)
 
         # =====================================================================
@@ -911,11 +924,69 @@ class DynamicNotchWindow(QWidget):
             self.audio_ctrl.set_mute(False)
             muted = False
         self._show_volume(value, muted)
+        return muted
 
     def _on_mute_clicked(self):
         new_muted = self.audio_ctrl.toggle_mute()
         vol = self.audio_ctrl.get_volume()
         self._show_volume(vol, new_muted)
+        self._show_pill_level("Volume", Icons.MUTE if new_muted else Icons.VOLUME,
+                              vol if new_muted else 0, vol, muted=new_muted)
+
+    def _step_volume(self, step):
+        previous = self.audio_ctrl.get_volume()
+        was_muted = self.audio_ctrl.get_mute()
+        value = max(0, min(100, previous + step))
+        muted = self._on_volume_slider_changed(value)
+        icon = Icons.MUTE if muted or value == 0 else Icons.VOLUME
+        self._show_pill_level("Volume", icon, 0 if was_muted else previous, value, muted=muted)
+
+    def start_system_level_controls(self):
+        user32 = ctypes.windll.user32
+        animation = wintypes.BOOL(True)
+        if user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(animation), 0):  # SPI_GETCLIENTAREAANIMATION
+            self._animate_levels = bool(animation.value)
+        hwnd = wintypes.HWND(int(self.winId()))
+        for key in self.VOLUME_KEYS:
+            if key not in self._level_hotkeys and user32.RegisterHotKey(hwnd, key, 0, key):
+                self._level_hotkeys.add(key)
+
+    def nativeEvent(self, event_type, message):
+        if self._level_hotkeys and event_type == b"windows_generic_MSG":
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0312 and msg.wParam in self._level_hotkeys:  # WM_HOTKEY
+                if msg.wParam == 0xAD:
+                    self._on_mute_clicked()
+                else:
+                    self._step_volume(2 if msg.wParam == 0xAF else -2)
+                return True, 0
+        return super().nativeEvent(event_type, message)
+
+    def _show_pill_level(self, name, icon, previous, value, *, muted=False):
+        if self.state == NotchState.PEEK and QApplication.activePopupWidget() is None:
+            self._transition_to(NotchState.COLLAPSED)
+        if self.state != NotchState.COLLAPSED or not self.isVisible():
+            return
+        self._hover_peek_timer.stop()
+        self._update_pill_level_ink()
+        duration = min(120, self.config.get("notch", {}).get("animation_duration_ms", 200)) if self._animate_levels else 0
+        self.pill_level.show_level(name, icon, previous, value, duration, muted=muted)
+        for widget in self._collapsed_contents:
+            widget.hide()
+        self.pill_level.setGeometry(self.view_collapsed.rect())
+        self.pill_level.show()
+        self._pill_level_timer.start()
+
+    def _update_pill_level_ink(self):
+        color = surface_colors()["root"] if is_light_theme() else self._theme["bg"]
+        self.pill_level.set_ink(contrast_ink(QColor(color)))
+
+    def _dismiss_pill_level(self):
+        self.pill_level.hide()
+        for widget in self._collapsed_contents:
+            widget.show()
+        if self.state == NotchState.COLLAPSED and self.geometry().contains(QCursor.pos()):
+            self._hover_peek_timer.start(140)
 
     def _show_volume(self, volume, muted):
         self.tab_home.set_volume_display(volume, muted)
@@ -959,15 +1030,38 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
 
     def _on_brightness_slider_changed(self, value: int):
+        self._brightness_level = value
         self.bright_ctrl.set_brightness(value)
         self.tab_home.set_brightness_display(value)
 
+    def _step_brightness(self, step):
+        if (self._brightness_level is not None and self.pill_level.isVisible()
+                and self.pill_level.accessibleName() == "Brightness"):
+            self._apply_brightness_step(self._brightness_level, step)
+        else:
+            self._pending_brightness_step += step
+            self.bright_ctrl.request_brightness()
+
+    def _apply_brightness_step(self, previous, step):
+        value = max(0, min(100, previous + step))
+        if value != previous:
+            self._on_brightness_slider_changed(value)
+        self._show_pill_level("Brightness", Icons.BRIGHTNESS, previous, value)
+
     def _on_brightness_read(self, value):
+        previous = self._brightness_level
+        self._brightness_level = value
+        step, self._pending_brightness_step = self._pending_brightness_step, 0
         slider = self.tab_home.slider_bright
         slider.setEnabled(value is not None)
         slider.setToolTip("Brightness" if value is not None else "Brightness control is unavailable on this display.")
         if value is not None and not slider.isSliderDown():
             self.tab_home.set_brightness_display(value)
+            if step:
+                self._apply_brightness_step(value, step)
+            elif (value != previous and self.pill_level.isVisible()
+                    and self.pill_level.accessibleName() == "Brightness"):
+                self._show_pill_level("Brightness", Icons.BRIGHTNESS, previous, value)
 
     def _on_weather_updated(self, data: dict):
         self.tab_home.update_weather(data)
@@ -1923,6 +2017,9 @@ class DynamicNotchWindow(QWidget):
             self._size_collapsed_art()
             self._refresh_collapsed_art()
         self._refresh_peek_surface()
+        if self.pill_level.isVisible():
+            self.pill_level.setGeometry(self.view_collapsed.rect())
+            self._update_pill_level_ink()
         self._apply_geometry_for_state(self.state, animate=False)
         self.update()
 
@@ -1974,7 +2071,7 @@ class DynamicNotchWindow(QWidget):
             super().enterEvent(event)
             return
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
-        if self.state == NotchState.COLLAPSED and auto_peek:
+        if self.state == NotchState.COLLAPSED and auto_peek and not self._pill_level_timer.isActive():
             self._hover_peek_timer.start(140)
         super().enterEvent(event)
 
@@ -1995,7 +2092,8 @@ class DynamicNotchWindow(QWidget):
 
     def _on_hover_peek_timeout(self):
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
-        if self.state == NotchState.COLLAPSED and auto_peek and self.geometry().contains(QCursor.pos()):
+        if (self.state == NotchState.COLLAPSED and auto_peek and not self._pill_level_timer.isActive()
+                and self.geometry().contains(QCursor.pos())):
             if self.anim.state() == QPropertyAnimation.State.Running:
                 self._hover_peek_timer.start(70)
                 return
@@ -2049,19 +2147,16 @@ class DynamicNotchWindow(QWidget):
         super().mousePressEvent(event)
 
     def wheelEvent(self, event):
-        # NotchX Gesture: Scroll on the closed pill to adjust Windows master volume
-        if self.config.get("notch", {}).get("scroll_volume", True):
-            if self.state == NotchState.COLLAPSED or (hasattr(self, "view_collapsed") and self.view_collapsed.isVisible()):
-                delta = event.angleDelta().y()
-                if delta != 0:
-                    delta_steps = 2 if delta > 0 else -2
-                    cur_vol = self.audio_ctrl.get_volume()
-                    new_vol = max(0, min(100, cur_vol + delta_steps))
-                    self.audio_ctrl.set_volume(new_vol)
-                    self.tab_home.set_volume_display(new_vol, False)
-                    self.tab_music.set_volume_display(new_vol, False)
-                    event.accept()
-                    return
+        if self.state in (NotchState.COLLAPSED, NotchState.PEEK):
+            delta = event.angleDelta().y()
+            if delta and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                self._step_brightness(5 if delta > 0 else -5)
+                event.accept()
+                return
+            if delta and event.modifiers() == Qt.KeyboardModifier.NoModifier and self.config.get("notch", {}).get("scroll_volume", True):
+                self._step_volume(2 if delta > 0 else -2)
+                event.accept()
+                return
         super().wheelEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -2171,6 +2266,9 @@ class DynamicNotchWindow(QWidget):
         self._peek_fade.stop()
         self._peek_opacity.setEnabled(False)
         self.state = new_state
+        if new_state != NotchState.COLLAPSED and self._pill_level_timer.isActive():
+            self._pill_level_timer.stop()
+            self._dismiss_pill_level()
 
         # Capture geometry BEFORE any view visibility changes
         start_rect = self.geometry()
@@ -2458,6 +2556,11 @@ class DynamicNotchWindow(QWidget):
                 event.ignore()
                 return
         self._shutting_down = True
+        if self._level_hotkeys:
+            hwnd = wintypes.HWND(int(self.winId()))
+            for key in self._level_hotkeys:
+                ctypes.windll.user32.UnregisterHotKey(hwnd, key)
+            self._level_hotkeys.clear()
         for timer in self.findChildren(QTimer):
             timer.stop()
         self.screentime.close()

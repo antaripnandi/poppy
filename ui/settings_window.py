@@ -640,7 +640,7 @@ class SettingsWindow(QWidget):
 
         card_beh = _create_setting_card([
             SettingRow("Preview on hover", "Show the compact player and volume control when you hover over the closed pill", self.chk_hover_peek),
-            SettingRow("Scroll to change volume", "Scroll mouse wheel on closed pill to adjust Windows master volume", self.chk_scroll_volume),
+            SettingRow("Scroll to change volume", "Scroll over the pill for volume. Shift + scroll adjusts supported displays.", self.chk_scroll_volume),
             SettingRow("Launch at login", "Start Poppy when you sign in to Windows", self.chk_autostart),
             SettingRow("Show tray icon", "Right-click the pill to open settings or exit with the tray icon hidden", self.chk_tray_close),
             SettingRow("Animation duration", "Open and close animation, in milliseconds", self.spin_anim_ms)

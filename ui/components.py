@@ -7,7 +7,7 @@ Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 import os
 from functools import lru_cache
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QSize, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QEasingCurve, QEvent, Property
+    Qt, QRect, QRectF, QSize, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QVariantAnimation, QEasingCurve, QEvent, Property
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QDrag, QPixmap, QFont, QIcon
@@ -575,6 +575,82 @@ class CircularProgressRing(QWidget):
             start_angle = 90 * 16
             span_angle = -int(self._progress * 360 * 16)
             painter.drawArc(draw_rect, start_angle, span_angle)
+
+
+class PillLevel(QWidget):
+    """Transient level feedback drawn inside the existing pill."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._value = 0.0
+        self._icon = Icons.VOLUME
+        self._label = "0%"
+        self._ink = QColor("white")
+        self._motion = QVariantAnimation(self)
+        self._motion.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._motion.valueChanged.connect(self._set_fill)
+
+    def show_level(self, name, icon, previous, value, duration, *, muted=False):
+        start = self._value if self.isVisible() and self.accessibleName() == name else previous
+        self._motion.stop()
+        self._icon = icon
+        self._label = "Muted" if muted else f"{value}%"
+        self.setAccessibleName(name)
+        self.setAccessibleDescription(self._label)
+        target = 0 if muted else value
+        if duration and start != target:
+            self._motion.setDuration(duration)
+            self._motion.setStartValue(float(start))
+            self._motion.setEndValue(float(target))
+            self._motion.start()
+        else:
+            self._set_fill(float(target))
+        self.update()
+
+    def set_ink(self, ink):
+        self._ink = QColor(ink)
+        self.update()
+
+    def _set_fill(self, value):
+        self._value = value
+        self.update()
+
+    def hideEvent(self, event):
+        self._motion.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inset = min(18, self.width() // 10)
+        height = self.height()
+        font = QFont(get_fluent_font_family())
+        font.setPixelSize(min(15, max(9, height - 8)))
+        painter.setFont(font)
+        painter.setPen(self._ink)
+        painter.drawText(QRect(inset, 0, 18, height), Qt.AlignmentFlag.AlignCenter, self._icon)
+
+        font = QFont("Segoe UI")
+        font.setPixelSize(min(12, max(9, height - 8)))
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        text_width = max(painter.fontMetrics().horizontalAdvance(text) for text in ("100%", "Muted"))
+        text_left = self.width() - inset - text_width
+        painter.drawText(QRect(text_left, 0, text_width, height), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._label)
+
+        left = inset + 26
+        width = max(0, text_left - 10 - left)
+        track = QRectF(left, (height - 4) / 2, width, 4)
+        painter.setPen(Qt.PenStyle.NoPen)
+        rail = QColor(self._ink)
+        rail.setAlphaF(0.22)
+        painter.setBrush(rail)
+        painter.drawRoundedRect(track, 2, 2)
+        if self._value > 0 and width:
+            track.setWidth(width * self._value / 100)
+            painter.setBrush(self._ink)
+            painter.drawRoundedRect(track, min(2, track.width() / 2), 2)
 
 
 class AudioVisualizerBars(QWidget):

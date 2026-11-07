@@ -105,6 +105,7 @@ def main():
     # Create & display dynamic notch window
     notch = DynamicNotchWindow(config=config)
     notch.show()
+    notch.start_system_level_controls()
     def activate_notch():
         notch.show()
         notch.raise_()

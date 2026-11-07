@@ -19,6 +19,7 @@ Close any older running version from its tray menu before launching this update.
 
 - Click the pill to open the drawer. Escape closes it.
 - Hover opens the compact player when **Preview on hover** is enabled. With no media session, the closed pill shows the clock and the hover card shows **Nothing playing** with system volume still available. Click the pill or hover preview to open Home by default. Use **Open to** in Settings to pick another starting tab.
+- Standard Windows volume keys and scrolling over the pill adjust system volume. Hold Shift while scrolling over the pill to adjust brightness on a supported display. The level appears in the pill, then the clock returns. If Windows cannot register a volume key for Poppy, that key keeps its normal behavior. Driver and firmware brightness keys can still show the Windows indicator.
 - Ctrl+1 through Ctrl+9 select header tabs while the drawer has keyboard focus.
 - Open **Commands** from the drawer footer or press Ctrl+Shift+Space while Poppy has focus. Search tabs, built-in actions, and Start menu shortcuts.
 - **Desktops** lists open windows on the current virtual desktop. Press Enter on a window to activate it, or use the desktop buttons to switch, create a desktop, or open Task View.

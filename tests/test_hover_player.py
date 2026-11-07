@@ -2,7 +2,7 @@
 
 import pytest
 from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
-from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent
+from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMenu
 from poppy.core.window import DynamicNotchWindow, NotchState
@@ -16,6 +16,59 @@ def settle(window, app):
     if window._peek_fade.state() == window._peek_fade.State.Running:
         window._peek_fade.setCurrentTime(window._peek_fade.duration())
     app.processEvents()
+
+
+def test_level_gestures_retarget_the_pill_and_restore_the_clock(audit_app, monkeypatch):
+    window = DynamicNotchWindow()
+    volume = [46]
+    brightness = []
+    brightness_reads = []
+    monkeypatch.setattr(window.audio_ctrl, "get_volume", lambda: volume[-1])
+    monkeypatch.setattr(window.audio_ctrl, "get_mute", lambda: False)
+    monkeypatch.setattr(window.audio_ctrl, "set_volume", volume.append)
+    monkeypatch.setattr(window.bright_ctrl, "set_brightness", brightness.append)
+    monkeypatch.setattr(window.bright_ctrl, "request_brightness", lambda: brightness_reads.append(True))
+    window.show()
+    window._on_brightness_read(60)
+    size = window.size()
+    center = QPointF(window.rect().center())
+    pointer = QPointF(window.geometry().center())
+
+    def scroll(delta, modifiers=Qt.KeyboardModifier.NoModifier):
+        event = QWheelEvent(center, pointer, QPoint(), QPoint(0, delta),
+                            Qt.MouseButton.NoButton, modifiers, Qt.ScrollPhase.NoScrollPhase, False)
+        audit_app.sendEvent(window, event)
+        assert event.isAccepted()
+
+    scroll(120)
+    assert volume[-1] == 48
+    assert window.pill_level.isVisible() and not window.lbl_clock.isVisible()
+    assert window.pill_level.accessibleDescription() == "48%"
+    window.pill_level._motion.setCurrentTime(60)
+    intermediate = window.pill_level._value
+    assert 46 < intermediate < 48
+    scroll(-120)
+    assert volume[-1] == 46
+    assert window.pill_level._motion.startValue() == intermediate
+    window.pill_level._motion.setCurrentTime(window.pill_level._motion.duration())
+    assert window.pill_level._value == 46
+
+    scroll(-120, Qt.KeyboardModifier.ShiftModifier)
+    assert brightness_reads and not brightness
+    window._on_brightness_read(70)
+    assert brightness == [65] and volume == [46, 48, 46]
+    assert window.pill_level.accessibleName() == "Brightness"
+    assert window.pill_level.accessibleDescription() == "65%"
+    assert window.size() == size and window.state == NotchState.COLLAPSED
+    monkeypatch.setattr("poppy.core.window.QCursor.pos", lambda: pointer.toPoint())
+    window._on_hover_peek_timeout()
+    assert window.state == NotchState.COLLAPSED
+
+    monkeypatch.setattr("poppy.core.window.QCursor.pos", lambda: QPoint(-100, -100))
+    window._pill_level_timer.start(1)
+    QTest.qWait(30)
+    assert window.lbl_clock.isVisible() and not window.pill_level.isVisible()
+    window.close()
 
 
 def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
