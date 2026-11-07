@@ -685,7 +685,7 @@ class SettingsWindow(QWidget):
             SettingRow("Pill level feedback", "Use Poppy for volume and brightness feedback when Windows supports it.", self.chk_pill_levels),
             SettingRow("Launch at login", "Start Poppy when you sign in to Windows", self.chk_autostart),
             SettingRow("Show tray icon", "Right-click the pill to open settings or exit with the tray icon hidden", self.chk_tray_close),
-            SettingRow("Animation duration", "Open and close animation, in milliseconds", self.spin_anim_ms)
+            SettingRow("Animation duration", "Drawer opening time in milliseconds. Hover and collapse use shorter timings.", self.spin_anim_ms)
         ])
         l_beh.addWidget(card_beh)
         l_beh.addStretch()

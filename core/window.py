@@ -20,7 +20,7 @@ from datetime import datetime
 from fractions import Fraction
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QSize, QPoint, Property, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QEvent, Signal
+    Qt, QRect, QRectF, QSize, QPoint, QPointF, Property, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QEvent, Signal
 )
 from PySide6.QtGui import (
     QPainter, QColor, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
@@ -101,6 +101,14 @@ def _get_gpu_utilization() -> int | None:
 class DynamicNotchWindow(QWidget):
     PEEK_SIZE = (316, 108)
     VOLUME_KEYS = (0xAD, 0xAE, 0xAF)  # VK_VOLUME_MUTE, DOWN, UP
+    # Relative to the drawer duration. The second value is the initial speed
+    # as a multiple of the average speed over the transition.
+    MOTION_PROFILES = {
+        NotchState.COLLAPSED: (0.72, 0.8),
+        NotchState.PEEK: (0.75, 1.1),
+        NotchState.ISLAND: (0.85, 1.2),
+        NotchState.EXPANDED: (1.0, 1.4),
+    }
     message_requested = Signal(str, str)
     quit_requested = Signal()
     settings_applied = Signal()
@@ -180,7 +188,6 @@ class DynamicNotchWindow(QWidget):
         self._start_outline_center = 0.0
         self._transition_frame: QRect | None = None
         self.anim = QPropertyAnimation(self, b"notchGeometry", self)
-        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.anim.finished.connect(self._on_animation_finished)
 
         # Registries
@@ -457,7 +464,7 @@ class DynamicNotchWindow(QWidget):
         self.view_peek.setGraphicsEffect(self._peek_opacity)
         self._peek_opacity.setEnabled(False)
         self._peek_fade = QPropertyAnimation(self._peek_opacity, b"opacity", self)
-        self._peek_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._peek_fade.setEasingCurve(QEasingCurve.Type.InOutSine)
         self._peek_fade.finished.connect(lambda: self._peek_opacity.setEnabled(False))
 
         # =====================================================================
@@ -540,7 +547,7 @@ class DynamicNotchWindow(QWidget):
         self._expanded_opacity.setOpacity(1.0)
         self._expanded_opacity.setEnabled(False)
         self._anim_opacity = QPropertyAnimation(self._expanded_opacity, b"opacity", self)
-        self._anim_opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_opacity.setEasingCurve(QEasingCurve.Type.InOutSine)
         self._anim_opacity.finished.connect(lambda: self._expanded_opacity.setEnabled(False))
         v_exp_layout = QVBoxLayout(self.view_expanded)
         v_exp_layout.setContentsMargins(14, 12, 14, 12)
@@ -2403,13 +2410,12 @@ class DynamicNotchWindow(QWidget):
 
         start_radius = self._outline_radius()
         start_center = self._outline_bounds().center().x() + self.x()
+        velocity = self._geometry_velocity()
         self.anim.stop()
         self._peek_presence_timer.stop()
         self._leave_timer.stop()
         self._click_outside_timer.stop()
         self.peek_volume_menu.hide()
-        self._peek_fade.stop()
-        self._peek_opacity.setEnabled(False)
         if self.state == NotchState.ISLAND:
             self._island_download_folder = None
             self._island_timer.stop()
@@ -2441,7 +2447,8 @@ class DynamicNotchWindow(QWidget):
             self._sync_system_controls()
             self.view_peek.layout().activate()
             self._elide_peek_metadata()
-        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius, start_center=start_center)
+        self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius,
+                                       start_center=start_center, velocity=velocity)
         self.update()
 
         if new_state == NotchState.EXPANDED:
@@ -2452,12 +2459,6 @@ class DynamicNotchWindow(QWidget):
         elif new_state == NotchState.PEEK:
             self.view_peek.setFocus(Qt.FocusReason.OtherFocusReason)
             self._peek_presence_timer.start()
-            if self.anim.state() == QPropertyAnimation.State.Running:
-                self._peek_opacity.setEnabled(True)
-                self._peek_fade.setDuration(self.anim.duration())
-                self._peek_fade.setStartValue(0.0)
-                self._peek_fade.setEndValue(1.0)
-                self._peek_fade.start()
 
     def _get_current_screen_geometry(self) -> QRect:
         """Multi-monitor aware screen lookup using configured display or cursor fallback."""
@@ -2524,25 +2525,66 @@ class DynamicNotchWindow(QWidget):
         return max(0, self.config.get("notch", {}).get("animation_duration_ms", 200))
 
     def _apply_geometry_for_state(self, state: NotchState, animate: bool = True, *,
-                                  start_radius: float | None = None, start_center: float | None = None):
+                                  start_radius: float | None = None, start_center: float | None = None,
+                                  velocity: tuple[float, float] | None = None):
         self._anim_opacity.stop()
         self._expanded_opacity.setEnabled(False)
-        if not animate:
-            self._peek_fade.stop()
-            self._peek_opacity.setEnabled(False)
+        self._peek_fade.stop()
+        self._peek_opacity.setEnabled(False)
 
         target = self._geometry_for_state(state)
-        duration = self._transition_duration() if animate else 0
-        if self._animate_geometry(target, duration, start_radius=start_radius, start_center=start_center) and state == NotchState.EXPANDED:
-            self._anim_opacity.setDuration(duration)
-            # Hold content until the drawer has room. Use the same clock length
-            # as geometry so the two effects finish together.
-            delay = min(60, duration / 4) / duration
-            key = self._anim_opacity.easingCurve().valueForProgress(delay)
-            self._anim_opacity.setKeyValues([(0.0, 0.0), (key, 0.0), (1.0, 1.0)])
-            self._expanded_opacity.setOpacity(0.0)
-            self._expanded_opacity.setEnabled(True)
-            self._anim_opacity.start()
+        duration = round(self._transition_duration() * self.MOTION_PROFILES[state][0]) if animate else 0
+        reveal = None
+        if duration and target != self._displayed_geometry():
+            if state == NotchState.EXPANDED:
+                reveal = self._anim_opacity, self._expanded_opacity, min(56, duration / 4)
+            elif state == NotchState.PEEK:
+                reveal = self._peek_fade, self._peek_opacity, min(20, duration / 8)
+        if reveal:
+            fade, opacity, delay = reveal
+            fade.setDuration(duration)
+            key = fade.easingCurve().valueForProgress(delay / duration)
+            fade.setKeyValues([(0.0, 0.0), (key, 0.0), (1.0, 1.0)])
+            # Hide the anchored content before the native host changes size.
+            opacity.setOpacity(0.0)
+            opacity.setEnabled(True)
+        self._animate_geometry(target, duration, start_radius=start_radius, start_center=start_center,
+                               velocity=velocity)
+        if reveal:
+            fade.start()
+
+    def _geometry_velocity(self) -> tuple[float, float] | None:
+        if self.anim.state() != QPropertyAnimation.State.Running:
+            return None
+        start, end = self.anim.startValue(), self.anim.endValue()
+        duration, time = self.anim.duration(), self.anim.currentTime()
+        left, right = max(0, time - 1), min(duration, time + 1)
+        curve = self.anim.easingCurve()
+        speed = (curve.valueForProgress(right / duration) - curve.valueForProgress(left / duration)) / (right - left)
+        return (end.width() - start.width()) * speed, (end.height() - start.height()) * speed
+
+    def _motion_curve(self, start, target, host, duration, velocity):
+        slope = self.MOTION_PROFILES[self.state][1]
+        width = target.width() - start.width()
+        height = target.height() - start.height()
+        distance_squared = width * width + height * height
+        if velocity is not None and distance_squared:
+            # Project the current size velocity onto the new size change.
+            slope = duration * (velocity[0] * width + velocity[1] * height) / distance_squared
+            slope = max(-0.75, min(2.5, slope))
+        if slope < 0:
+            # A reversal briefly brakes in the old direction. Use the
+            # cubic's extremum to keep that movement inside the reserved host.
+            t = -slope / (6 - 3 * slope)
+            travel = t * (1 - t) * (1 - t) * slope + t * t * (3 - 2 * t)
+            edge = QRectF(start.x() + travel * (target.x() - start.x()),
+                          start.y() + travel * (target.y() - start.y()),
+                          start.width() + travel * width, start.height() + travel * height)
+            if not QRectF(host).contains(edge):
+                slope = 0
+        curve = QEasingCurve(QEasingCurve.Type.BezierSpline)
+        curve.addCubicBezierSegment(QPointF(1 / 3, slope / 3), QPointF(2 / 3, 1), QPointF(1, 1))
+        return curve
 
     def _displayed_geometry(self) -> QRect:
         return self.geometry() if self._transition_frame is None else self._transition_frame
@@ -2559,11 +2601,14 @@ class DynamicNotchWindow(QWidget):
     notchGeometry = Property(QRect, _displayed_geometry, _set_displayed_geometry)
 
     def _animate_geometry(self, target: QRect, duration: int, *,
-                          start_radius: float | None = None, start_center: float | None = None) -> bool:
+                          start_radius: float | None = None, start_center: float | None = None,
+                          velocity: tuple[float, float] | None = None):
         self._start_corner_radius = self._outline_radius() if start_radius is None else start_radius
         self._start_outline_center = (
             self._outline_bounds().center().x() + self.x() if start_center is None else start_center
         )
+        if velocity is None:
+            velocity = self._geometry_velocity()
         self.anim.stop()
         start = self._displayed_geometry()
         if duration <= 0 or start == target:
@@ -2571,7 +2616,7 @@ class DynamicNotchWindow(QWidget):
             self.setGeometry(target)
             self._position_surface_view()
             self._update_clickthrough_mask()
-            return False
+            return
         # Clear the native region while resizing to avoid repeated DWM stalls.
         self.clearMask()
         self.anim.setDuration(duration)
@@ -2581,6 +2626,7 @@ class DynamicNotchWindow(QWidget):
         host = self.geometry() if self._transition_frame is not None else start
         self._transition_frame = start
         host = host.united(target)
+        self.anim.setEasingCurve(self._motion_curve(start, target, host, duration, velocity))
         # Start on a whole physical pixel so Qt's child and window
         # coordinates round the same way when the surface is released.
         quantum = Fraction(self.devicePixelRatioF()).limit_denominator(100).denominator
@@ -2589,7 +2635,6 @@ class DynamicNotchWindow(QWidget):
         self.setGeometry(host)
         self._position_surface_view()
         self.anim.start()
-        return True
 
     def _release_transition_host(self):
         if self._transition_frame is not None:
@@ -2636,16 +2681,21 @@ class DynamicNotchWindow(QWidget):
     def _outline_radius(self):
         target = self._corner_radius if self.state == NotchState.EXPANDED else 14
         if self.anim.state() == QPropertyAnimation.State.Running:
-            progress = self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration())
+            progress = self._outline_progress()
             return self._start_corner_radius + (target - self._start_corner_radius) * progress
         return target
+
+    def _outline_progress(self):
+        # Size can coast briefly on reversal. Keep the anchor and radius
+        # within their endpoints, including half-pixel display rounding.
+        return max(0.0, self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration()))
 
     def _outline_bounds(self) -> QRectF:
         bounds = QRectF(self._displayed_geometry())
         if self._transition_frame is not None and self.anim.state() == QPropertyAnimation.State.Running:
             start = self._start_outline_center
             end = QRectF(self.anim.endValue()).center().x()
-            progress = self.anim.easingCurve().valueForProgress(self.anim.currentTime() / self.anim.duration())
+            progress = self._outline_progress()
             bounds.moveLeft(start + (end - start) * progress - bounds.width() / 2)
         return bounds.translated(-self.geometry().topLeft())
 

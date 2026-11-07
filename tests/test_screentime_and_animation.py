@@ -4,7 +4,7 @@ Tests for Screen Time Manager, Settings integration, and Centered Pop-Out Animat
 
 import pytest
 from PySide6.QtWidgets import QApplication, QLayout
-from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QRect, QEasingCurve
+from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QRect, QRectF
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from poppy.core.screentime_manager import ScreenTimeManager, format_duration
@@ -161,6 +161,49 @@ def test_drawer_fade_ends_with_geometry_and_cancels_on_close(qapp):
     QTest.qWait(75)
     assert w._anim_opacity.state() == QAbstractAnimation.State.Stopped
     assert not w._expanded_opacity.isEnabled()
+
+
+def test_pill_reveal_and_collapse_use_shorter_timings(qapp):
+    w = DynamicNotchWindow({"notch": {"animation_duration_ms": 240}})
+    w._is_pinned = True
+    w.show()
+    w._transition_to(NotchState.PEEK)
+    assert w.anim.duration() == w._peek_fade.duration() == 180
+    assert w._peek_opacity.opacity() == 0
+    w.anim.setCurrentTime(w.anim.duration())
+    w._transition_to(NotchState.EXPANDED)
+    assert w.anim.duration() == w._anim_opacity.duration() == 240
+    w._anim_opacity.setCurrentTime(30)
+    assert w._expanded_opacity.opacity() == 0
+    w.anim.setCurrentTime(w.anim.duration())
+    w._collapse_to_pill()
+    assert w.anim.duration() < 180
+
+
+def test_reversing_pill_motion_brakes_inside_the_original_host(qapp):
+    w = DynamicNotchWindow({"appearance": {"collapsed_width": 239}})
+    w._is_pinned = True
+    w.show()
+    resting = w.geometry()
+    w._transition_to(NotchState.EXPANDED)
+    host = w.geometry()
+    w.anim.setCurrentTime(w.anim.duration() // 2)
+    before = w._displayed_geometry()
+    w._collapse_to_pill()
+    assert w._displayed_geometry() == before
+    assert w.geometry() == host
+    assert w._geometry_velocity()[0] > 0
+    widths = []
+    for tick in range(0, w.anim.duration() + 1):
+        w.anim.setCurrentTime(tick)
+        outline = w._outline_bounds().translated(w.pos())
+        assert QRectF(host).contains(outline)
+        assert abs(outline.center().x() - QRectF(resting).center().x()) <= 0.5
+        widths.append(outline.width())
+    turn = widths.index(max(widths))
+    assert max(widths) > before.width()
+    assert widths[turn:] == sorted(widths[turn:], reverse=True)
+    assert w.geometry() == resting
 
 
 def test_screenshot_replacement_preserves_in_flight_opacity(qapp, monkeypatch, tmp_path):
