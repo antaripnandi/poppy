@@ -278,7 +278,7 @@ def test_idle_hover_opens_and_stays_open_when_a_media_session_ends(audit_app, mo
     window.show()
     pointer = window.geometry().center()
     monkeypatch.setattr(QCursor, "pos", lambda: pointer)
-    media_widgets = (window.coll_thumb, window.coll_visualizer, window.coll_status_dot)
+    media_widgets = (window.coll_thumb, window.coll_visualizer)
     transport = (window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next, window.peek_seek)
     assert all(widget.isHidden() for widget in media_widgets)
     assert window.lbl_clock.isVisible()
@@ -433,6 +433,11 @@ def test_collapsed_artwork_resizes_and_notch_flare_matches_the_mask(audit_app):
     sizes = []
     for width, height in ((180, 24), (340, 44)):
         window._apply_live_appearance({"collapsed_width": width, "collapsed_height": height})
+        audit_app.processEvents()
+        artwork_pos = window.coll_thumb.mapTo(window.view_collapsed, QPoint())
+        bars_pos = window.coll_visualizer.mapTo(window.view_collapsed, QPoint())
+        assert artwork_pos.x() == width - bars_pos.x() - window.coll_visualizer.width() == 20
+        assert artwork_pos.y() >= 4
         sizes.append(window.coll_thumb.width())
         pixmap = window.coll_thumb.pixmap()
         assert pixmap.deviceIndependentSize().width() == window.coll_thumb.width()

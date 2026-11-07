@@ -278,7 +278,7 @@ class DynamicNotchWindow(QWidget):
         self.view_collapsed = QWidget(self)
         self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
-        v_coll_layout.setContentsMargins(12, 0, 12, 0)
+        v_coll_layout.setContentsMargins(20, 0, 20, 0)
         v_coll_layout.setSpacing(0)
         v_coll_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -286,7 +286,6 @@ class DynamicNotchWindow(QWidget):
         left_box = QWidget(self)
         l_layout = QHBoxLayout(left_box)
         l_layout.setContentsMargins(0, 0, 0, 0)
-        l_layout.setSpacing(6)
         l_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.coll_thumb = QLabel()
@@ -327,21 +326,17 @@ class DynamicNotchWindow(QWidget):
         c_layout.addWidget(self.lbl_coll_pomo)
         v_coll_layout.addWidget(center_box, 0)
 
-        # Right Zone: Equalizer bars and status dot (symmetrical to Left Zone)
+        # Right zone: equalizer bars.
         right_box = QWidget(self)
         r_layout = QHBoxLayout(right_box)
         r_layout.setContentsMargins(0, 0, 0, 0)
-        r_layout.setSpacing(6)
         r_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.coll_visualizer = AudioVisualizerBars(self)
         r_layout.addWidget(self.coll_visualizer)
 
-        self.coll_status_dot = QLabel("•")
-        set_widget_style(self.coll_status_dot, "color: rgba(255,255,255,0.25); font-size: 14px; background: transparent; border: none;")
-        r_layout.addWidget(self.coll_status_dot)
         v_coll_layout.addWidget(right_box, 1)
-        for widget in (self.coll_thumb, self.coll_visualizer, self.coll_status_dot):
+        for widget in (self.coll_thumb, self.coll_visualizer):
             widget.hide()
 
         self._collapsed_contents = (left_box, center_box, right_box)
@@ -1595,7 +1590,7 @@ class DynamicNotchWindow(QWidget):
         # Fit metadata to actual pixels, leaving transport controls a stable width.
         available = title not in ("No Media Playing", "Unknown Title", "")
         self._has_media = available
-        for widget in (self.coll_thumb, self.coll_visualizer, self.coll_status_dot):
+        for widget in (self.coll_thumb, self.coll_visualizer):
             widget.setVisible(available)
         self.peek_visualizer.setVisible(available)
         self.lbl_peek_title.setToolTip(title if available else "")
@@ -1693,7 +1688,7 @@ class DynamicNotchWindow(QWidget):
         return icon
 
     def _size_collapsed_art(self):
-        size = max(12, min(round(self._collapsed_h * 0.70), round(self._collapsed_w * 0.11)))
+        size = max(12, min(round(self._collapsed_h * 2 / 3), round(self._collapsed_w * 0.11)))
         radius = max(3, round(size * 0.24))
         self.coll_thumb.setFixedSize(size, size)
         self.coll_thumb.setStyleSheet(f"background: rgba(128,128,128,0.16); border-radius: {radius}px; color: #9ca8b7; font-family: '{get_fluent_font_family()}'; font-size: {max(9, size // 2)}px;")
