@@ -1,6 +1,7 @@
 """Compact media preview layout, playback actions and hover transitions."""
 
 import pytest
+from types import SimpleNamespace
 from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QBuffer, QIODevice
 from PySide6.QtGui import QColor, QImage, QContextMenuEvent, QEnterEvent, QWheelEvent
 from PySide6.QtTest import QTest
@@ -32,9 +33,9 @@ def test_native_brightness_replaces_only_a_matching_shell_flyout(monkeypatch, wi
     monkeypatch.setattr(flyout, "_is_shell_indicator", lambda hwnd: hwnd == 42)
     monkeypatch.setattr(flyout, "_hide_indicator", lambda hwnd: hidden.append(hwnd) or True)
     flyout._record_level(70)
-    flyout._window_shown(None, None, 41, 0, 0, 0, 0)
+    flyout._window_event(None, module._SHOW, 41, 0, 0, 0, 0)
     if window_first:
-        flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+        flyout._window_event(None, module._SHOW, 42, 0, 0, 0, 0)
         assert not hidden
         now += 0.05
         flyout._record_level(60)
@@ -42,18 +43,53 @@ def test_native_brightness_replaces_only_a_matching_shell_flyout(monkeypatch, wi
         flyout._record_level(60)
         assert not shown
         now += 0.05
-        flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+        flyout._window_event(None, module._SHOW, 42, 0, 0, 0, 0)
     assert hidden == [42] and shown == [(70, 60)]
     now += 0.15
     flyout._record_level(50)
     assert shown[-1] == (60, 50)
     compact = False
-    flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+    flyout._window_event(None, module._SHOW, 42, 0, 0, 0, 0)
     assert hidden == [42]
     compact = True
     now += 2
-    flyout._window_shown(None, None, 42, 0, 0, 0, 0)
+    flyout._window_event(None, module._SHOW, 42, 0, 0, 0, 0)
     assert hidden == [42]
+
+
+def test_shared_indicator_is_clipped_before_show_and_handles_delayed_brightness(monkeypatch):
+    from poppy.core import brightness_flyout as module
+
+    shown, clipped = [], []
+    now = 100.0
+    visible = False
+    compact = True
+    flyout = BrightnessFlyout(lambda: compact, lambda old, value: shown.append((old, value)))
+    flyout._notification = 1
+    flyout._user32 = SimpleNamespace(FindWindowExW=lambda *_: 42, IsWindowVisible=lambda _: visible)
+    monkeypatch.setattr(module, "monotonic", lambda: now)
+    monkeypatch.setattr(flyout, "_is_shell_indicator", lambda hwnd: hwnd == 42)
+
+    def clip(hwnd):
+        clipped.append(hwnd)
+        flyout._clipped = (hwnd, None)
+
+    monkeypatch.setattr(flyout, "_clip_indicator", clip)
+    monkeypatch.setattr(flyout, "_restore_indicator", lambda: setattr(flyout, "_clipped", None))
+    flyout._record_level(80)
+    assert not clipped  # Windows keeps its shared flyout if any volume key is unowned.
+    flyout._owns_volume_keys = True
+    flyout.sync()
+    assert clipped == [42] and not visible and not shown
+    visible = True
+    flyout._window_event(None, module._SHOW, 42, 0, 0, 0, 0)
+    now += 2  # On this hardware the popup can precede the reported value by seconds.
+    flyout._record_level(70)
+    flyout._record_level(70)
+    assert shown == [(80, 70)]
+    compact = False
+    flyout.sync()
+    assert flyout._clipped is None
 
 
 def test_level_gestures_retarget_the_pill_and_restore_the_clock(audit_app, monkeypatch):
@@ -97,6 +133,12 @@ def test_level_gestures_retarget_the_pill_and_restore_the_clock(audit_app, monke
     assert brightness == [65] and volume == [46, 48, 46]
     assert window.pill_level.accessibleName() == "Brightness"
     assert window.pill_level.accessibleDescription() == "65%"
+    window._show_native_brightness(65, 70)
+    window.pill_level._motion.setCurrentTime(60)
+    window._show_native_brightness(70, 70)
+    window._on_brightness_read(65)
+    assert window.pill_level._motion.currentTime() == 60
+    assert window.pill_level.accessibleDescription() == "70%"
     assert window.size() == size and window.state == NotchState.COLLAPSED
     monkeypatch.setattr("poppy.core.window.QCursor.pos", lambda: pointer.toPoint())
     window._on_hover_peek_timeout()

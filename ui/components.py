@@ -592,10 +592,14 @@ class PillLevel(QWidget):
         self._motion.valueChanged.connect(self._set_fill)
 
     def show_level(self, name, icon, previous, value, duration, *, muted=False):
-        start = self._value if self.isVisible() and self.accessibleName() == name else previous
+        continuing = self.isVisible() and self.accessibleName() == name
+        label = "Muted" if muted else f"{value}%"
+        if continuing and self._icon == icon and self._label == label:
+            return
+        start = self._value if continuing else previous
         self._motion.stop()
         self._icon = icon
-        self._label = "Muted" if muted else f"{value}%"
+        self._label = label
         self.setAccessibleName(name)
         self.setAccessibleDescription(self._label)
         target = 0 if muted else value

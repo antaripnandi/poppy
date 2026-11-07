@@ -116,6 +116,7 @@ class DynamicNotchWindow(QWidget):
         self._has_media = False
         self._level_hotkeys = set()
         self._brightness_flyout = None
+        self._native_brightness_feedback = False
         self._brightness_level = None
         self._pending_brightness_step = 0
         self._animate_levels = True
@@ -954,7 +955,7 @@ class DynamicNotchWindow(QWidget):
                 self._level_hotkeys.add(key)
         if self._brightness_flyout is None:
             self._brightness_flyout = BrightnessFlyout(self._can_show_pill_level, self._show_native_brightness)
-            self._brightness_flyout.start(hwnd)
+            self._brightness_flyout.start(hwnd, owns_volume_keys=len(self._level_hotkeys) == len(self.VOLUME_KEYS))
 
     def nativeEvent(self, event_type, message):
         if event_type == b"windows_generic_MSG" and (self._level_hotkeys or self._brightness_flyout):
@@ -975,8 +976,13 @@ class DynamicNotchWindow(QWidget):
                                     (self.state == NotchState.PEEK and QApplication.activePopupWidget() is None))
 
     def _show_native_brightness(self, previous, value):
+        self._native_brightness_feedback = True
         self._brightness_level = value
         self._show_pill_level("Brightness", Icons.BRIGHTNESS, previous, value)
+
+    def _sync_brightness_flyout(self):
+        if self._brightness_flyout:
+            self._brightness_flyout.sync()
 
     def _show_pill_level(self, name, icon, previous, value, *, muted=False):
         if not self._can_show_pill_level():
@@ -984,13 +990,15 @@ class DynamicNotchWindow(QWidget):
         if self.state == NotchState.PEEK:
             self._transition_to(NotchState.COLLAPSED)
         self._hover_peek_timer.stop()
-        self._update_pill_level_ink()
+        already_visible = self.pill_level.isVisible()
         duration = min(120, self.config.get("notch", {}).get("animation_duration_ms", 200)) if self._animate_levels else 0
         self.pill_level.show_level(name, icon, previous, value, duration, muted=muted)
-        for widget in self._collapsed_contents:
-            widget.hide()
-        self.pill_level.setGeometry(self.view_collapsed.rect())
-        self.pill_level.show()
+        if not already_visible:
+            self._update_pill_level_ink()
+            for widget in self._collapsed_contents:
+                widget.hide()
+            self.pill_level.setGeometry(self.view_collapsed.rect())
+            self.pill_level.show()
         self._pill_level_timer.start()
 
     def _update_pill_level_ink(self):
@@ -998,6 +1006,7 @@ class DynamicNotchWindow(QWidget):
         self.pill_level.set_ink(contrast_ink(QColor(color)))
 
     def _dismiss_pill_level(self):
+        self._native_brightness_feedback = False
         self.pill_level.hide()
         for widget in self._collapsed_contents:
             widget.show()
@@ -1037,6 +1046,7 @@ class DynamicNotchWindow(QWidget):
         self._peek_volume_opacity.setOpacity(0.35)
         self._peek_volume_opacity.setEnabled(True)
         menu.popup(QPoint(x, y))
+        self._sync_brightness_flyout()
         self.peek_volume.setFocus(Qt.FocusReason.PopupFocusReason)
         self._peek_volume_fade.start()
 
@@ -1044,6 +1054,8 @@ class DynamicNotchWindow(QWidget):
         self._peek_volume_fade.stop()
         self._peek_volume_opacity.setEnabled(False)
         self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
+        if self._brightness_flyout:
+            QTimer.singleShot(0, self, self._sync_brightness_flyout)
 
     def _on_brightness_slider_changed(self, value: int):
         self._brightness_level = value
@@ -1059,12 +1071,15 @@ class DynamicNotchWindow(QWidget):
             self.bright_ctrl.request_brightness()
 
     def _apply_brightness_step(self, previous, step):
+        self._native_brightness_feedback = False
         value = max(0, min(100, previous + step))
         if value != previous:
             self._on_brightness_slider_changed(value)
         self._show_pill_level("Brightness", Icons.BRIGHTNESS, previous, value)
 
     def _on_brightness_read(self, value):
+        if self._native_brightness_feedback and not self._pending_brightness_step:
+            return  # A background WMI read can arrive after a newer hardware level.
         previous = self._brightness_level
         self._brightness_level = value
         step, self._pending_brightness_step = self._pending_brightness_step, 0
@@ -1195,7 +1210,10 @@ class DynamicNotchWindow(QWidget):
         menu.addSeparator()
         menu.addAction("Exit Poppy", self.quit_requested.emit)
         menu.aboutToHide.connect(menu.deleteLater)
+        if self.state == NotchState.PEEK and self._brightness_flyout:
+            menu.aboutToHide.connect(lambda: QTimer.singleShot(0, self, self._sync_brightness_flyout))
         menu.popup(event.globalPos())
+        self._sync_brightness_flyout()
         event.accept()
 
     def _lock_workstation(self):
@@ -2282,6 +2300,7 @@ class DynamicNotchWindow(QWidget):
         self._peek_fade.stop()
         self._peek_opacity.setEnabled(False)
         self.state = new_state
+        self._sync_brightness_flyout()
         if new_state != NotchState.COLLAPSED and self._pill_level_timer.isActive():
             self._pill_level_timer.stop()
             self._dismiss_pill_level()
