@@ -46,11 +46,13 @@ from poppy.ui.extended_views import (
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
+from poppy.ui.app_mixer import AppMixerMenu
 from poppy.ui.styles import DEFAULT_THEME, get_theme, get_stylesheet, normalize_appearance
 from poppy.core.pomodoro import PomodoroManager
 from poppy.core.media_manager import MediaManager
 from poppy.core.lyrics_manager import LyricsManager
 from poppy.core.drop_shelf import DropShelfManager
+from poppy.core.download_watcher import DownloadWatcher
 from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController, system_animations_enabled
@@ -96,13 +98,6 @@ def _get_gpu_utilization() -> int | None:
         return None
 
 
-class _NotchLayout(QVBoxLayout):
-    def hasHeightForWidth(self):
-        # The native window clips the drawer during animation. Its children
-        # keep their own sizing rules, but must not set the animation height.
-        return False
-
-
 class DynamicNotchWindow(QWidget):
     PEEK_SIZE = (316, 108)
     VOLUME_KEYS = (0xAD, 0xAE, 0xAF)  # VK_VOLUME_MUTE, DOWN, UP
@@ -118,6 +113,7 @@ class DynamicNotchWindow(QWidget):
         self._has_media = False
         self._level_hotkeys = set()
         self._brightness_flyout = None
+        self._manage_native_levels = False
         self._native_brightness_feedback = False
         self._brightness_level = None
         self._pending_brightness_step = 0
@@ -148,6 +144,10 @@ class DynamicNotchWindow(QWidget):
         self.screenshot_watcher.enabled = self.config.get("capture", {}).get("enabled", False)
         self.screenshot_watcher.protected_paths = lambda: {item.path for item in self.drop_shelf.staged_items}
         self._last_screenshot_path: str | None = None
+        self.download_watcher = DownloadWatcher(parent=self)
+        self.download_watcher.files_ready.connect(self._on_downloads_ready)
+        self._island_download_folder = None
+        self._app_mixer = None
         rpc_cfg = self.config.get("discord_rpc", {})
         self.discord_rpc = DiscordRPCManager(config=rpc_cfg, parent=self)
         self.audio_ctrl = SystemAudioController()
@@ -227,6 +227,7 @@ class DynamicNotchWindow(QWidget):
 
         self._init_views()
         self._connect_signals()
+        self._apply_optional_features()
         self._commands_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Space"), self)
         self._commands_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self._commands_shortcut.activated.connect(self.open_commands)
@@ -270,12 +271,6 @@ class DynamicNotchWindow(QWidget):
         return QSize(self._target_size[0], self._target_size[1])
 
     def _init_views(self):
-        self.main_layout = _NotchLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
-        self.main_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        self.main_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-
         # =====================================================================
         # 1. Collapsed View: Minimalist Top Pill (pill-v2.png)
         # Symmetrical 3-zone architecture: Left (Media icon) - Center (Time) - Right (Visualizer)
@@ -438,6 +433,11 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume.setFixedSize(30, 144)
         self.peek_volume.valueChanged.connect(self._on_volume_slider_changed)
         volume_layout.addWidget(self.peek_volume, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_peek_app_mixer = QPushButton("Apps")
+        self.btn_peek_app_mixer.setToolTip("Open app mixer")
+        self.btn_peek_app_mixer.setAccessibleName("Open app mixer")
+        self.btn_peek_app_mixer.clicked.connect(lambda: self._open_app_mixer(self.btn_peek_volume))
+        volume_layout.addWidget(self.btn_peek_app_mixer)
         volume_action.setDefaultWidget(volume)
         self.peek_volume_menu.addAction(volume_action)
         self._peek_volume_opacity = QGraphicsOpacityEffect(self.peek_volume_menu)
@@ -463,7 +463,7 @@ class DynamicNotchWindow(QWidget):
         # =====================================================================
         # 2b. Island View (Dynamic Island HUD for Screenshot & Staging)
         # =====================================================================
-        self.view_island = QWidget(self)
+        self.view_island = QWidget(self._surface_clip)
         self.view_island.setFixedSize(420, 64)
         v_isl_layout = QHBoxLayout(self.view_island)
         v_isl_layout.setContentsMargins(12, 6, 12, 8)
@@ -490,16 +490,15 @@ class DynamicNotchWindow(QWidget):
 
         isl_title_row = QHBoxLayout()
         isl_title_row.setSpacing(6)
-        lbl_isl_dot = QLabel("●")
-        set_widget_style(lbl_isl_dot, "color: #3ddc97; font-size: 8px; background: transparent; border: none;")
         self.lbl_isl_title = QLabel("Screenshot staged")
         set_widget_style(self.lbl_isl_title, "color: #f8fafc; font-size: 12px; font-weight: 600; background: transparent; border: none;")
-        isl_title_row.addWidget(lbl_isl_dot)
         isl_title_row.addWidget(self.lbl_isl_title)
         isl_title_row.addStretch()
         isl_meta.addLayout(isl_title_row)
 
         self.lbl_isl_sub = QLabel()
+        self.lbl_isl_sub.setTextFormat(Qt.TextFormat.PlainText)
+        self.lbl_isl_sub.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         set_widget_style(self.lbl_isl_sub, "color: #a7b2bf; font-size: 11px; background: transparent; border: none;")
         isl_meta.addWidget(self.lbl_isl_sub)
         v_isl_layout.addLayout(isl_meta, stretch=1)
@@ -521,14 +520,13 @@ class DynamicNotchWindow(QWidget):
         self.btn_isl_shelf = QPushButton("Shelf")
         self.btn_isl_shelf.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_isl_shelf.setToolTip("Open temporary file shelf")
-        self.btn_isl_shelf.clicked.connect(self._open_shelf_from_island)
+        self.btn_isl_shelf.clicked.connect(self._activate_island)
         v_isl_layout.addWidget(self.btn_isl_shelf)
 
         self.btn_isl_close = IconButton(Icons.CLOSE, "Dismiss", size=22, font_size=10, is_fluent=True)
         self.btn_isl_close.clicked.connect(self._collapse_to_pill)
         v_isl_layout.addWidget(self.btn_isl_close)
 
-        self.main_layout.addWidget(self.view_island)
         self.view_island.setVisible(False)
 
         # =====================================================================
@@ -616,6 +614,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.btn_home_shelf_chat.clicked.connect(self._copy_latest_shelf_for_chat)
         self.tab_home.slider_vol.valueChanged.connect(self._on_volume_slider_changed)
         self.tab_home.btn_vol_mute.clicked.connect(self._on_mute_clicked)
+        self.tab_home.btn_app_mixer.clicked.connect(lambda: self._open_app_mixer(self.tab_home.btn_app_mixer))
         self.tab_home.slider_bright.valueChanged.connect(self._on_brightness_slider_changed)
         self.tab_home.caffeine_toggle_requested.connect(self._toggle_caffeine)
         self.tab_home.mic_mute_toggle_requested.connect(self._toggle_mic_mute)
@@ -843,7 +842,7 @@ class DynamicNotchWindow(QWidget):
         self._transition_to(NotchState.ISLAND)
         self._island_timer.start(duration)
 
-    def trigger_island(self, title: str, text: str):
+    def trigger_island(self, title: str, text: str, *, download_folder=None):
         preferences = self.config.get("notifications", {})
         if not self._alerts_allowed():
             return
@@ -855,11 +854,30 @@ class DynamicNotchWindow(QWidget):
         self.lbl_isl_title.setText(title)
         self.lbl_isl_sub.setText(text[:70])
         self.lbl_isl_sub.setToolTip(text)
+        self._island_download_folder = download_folder
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.hide()
+        if download_folder is not None:
+            self.btn_isl_shelf.setText("Open folder")
+            self.btn_isl_shelf.setToolTip("Open the watched download folder")
+            self.btn_isl_shelf.show()
         self._thumb_anim.stop()
         self._thumb_opacity_fx.setEnabled(False)
         self._present_island()
+
+    def _on_downloads_ready(self, paths):
+        if len(paths) == 1:
+            self.trigger_island("Download ready", paths[0].name, download_folder=paths[0].parent)
+        elif paths:
+            self.trigger_island("Downloads ready", f"{len(paths)} new files", download_folder=paths[0].parent)
+
+    def _open_download_folder(self, folder=None):
+        folder = folder or self.download_watcher.folder
+        try:
+            if folder is not None and folder.is_dir():
+                os.startfile(folder)
+        except OSError:
+            self.message_requested.emit("Downloads", "Windows could not open the download folder.")
 
     def _update_clock(self):
         now = datetime.now()
@@ -953,14 +971,32 @@ class DynamicNotchWindow(QWidget):
         self._show_pill_level("Volume", icon, 0 if was_muted else previous, value, muted=muted)
 
     def start_system_level_controls(self):
+        self._manage_native_levels = True
+        if not self.config.get("notch", {}).get("pill_levels", True):
+            return
         user32 = ctypes.windll.user32
         hwnd = wintypes.HWND(int(self.winId()))
+        owned_all_keys = len(self._level_hotkeys) == len(self.VOLUME_KEYS)
         for key in self.VOLUME_KEYS:
             if key not in self._level_hotkeys and user32.RegisterHotKey(hwnd, key, 0, key):
                 self._level_hotkeys.add(key)
+        owns_all_keys = len(self._level_hotkeys) == len(self.VOLUME_KEYS)
+        if self._brightness_flyout and owns_all_keys != owned_all_keys:
+            self._brightness_flyout.close()
+            self._brightness_flyout = None
         if self._brightness_flyout is None:
             self._brightness_flyout = BrightnessFlyout(self._can_show_pill_level, self._show_native_brightness)
-            self._brightness_flyout.start(hwnd, owns_volume_keys=len(self._level_hotkeys) == len(self.VOLUME_KEYS))
+            self._brightness_flyout.start(hwnd, owns_volume_keys=owns_all_keys)
+
+    def _stop_system_level_controls(self):
+        if self._brightness_flyout:
+            self._brightness_flyout.close()
+            self._brightness_flyout = None
+        if self._level_hotkeys:
+            hwnd = wintypes.HWND(int(self.winId()))
+            for key in self._level_hotkeys:
+                ctypes.windll.user32.UnregisterHotKey(hwnd, key)
+            self._level_hotkeys.clear()
 
     def nativeEvent(self, event_type, message):
         if event_type == b"windows_generic_MSG" and (self._level_hotkeys or self._brightness_flyout):
@@ -977,8 +1013,11 @@ class DynamicNotchWindow(QWidget):
         return super().nativeEvent(event_type, message)
 
     def _can_show_pill_level(self):
-        return self.isVisible() and (self.state == NotchState.COLLAPSED or
-                                    (self.state == NotchState.PEEK and QApplication.activePopupWidget() is None))
+        if not self.config.get("notch", {}).get("pill_levels", True) or not self.isVisible():
+            return False
+        return self.state == NotchState.COLLAPSED or (
+            self.state == NotchState.PEEK and QApplication.activePopupWidget() is None
+        )
 
     def _show_native_brightness(self, previous, value):
         self._native_brightness_feedback = True
@@ -1064,6 +1103,19 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume_menu.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
         if self._brightness_flyout:
             QTimer.singleShot(0, self, self._sync_brightness_flyout)
+
+    def _open_app_mixer(self, anchor):
+        if not self.config.get("mixer", {}).get("enabled", True):
+            return
+        self.peek_volume_menu.hide()
+        if self._app_mixer is None:
+            self._app_mixer = AppMixerMenu(self)
+            self._app_mixer.aboutToHide.connect(lambda: QTimer.singleShot(0, self, self._sync_brightness_flyout))
+        menu = self._app_mixer
+        menu.prepare()
+        center = anchor.mapToGlobal(anchor.rect().bottomLeft()) + QPoint(anchor.width() // 2, 5)
+        menu.popup(center - QPoint(menu.sizeHint().width() // 2, 0))
+        self._sync_brightness_flyout()
 
     def _on_brightness_slider_changed(self, value: int):
         self._brightness_level = value
@@ -1208,12 +1260,16 @@ class DynamicNotchWindow(QWidget):
         menu = QMenu(self)
         if self.state == NotchState.PEEK:
             menu.addAction("Toggle mute", self._on_mute_clicked)
+            if self.config.get("mixer", {}).get("enabled", True):
+                menu.addAction("App mixer", lambda: self._open_app_mixer(self.btn_peek_volume))
             if len(self.media_manager.get_sessions()) > 1:
                 self._add_media_session_actions(menu.addMenu("Media player"))
             outputs = menu.addMenu("Sound output")
             outputs.aboutToShow.connect(lambda: self._add_audio_endpoint_actions(outputs))
             menu.addSeparator()
         menu.addAction("Open commands", self.open_commands)
+        if self.download_watcher.folder is not None:
+            menu.addAction("Open download folder", self._open_download_folder)
         menu.addAction("Settings", self.open_settings)
         menu.addSeparator()
         menu.addAction("Exit Poppy", self.quit_requested.emit)
@@ -1838,9 +1894,12 @@ class DynamicNotchWindow(QWidget):
             return
 
         preview_visible = self.state == NotchState.ISLAND and self.island_thumb.isVisible()
+        self._island_download_folder = None
         self.lbl_isl_title.setText("Screenshot staged")
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.show()
+        self.btn_isl_shelf.setText("Shelf")
+        self.btn_isl_shelf.setToolTip("Open temporary file shelf")
         pix = QPixmap.fromImage(qimage)
         self.island_thumb.set_image(file_path, pix)
         self.lbl_isl_sub.setText(f"{qimage.width()} × {qimage.height()}")
@@ -1883,6 +1942,14 @@ class DynamicNotchWindow(QWidget):
     def _open_shelf_from_island(self):
         self._island_timer.stop()
         self._transition_to(NotchState.EXPANDED, target_tab="Shelf")
+
+    def _activate_island(self):
+        folder = self._island_download_folder
+        if folder is None:
+            self._open_shelf_from_island()
+        else:
+            self._collapse_to_pill()
+            self._open_download_folder(folder)
 
     def _on_island_timeout(self):
         from PySide6.QtGui import QCursor
@@ -2102,7 +2169,24 @@ class DynamicNotchWindow(QWidget):
             self.screenshot_watcher.start()
         else:
             self.screenshot_watcher.stop()
+        self._apply_optional_features()
         self.settings_applied.emit()
+
+    def _apply_optional_features(self):
+        mixer_enabled = self.config.get("mixer", {}).get("enabled", True)
+        self.tab_home.btn_app_mixer.setVisible(mixer_enabled)
+        self.btn_peek_app_mixer.setVisible(mixer_enabled)
+        if not mixer_enabled and self._app_mixer:
+            self._app_mixer.hide()
+        downloads = self.config.get("downloads", {})
+        self.download_watcher.configure(downloads.get("enabled", False), downloads.get("folder", ""))
+        if not self.config.get("notch", {}).get("pill_levels", True):
+            self._stop_system_level_controls()
+            if self._pill_level_timer.isActive():
+                self._pill_level_timer.stop()
+                self._dismiss_pill_level()
+        elif self._manage_native_levels:
+            self.start_system_level_controls()
 
     # --- Mouse & State Transitions ---
     def enterEvent(self, event):
@@ -2183,7 +2267,7 @@ class DynamicNotchWindow(QWidget):
                 event.accept()
                 return
             elif self.state == NotchState.ISLAND:
-                self._open_shelf_from_island()
+                self._activate_island()
                 event.accept()
                 return
 
@@ -2327,6 +2411,7 @@ class DynamicNotchWindow(QWidget):
         self._peek_fade.stop()
         self._peek_opacity.setEnabled(False)
         if self.state == NotchState.ISLAND:
+            self._island_download_folder = None
             self._island_timer.stop()
             self._thumb_anim.stop()
             self._thumb_opacity_fx.setEnabled(False)
@@ -2487,25 +2572,21 @@ class DynamicNotchWindow(QWidget):
             self._position_surface_view()
             self._update_clickthrough_mask()
             return False
-        fixed_host = self.state != NotchState.ISLAND
-        if not fixed_host:
-            self._release_transition_host()
         # Clear the native region while resizing to avoid repeated DWM stalls.
         self.clearMask()
         self.anim.setDuration(duration)
         self.anim.setStartValue(start)
         self.anim.setEndValue(target)
-        if fixed_host:
-            # Anchor the incoming view while its outline changes size.
-            host = self.geometry() if self._transition_frame is not None else start
-            self._transition_frame = start
-            host = host.united(target)
-            # Start on a whole physical pixel so Qt's child and window
-            # coordinates round the same way when the surface is released.
-            quantum = Fraction(self.devicePixelRatioF()).limit_denominator(100).denominator
-            screen_x = self._get_current_screen_geometry().x()
-            host.setLeft(host.left() - (host.left() - screen_x) % quantum)
-            self.setGeometry(host)
+        # Anchor the incoming view while its outline changes size.
+        host = self.geometry() if self._transition_frame is not None else start
+        self._transition_frame = start
+        host = host.united(target)
+        # Start on a whole physical pixel so Qt's child and window
+        # coordinates round the same way when the surface is released.
+        quantum = Fraction(self.devicePixelRatioF()).limit_denominator(100).denominator
+        screen_x = self._get_current_screen_geometry().x()
+        host.setLeft(host.left() - (host.left() - screen_x) % quantum)
+        self.setGeometry(host)
         self._position_surface_view()
         self.anim.start()
         return True
@@ -2530,15 +2611,13 @@ class DynamicNotchWindow(QWidget):
             self._update_clickthrough_mask()
 
     def _position_surface_view(self):
-        if self.state == NotchState.ISLAND:
-            self._surface_clip.hide()
-            return
         self._surface_clip.setGeometry(self.rect())
-        self._surface_clip.show()
-        if self.state == NotchState.EXPANDED:
-            view = self.view_expanded
-        else:
-            view = self.view_peek if self.state == NotchState.PEEK else self.view_collapsed
+        view = {
+            NotchState.COLLAPSED: self.view_collapsed,
+            NotchState.PEEK: self.view_peek,
+            NotchState.ISLAND: self.view_island,
+            NotchState.EXPANDED: self.view_expanded,
+        }[self.state]
         if self._transition_frame is None:
             view.move((self.width() - view.width()) // 2, 0)
             return
@@ -2651,14 +2730,10 @@ class DynamicNotchWindow(QWidget):
                 event.ignore()
                 return
         self._shutting_down = True
-        if self._brightness_flyout:
-            self._brightness_flyout.close()
-            self._brightness_flyout = None
-        if self._level_hotkeys:
-            hwnd = wintypes.HWND(int(self.winId()))
-            for key in self._level_hotkeys:
-                ctypes.windll.user32.UnregisterHotKey(hwnd, key)
-            self._level_hotkeys.clear()
+        self._stop_system_level_controls()
+        self.download_watcher.close()
+        if self._app_mixer:
+            self._app_mixer.hide()
         for timer in self.findChildren(QTimer):
             timer.stop()
         for animation in self.findChildren(QVariantAnimation):

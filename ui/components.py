@@ -164,6 +164,7 @@ class SettingRow(QWidget):
     """
     def __init__(self, title: str, subtitle: str = "", control: QWidget = None, parent=None):
         super().__init__(parent)
+        self.search_text = f"{title} {subtitle}".casefold()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 10)
         layout.setSpacing(12)
@@ -935,10 +936,12 @@ class CapsuleSlider(QSlider):
     Renders as a 30px rounded pill with fluid fill, embedded icon, and clean numeric readout.
     Fully backwards compatible with standard QSlider APIs.
     """
-    def __init__(self, icon: str = "", accent: str = "#0a84ff", orientation=Qt.Orientation.Horizontal, parent=None):
+    def __init__(self, icon: str = "", accent: str = "#0a84ff", orientation=Qt.Orientation.Horizontal,
+                 parent=None, *, compact_track=False):
         super().__init__(orientation, parent)
         self._icon = icon
         self._accent = accent
+        self._compact_track = compact_track
         self._is_down = False
         self.setFixedHeight(30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -988,7 +991,7 @@ class CapsuleSlider(QSlider):
 
     def _update_val_from_x(self, x: float):
         w = max(1.0, float(self.width()))
-        if current_layout() in TRACK_LAYOUTS:
+        if self._compact_track or current_layout() in TRACK_LAYOUTS:
             x -= 32
             w = max(1.0, w - 80)
         pct = max(0.0, min(1.0, x / w))
@@ -1000,7 +1003,7 @@ class CapsuleSlider(QSlider):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = float(self.width()), float(self.height())
-        if current_layout() in TRACK_LAYOUTS:
+        if self._compact_track or current_layout() in TRACK_LAYOUTS:
             self._paint_track_control(painter, w, h)
             return
         r = h / 2.0
@@ -1058,6 +1061,8 @@ class CapsuleSlider(QSlider):
         name = current_layout()
         foreground = QColor("#28362f" if is_light_theme() else "#e1e9e5")
         accent = QColor(self._accent)
+        if self._compact_track and name not in TRACK_LAYOUTS:
+            accent = QColor("#526578" if is_light_theme() else "#93a2af")
         if is_light_theme() and accent.lightness() > 145:
             accent = accent.darker(175)
         track = QColor(0, 0, 0, 35) if is_light_theme() else QColor(255, 255, 255, 35)

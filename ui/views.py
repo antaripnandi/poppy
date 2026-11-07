@@ -203,8 +203,8 @@ class HomeTabView(QWidget):
         l_ctrl.setContentsMargins(18, 14, 18, 14)
         l_ctrl.setSpacing(4)
 
-        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self)
-        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self)
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=True)
+        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self, compact_track=True)
         for slider, label in ((self.slider_vol, "Volume"), (self.slider_bright, "Brightness")):
             slider.setAccessibleName(label)
             slider.setToolTip(label)
@@ -213,9 +213,11 @@ class HomeTabView(QWidget):
 
         audio_row = QHBoxLayout()
         self.btn_vol_mute = self._text_action("Mute", "Mute system audio")
+        self.btn_app_mixer = self._text_action("App mixer", "Set volume and mute for individual apps")
         self.btn_audio_drop = self._text_action("Sound output", "Choose an output or open Windows Sound Settings")
         self.btn_audio_drop.clicked.connect(self.audio_device_menu_requested.emit)
         audio_row.addWidget(self.btn_vol_mute)
+        audio_row.addWidget(self.btn_app_mixer)
         audio_row.addStretch()
         audio_row.addWidget(self.btn_audio_drop)
         l_ctrl.addLayout(audio_row)

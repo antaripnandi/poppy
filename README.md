@@ -32,10 +32,13 @@ Close any older running version from its tray menu before launching this update.
 - Open **Commands** from the drawer footer or press Ctrl+Shift+Space while Poppy has focus. Search tabs, built-in actions, and Start menu shortcuts.
 - **Desktops** lists open windows on the current virtual desktop. Press Enter on a window to activate it, or use the desktop buttons to switch, create a desktop, or open Task View.
 - Drop files on the pill to stage them on the shelf, then drag them into another application.
+- Use **App mixer** on Home or **Apps** in the hover volume popup to adjust and mute individual apps playing through the default Windows output. The mixer reads shared-mode audio sessions. App sliders commit on release, and master volume stays separate.
+- Enable **Settings > Tools > Download alerts** and choose your download destination if you use a folder other than Windows Downloads. Poppy watches new top-level files locally, skips common partial files, and waits for stable size and a closed writer. Alerts follow the notification and focus settings. This detects files that appear ready and does not verify their contents.
 - Start, pause, reset, or skip a focus timer. Skipped phases do not count as completed sprints.
 - **Floating copy** opens a separate saved note and keeps the original scratchpad text. Use **Notes > Saved notes** to reopen a closed floating note.
 - The **Float current tab** button below the content moves the live view into a resizable floating window. Controls, notes and lyrics keep working there. Closing returns the same view to the drawer without changing the tab you are currently using. Repeating the action raises the existing window.
 - **Done** saves settings. Closing Settings without Done discards its previews and unsaved edits.
+- Use **Search settings** or Ctrl+F in Settings to find a control. **Tools** separates visible tabs from switches for optional features. Turn off **Behavior > Pill level feedback** to return volume and brightness feedback to Windows.
 
 The player shows centered artwork and track details, a seekable timeline when supported, and optional lyrics. Playback controls sit centered above a separate volume row. Source buttons switch between real media sessions. The sound output menu marks the current device and can switch the default playback output. Windows Sound Settings is available from the same menu.
 

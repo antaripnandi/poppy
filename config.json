@@ -61,6 +61,13 @@
   "capture": {
     "enabled": false
   },
+  "mixer": {
+    "enabled": true
+  },
+  "downloads": {
+    "enabled": false,
+    "folder": ""
+  },
   "updates": {
     "automatic": true
   },
@@ -77,6 +84,7 @@
   "notch": {
     "auto_hover_peek": true,
     "scroll_volume": true,
+    "pill_levels": true,
     "default_tab": "Smart",
     "animation_duration_ms": 200,
     "keep_in_tray": true,

@@ -6,12 +6,12 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QSize, QTimer, QEvent, QPointF
-from PySide6.QtGui import QGuiApplication, QPixmap, QColor, QPainter, QIcon, QWheelEvent, QIntValidator
+from PySide6.QtGui import QGuiApplication, QPixmap, QColor, QPainter, QIcon, QWheelEvent, QIntValidator, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QSpinBox, QPushButton, QStackedWidget, QListWidget,
     QFrame, QComboBox, QSlider, QScrollArea, QProgressBar, QMessageBox,
-    QApplication, QLayout, QCheckBox, QColorDialog
+    QApplication, QLayout, QCheckBox, QColorDialog, QFileDialog
 )
 
 from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, LAYOUT_THEMES, home_order, home_slots, current_layout
@@ -20,6 +20,7 @@ from poppy.ui.styles import (
     APPEARANCE_LAYOUT_VERSION, normalize_appearance,
 )
 from poppy.core import APP_VERSION
+from poppy.core.download_watcher import default_download_folder
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
 from poppy.core.storage import data_dir, data_path, write_json, spotify_cookie, protect_spotify_cookie
@@ -413,8 +414,19 @@ class SettingsWindow(QWidget):
         main_layout.setSpacing(0)
 
         # Left Nav Sidebar
+        sidebar = QWidget()
+        sidebar.setFixedWidth(168)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(8, 12, 8, 0)
+        sidebar_layout.setSpacing(6)
+        self.search_settings = QLineEdit()
+        self.search_settings.setPlaceholderText("Search settings")
+        self.search_settings.setAccessibleName("Search settings")
+        self.search_settings.setClearButtonEnabled(True)
+        self.search_settings.textChanged.connect(self._filter_settings)
+        QShortcut(QKeySequence.StandardKey.Find, self, activated=self.search_settings.setFocus)
+        sidebar_layout.addWidget(self.search_settings)
         self.nav_list = QListWidget()
-        self.nav_list.setFixedWidth(168)
         set_widget_style(self.nav_list, "QListWidget { outline: 0; }")
         self.nav_list.setAccessibleName("Settings pages")
         self.nav_list.addItem("Appearance")
@@ -429,7 +441,8 @@ class SettingsWindow(QWidget):
         self.nav_list.addItem("System")
         self.nav_list.addItem("About")
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
-        main_layout.addWidget(self.nav_list)
+        sidebar_layout.addWidget(self.nav_list, 1)
+        main_layout.addWidget(sidebar)
 
         # Right Content Area
         right_container = QWidget()
@@ -438,6 +451,9 @@ class SettingsWindow(QWidget):
         right_layout.setSpacing(12)
 
         self.stack = QStackedWidget()
+        self.no_search_results = QLabel("No matching settings")
+        self.no_search_results.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_search_results.hide()
 
         # =====================================================================
         # 0. Appearance Page
@@ -593,7 +609,7 @@ class SettingsWindow(QWidget):
         l_tabs.addWidget(card_dtab)
 
         l_tabs.addSpacing(4)
-        lbl_list_hdr = QLabel("Enabled tools")
+        lbl_list_hdr = QLabel("Tabs shown in the drawer")
         set_widget_style(lbl_list_hdr, "font-size: 14px; font-weight: 600; color: #eef0f0;")
         l_tabs.addWidget(lbl_list_hdr)
 
@@ -606,11 +622,33 @@ class SettingsWindow(QWidget):
 
         card_tabs = _create_setting_card(tab_rows)
         l_tabs.addWidget(card_tabs)
+        features_heading = QLabel("Optional features")
+        set_widget_style(features_heading, "font-size: 14px; font-weight: 600; color: #eef0f0;")
+        l_tabs.addWidget(features_heading)
+        self.chk_app_mixer = ToggleSwitch(accent="#829c8e", checked=True)
         self.chk_clipboard_history = ToggleSwitch(accent="#829c8e", checked=False)
         self.chk_capture_images = ToggleSwitch(accent="#829c8e", checked=False)
+        self.chk_downloads = ToggleSwitch(accent="#829c8e", checked=False)
+        self.download_folder = QLineEdit()
+        self.download_folder.setReadOnly(True)
+        self.download_folder.setPlaceholderText("Windows Downloads folder")
+        self.download_folder.setAccessibleName("Selected download folder")
+        choose_download_folder = QPushButton("Browse")
+        choose_download_folder.clicked.connect(self._choose_download_folder)
+        reset_download_folder = QPushButton("Reset")
+        reset_download_folder.clicked.connect(self.download_folder.clear)
+        folder_controls = QWidget()
+        folder_layout = QHBoxLayout(folder_controls)
+        folder_layout.setContentsMargins(0, 0, 0, 0)
+        folder_layout.addWidget(self.download_folder)
+        folder_layout.addWidget(choose_download_folder)
+        folder_layout.addWidget(reset_download_folder)
         l_tabs.addWidget(_create_setting_card([
+            SettingRow("App mixer", "Show per-app volume controls on Home and in the hover player.", self.chk_app_mixer),
             SettingRow("Record clipboard text", "Off by default. Save copied text locally, respecting Windows exclusions.", self.chk_clipboard_history),
             SettingRow("Stage copied images", "Off by default. Save copied images and screenshots to the shelf.", self.chk_capture_images),
+            SettingRow("Download alerts", "Watch one folder for new files that finish writing. Uses your notification and focus settings.", self.chk_downloads),
+            SettingRow("Download folder", "Choose the folder your browser or downloader saves into.", folder_controls),
         ]))
         l_tabs.addStretch()
 
@@ -633,6 +671,7 @@ class SettingsWindow(QWidget):
 
         self.chk_hover_peek = ToggleSwitch(accent="#829c8e", checked=True)
         self.chk_scroll_volume = ToggleSwitch(accent="#829c8e", checked=True)
+        self.chk_pill_levels = ToggleSwitch(accent="#829c8e", checked=True)
         self.chk_autostart = ToggleSwitch(accent="#829c8e", checked=False)
         self.chk_tray_close = ToggleSwitch(accent="#829c8e", checked=True)
 
@@ -643,6 +682,7 @@ class SettingsWindow(QWidget):
         card_beh = _create_setting_card([
             SettingRow("Preview on hover", "Show the compact player and volume control when you hover over the closed pill", self.chk_hover_peek),
             SettingRow("Scroll to change volume", "Scroll over the pill for volume. Shift + scroll adjusts supported displays.", self.chk_scroll_volume),
+            SettingRow("Pill level feedback", "Use Poppy for volume and brightness feedback when Windows supports it.", self.chk_pill_levels),
             SettingRow("Launch at login", "Start Poppy when you sign in to Windows", self.chk_autostart),
             SettingRow("Show tray icon", "Right-click the pill to open settings or exit with the tray icon hidden", self.chk_tray_close),
             SettingRow("Animation duration", "Open and close animation, in milliseconds", self.spin_anim_ms)
@@ -1108,6 +1148,7 @@ class SettingsWindow(QWidget):
         self.stack.addWidget(_make_scroll_area(page_abt))
 
         right_layout.addWidget(self.stack, stretch=1)
+        right_layout.addWidget(self.no_search_results, stretch=1)
 
         # Bottom Action Footer
         bottom_bar = QHBoxLayout()
@@ -1243,7 +1284,47 @@ class SettingsWindow(QWidget):
             self._preview_timer.start()
 
     def _on_nav_changed(self, row: int):
-        self.stack.setCurrentIndex(row)
+        if row >= 0:
+            self.stack.setCurrentIndex(row)
+            match = self._settings_search_match(row, self.search_settings.text().casefold().split())
+            if isinstance(match, SettingRow):
+                self.stack.widget(row).ensureWidgetVisible(match, 0, 12)
+
+    def _settings_search_match(self, index, terms):
+        if not terms:
+            return True
+        title = self.nav_list.item(index).text().casefold()
+        if all(term in title for term in terms):
+            return True
+        for row in self.stack.widget(index).findChildren(SettingRow):
+            if all(term in f"{title} {row.search_text}" for term in terms):
+                return row
+        return False
+
+    def _filter_settings(self, query):
+        terms = query.casefold().split()
+        matching = []
+        for index in range(self.nav_list.count()):
+            match = self._settings_search_match(index, terms)
+            self.nav_list.item(index).setHidden(not match)
+            if match:
+                matching.append(index)
+        current = self.nav_list.currentRow()
+        self.no_search_results.setVisible(not matching)
+        if not matching:
+            self.stack.hide()
+        else:
+            self.stack.show()
+            if current not in matching:
+                self.nav_list.setCurrentRow(matching[0])
+            else:
+                self._on_nav_changed(current)
+
+    def _choose_download_folder(self):
+        initial = self.download_folder.text() or str(default_download_folder())
+        folder = QFileDialog.getExistingDirectory(self, "Choose download folder", initial)
+        if folder:
+            self.download_folder.setText(os.path.normpath(folder))
 
     def _on_theme_changed(self, theme_key: str):
         self._on_live_appearance_change()
@@ -1326,6 +1407,11 @@ class SettingsWindow(QWidget):
     def _load_control_values(self):
         self.chk_update_notifications.setChecked(self.config.get("updates", {}).get("automatic", True), animate=False)
         self.chk_clipboard_history.setChecked(self.config.get("clipboard", {}).get("enabled", False), animate=False)
+        self.chk_app_mixer.setChecked(self.config.get("mixer", {}).get("enabled", True), animate=False)
+        downloads = self.config.get("downloads", {})
+        self.chk_downloads.setChecked(downloads.get("enabled", False), animate=False)
+        self.download_folder.setText(downloads.get("folder", ""))
+        self.chk_pill_levels.setChecked(self.config.get("notch", {}).get("pill_levels", True), animate=False)
         self.chk_capture_images.setChecked(self.config.get("capture", {}).get("enabled", False), animate=False)
         # 0. Appearance
         app_cfg = normalize_appearance(self.config.get("appearance", {}))
@@ -1472,6 +1558,8 @@ class SettingsWindow(QWidget):
         new_config = {
             "clipboard": {"enabled": self.chk_clipboard_history.isChecked()},
             "capture": {"enabled": self.chk_capture_images.isChecked()},
+            "mixer": {"enabled": self.chk_app_mixer.isChecked()},
+            "downloads": {"enabled": self.chk_downloads.isChecked(), "folder": self.download_folder.text()},
             "updates": {"automatic": self.chk_update_notifications.isChecked()},
             "appearance": {
                 **self._appearance_values(),
@@ -1518,6 +1606,7 @@ class SettingsWindow(QWidget):
             "notch": {
                 "auto_hover_peek": self.chk_hover_peek.isChecked(),
                 "scroll_volume": self.chk_scroll_volume.isChecked(),
+                "pill_levels": self.chk_pill_levels.isChecked(),
                 "default_tab": saved_dtab,
                 "animation_duration_ms": self.spin_anim_ms.value(),
                 "keep_in_tray": self.chk_tray_close.isChecked(),
@@ -1586,6 +1675,7 @@ class SettingsWindow(QWidget):
             self.lbl_st_top_apps.setText(f"Active now: {active_app}")
 
     def select_page(self, page_name: str):
+        self.search_settings.clear()
         aliases = {"tabs manager": "tools", "media & lyrics": "music", "pomodoro": "timer", "hardware hud": "system", "about & system": "about"}
         target = aliases.get(page_name.strip().lower(), page_name.strip().lower())
         for idx in range(self.nav_list.count()):
