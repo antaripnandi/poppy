@@ -1671,7 +1671,7 @@ class SettingsWindow(QWidget):
             app_text = "Top Apps: " + "  •  ".join(f"{name}: {fmt}" for name, sec, fmt in top_apps[:3])
             self.lbl_st_top_apps.setText(app_text)
         else:
-            self.lbl_st_top_apps.setText(f"Active now: {active_app}")
+            self.lbl_st_top_apps.setText(f"Active now: {active_app}" if active_app else "No tracked app active.")
 
     def select_page(self, page_name: str):
         self.search_settings.clear()

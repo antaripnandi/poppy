@@ -317,7 +317,7 @@ class CalendarTabView(QWidget):
             self.current_year -= 1
         else:
             self.current_month -= 1
-        self._render_calendar()
+        self._select_visible_month()
 
     def _next_month(self):
         if self.current_month == 12:
@@ -325,7 +325,13 @@ class CalendarTabView(QWidget):
             self.current_year += 1
         else:
             self.current_month += 1
+        self._select_visible_month()
+
+    def _select_visible_month(self):
+        last_day = calendar.monthrange(self.current_year, self.current_month)[1]
+        self.selected_date = date(self.current_year, self.current_month, min(self.selected_date.day, last_day))
         self._render_calendar()
+        self._render_agenda()
 
     def _go_today(self):
         today = date.today()
@@ -720,10 +726,18 @@ class DocsTabView(QWidget):
 
         btn_open = QPushButton("Open")
         btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_open.clicked.connect(lambda: os.startfile(file_path))
+        btn_open.clicked.connect(lambda: self._open_recent(file_path))
         r_l.addWidget(btn_open)
 
         self.recent_layout.insertWidget(0, row)
+
+    def _open_recent(self, file_path):
+        try:
+            os.startfile(file_path)
+        except FileNotFoundError:
+            self.doc_status.setText("This PDF was moved or deleted.")
+        except OSError:
+            self.doc_status.setText("Windows could not open this PDF.")
 
     def _clear_recent(self):
         self._recent_files.clear()

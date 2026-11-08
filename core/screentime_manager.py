@@ -199,6 +199,7 @@ class ScreenTimeManager(QObject):
         # Check if user is active or AFK/idle
         idle_threshold = int(self._cfg().get("idle_threshold_seconds", 120))
         idle_sec = _get_idle_seconds()
+        self._current_app = ""
 
         if idle_sec < idle_threshold:
             # User is active

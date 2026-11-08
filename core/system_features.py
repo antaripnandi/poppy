@@ -433,6 +433,9 @@ class ClipboardHistoryManager(QObject):
             return False
         existing = next((c for c in self.history if c["text"] == text), None)
         if existing and self.history[0] is existing:
+            if self.last_save_error:
+                self._save()
+                self.history_updated.emit()
             return True
         self.history = [c for c in self.history if c["text"] != text]
         item = {
@@ -474,7 +477,11 @@ class ClipboardHistoryManager(QObject):
 
 
 def clipboard_allows_history() -> bool:
-    """Honor Windows clipboard exclusion formats, failing closed if busy."""
+    return clipboard_history_permission() is True
+
+
+def clipboard_history_permission() -> bool | None:
+    """Return None if Windows could not expose clipboard privacy metadata yet."""
     try:
         import win32clipboard
         win32clipboard.OpenClipboard()
@@ -486,13 +493,13 @@ def clipboard_allows_history() -> bool:
             if win32clipboard.IsClipboardFormatAvailable(allowed):
                 value = win32clipboard.GetClipboardData(allowed)
                 if isinstance(value, bytes) and len(value) >= 4:
-                    return int.from_bytes(value[:4], "little") != 0
+                    return int.from_bytes(value[:4], "little") == 1
                 return False
             return True
         finally:
             win32clipboard.CloseClipboard()
     except Exception:
-        return False
+        return None
 
 
 class _CountedArray(ctypes.Structure):

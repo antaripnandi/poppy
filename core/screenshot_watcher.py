@@ -5,11 +5,17 @@ import hashlib
 import threading
 import uuid
 from datetime import datetime
+from time import monotonic
+from win32clipboard import GetClipboardSequenceNumber
 from PySide6.QtCore import QObject, Signal, QUrl, QMimeData, QFileSystemWatcher, QTimer, QSaveFile, QIODevice
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 from poppy.core.storage import data_dir
-from poppy.core.system_features import clipboard_allows_history
+from poppy.core.system_features import clipboard_history_permission
+
+
+_CLIPBOARD_IMAGE_FORMATS = ("image/png", 'application/x-qt-windows-mime;value="PNG"',
+                            'application/x-qt-windows-mime;value="image/png"')
 
 
 class ScreenshotWatcher(QObject):
@@ -24,7 +30,8 @@ class ScreenshotWatcher(QObject):
         self.enabled: bool = False
         self._started = False
         self.protected_paths = lambda: set()
-        self._last_image_hash = None
+        self._last_capture = None
+        self._clipboard_retries = 0
         self._ignore_clipboard: bool = False
         self._capture_lock = threading.Lock()
         self._generation = 0
@@ -64,7 +71,7 @@ class ScreenshotWatcher(QObject):
         with self._capture_lock:
             self._generation += 1
             self._pending.clear()
-            self._last_image_hash = None
+            self._last_capture = None
         if self._started:
             QApplication.clipboard().dataChanged.disconnect(self._on_clipboard_data_changed)
             self._started = False
@@ -100,26 +107,44 @@ class ScreenshotWatcher(QObject):
         if not self.enabled or self._ignore_clipboard:
             return
         # Debounce to allow clipboard writer to finish
+        self._clipboard_retries = 3
         self._debounce_timer.start()
 
     def _process_clipboard(self):
         if not self.enabled or self._ignore_clipboard:
             return
-        if not clipboard_allows_history():
+        sequence = GetClipboardSequenceNumber()
+        permission = clipboard_history_permission()
+        if permission is None:
+            self._retry_clipboard()
+        if not permission:
             return
 
         cb = QApplication.clipboard()
         mime = cb.mimeData()
-
-        if mime is None or not mime.hasImage():
+        if mime is None:
+            self._retry_clipboard()
             return
 
         try:
-            img = cb.image()
-            if not img.isNull() and img.width() >= 16 and img.height() >= 16:
-                self._enqueue_capture("clipboard", img)
+            image = cb.image() if mime.hasImage() else QImage()
+            if image.isNull():
+                for image_format in _CLIPBOARD_IMAGE_FORMATS:
+                    if mime.hasFormat(image_format) and image.loadFromData(mime.data(image_format), "PNG"):
+                        break
+            if sequence != GetClipboardSequenceNumber():
+                self._retry_clipboard()
+            elif image.width() >= 16 and image.height() >= 16:
+                self._enqueue_capture("clipboard", image)
+            elif image.isNull() and (mime.hasImage() or any(mime.hasFormat(fmt) for fmt in _CLIPBOARD_IMAGE_FORMATS)):
+                self._retry_clipboard()
         except Exception as e:
             print(f"[Poppy ScreenshotWatcher] Error reading clipboard image: {e}")
+
+    def _retry_clipboard(self):
+        if self._clipboard_retries:
+            self._clipboard_retries -= 1
+            self._debounce_timer.start()
 
     def _on_screenshots_dir_changed(self, dir_path: str):
         """Handle new files written directly to Pictures/Screenshots (e.g. Win+PrtScn)."""
@@ -149,13 +174,14 @@ class ScreenshotWatcher(QObject):
                     continue
                 digest = self._image_hash(image)
                 with self._capture_lock:
-                    if generation != self._generation or digest == self._last_image_hash:
+                    last = self._last_capture
+                    if generation != self._generation or (last and digest == last[0] and monotonic() - last[1] < 3):
                         continue
                 path = self._save_image(image)
                 with self._capture_lock:
                     current = generation == self._generation
                     if current:
-                        self._last_image_hash = digest
+                        self._last_capture = digest, monotonic()
                 if current:
                     try:
                         self._capture_saved.emit(path, image, generation)
@@ -213,7 +239,7 @@ class ScreenshotWatcher(QObject):
                 mime.setImageData(img)
                 digest = self._image_hash(img)
                 with self._capture_lock:
-                    self._last_image_hash = digest
+                    self._last_capture = digest, monotonic()
             mime.setUrls([QUrl.fromLocalFile(file_path)])
             cb.setMimeData(mime)
 

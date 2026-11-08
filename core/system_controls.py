@@ -378,16 +378,18 @@ class AudioPeakMeter:
             vtable_meter = ctypes.cast(self._pMeter, POINTER(POINTER(c_void_p))).contents
             GetPeakValue = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(c_float))(vtable_meter[3])
             val = c_float()
-            hr1 = GetPeakValue(self._pMeter, byref(val))
-
-            GetChannelsPeaks = ctypes.WINFUNCTYPE(HRESULT, c_void_p, wintypes.UINT, POINTER(c_float))(vtable_meter[5])
-            peaks = (c_float * 2)()
-            hr2 = GetChannelsPeaks(self._pMeter, 2, peaks)
-            if hr1 != 0 or hr2 != 0:
+            if GetPeakValue(self._pMeter, byref(val)) != 0:
                 self._release(self._pMeter)
                 self._pMeter = None
                 return (0.0, 0.0, 0.0)
-            return (float(val.value), float(peaks[0]), float(peaks[1]))
+            get_count = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(wintypes.UINT))(vtable_meter[4])
+            count = wintypes.UINT()
+            if get_count(self._pMeter, byref(count)) == 0 and count.value:
+                get_channels = ctypes.WINFUNCTYPE(HRESULT, c_void_p, wintypes.UINT, POINTER(c_float))(vtable_meter[5])
+                peaks = (c_float * count.value)()
+                if get_channels(self._pMeter, count.value, peaks) == 0:
+                    return val.value, peaks[0], peaks[min(1, count.value - 1)]
+            return (val.value,) * 3
         except Exception:
             self._release(self._pMeter)
             self._pMeter = None

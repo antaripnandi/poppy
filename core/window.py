@@ -1532,9 +1532,12 @@ class DynamicNotchWindow(QWidget):
             self.btn_hdr_pin.setToolTip("Pin Notch (Keep open and disable auto-collapse)")
 
     def _toggle_screen_shield(self):
-        self._is_screen_shielded = not self._is_screen_shielded
-        ok = ScreenCaptureShield.set_shield(int(self.winId()), self._is_screen_shielded)
-        if self._is_screen_shielded and ok:
+        enabled = not self._is_screen_shielded
+        if not ScreenCaptureShield.set_shield(int(self.winId()), enabled):
+            self.message_requested.emit("Screen Capture Shield", "Windows could not change capture protection.")
+            return
+        self._is_screen_shielded = enabled
+        if enabled:
             set_widget_style(self.btn_hdr_shield, """
                 background: rgba(34, 197, 94, 0.25);
                 border: none;
@@ -1543,9 +1546,8 @@ class DynamicNotchWindow(QWidget):
                 font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
                 font-size: 11px;
             """)
-            self.btn_hdr_shield.setToolTip("Screen Capture Shield: ACTIVE (Hidden from OBS, Discord, Zoom & Screenshots)")
+            self.btn_hdr_shield.setToolTip("Capture protection is on for the Poppy drawer and pill.")
         else:
-            self._is_screen_shielded = False
             set_widget_style(self.btn_hdr_shield, """
                 background: transparent;
                 border: none;
@@ -2526,9 +2528,12 @@ class DynamicNotchWindow(QWidget):
         """Multi-monitor aware screen lookup using configured display or cursor fallback."""
         target_disp = getattr(self, "_display", "Primary")
         screens = QGuiApplication.screens()
-        if target_disp and target_disp != "Primary" and screens:
+        if target_disp == "Primary" and (primary := QGuiApplication.primaryScreen()):
+            return primary.geometry()
+        if target_disp and screens:
+            display_number = target_disp.split(" (", 1)[0]
             for idx, scr in enumerate(screens):
-                if target_disp.startswith(f"Display {idx + 1}") or target_disp == scr.name():
+                if display_number == f"Display {idx + 1}" or target_disp == scr.name():
                     return scr.geometry()
 
         screen = QGuiApplication.screenAt(self.geometry().center())
@@ -2787,11 +2792,12 @@ class DynamicNotchWindow(QWidget):
 
     # --- Drag & Drop Handlers ---
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if any(url.isLocalFile() for url in event.mimeData().urls()):
             event.acceptProposedAction()
             if self.state != NotchState.EXPANDED:
-                self._transition_to(NotchState.EXPANDED)
-                self._switch_to_tab_by_name("Shelf")
+                self._transition_to(NotchState.EXPANDED, target_tab="Shelf")
+        else:
+            event.ignore()
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():

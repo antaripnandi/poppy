@@ -13,8 +13,10 @@ _SHELL_CLASS = "XamlExplorerHostIslandWindow"
 _CREATE = 0x8000
 _DESTROY = 0x8001
 _SHOW = 0x8002  # EVENT_OBJECT_SHOW
+_VOLUME_DOWN, _VOLUME_UP = 0xAE, 0xAF
 _WIN_EVENT = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
                                 wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+_KEY_EVENT = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
 
 class BrightnessFlyout:
@@ -24,6 +26,8 @@ class BrightnessFlyout:
         self._user32 = ctypes.windll.user32
         self._gdi32 = ctypes.windll.gdi32
         self._hook = None
+        self._key_hook = None
+        self._volume_key = None
         self._notification = None
         self._read_volume = read_volume
         self._show_volume = show_volume
@@ -39,6 +43,7 @@ class BrightnessFlyout:
         self._change = None
         self._last_shown = float("-inf")
         self._callback = _WIN_EVENT(self._window_event)
+        self._key_callback = _KEY_EVENT(self._keyboard_event)
 
     def start(self, hwnd):
         if not hasattr(self._user32, "GetWindowBand"):
@@ -53,10 +58,22 @@ class BrightnessFlyout:
             self._notification = self._user32.RegisterPowerSettingNotification(
                 hwnd, ctypes.create_string_buffer(_BRIGHTNESS_GUID), 0)
             self.refresh_volume()
+            if self._read_volume:
+                self._user32.SetWindowsHookExW.argtypes = (ctypes.c_int, _KEY_EVENT, wintypes.HMODULE, wintypes.DWORD)
+                self._user32.SetWindowsHookExW.restype = wintypes.HHOOK
+                self._user32.CallNextHookEx.argtypes = (wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+                self._user32.CallNextHookEx.restype = ctypes.c_ssize_t
+                kernel = ctypes.windll.kernel32
+                kernel.GetModuleHandleW.restype = wintypes.HMODULE
+                self._key_hook = self._user32.SetWindowsHookExW(13, self._key_callback, kernel.GetModuleHandleW(None), 0)
 
     def close(self):
         self._volume_timer.stop()
         self._volume_window = None
+        if self._key_hook:
+            self._user32.UnhookWindowsHookEx(wintypes.HHOOK(self._key_hook))
+            self._key_hook = None
+        self._volume_key = None
         if self._hook:
             self._user32.UnhookWinEvent(wintypes.HANDLE(self._hook))
             self._hook = None
@@ -126,6 +143,15 @@ class BrightnessFlyout:
             if was_available != (self._volume is not None):
                 self.sync()
 
+    def _keyboard_event(self, code, message, address):
+        # Observe the volume buttons for unchanged readings at the limits.
+        # Windows receives every key and owns the actual volume change.
+        if code == 0 and message in (0x100, 0x104) and address:
+            key = wintypes.DWORD.from_address(address).value
+            if key in (_VOLUME_DOWN, _VOLUME_UP):
+                self._volume_key = (key, monotonic())
+        return self._user32.CallNextHookEx(None, code, message, address)
+
     def _poll_volume(self):
         window = self._volume_window
         if window is None or not self._can_show() or monotonic() - window[1] > 2.5:
@@ -137,10 +163,17 @@ class BrightnessFlyout:
         if self._volume is None:
             self.sync()
             return
-        if previous is None or previous == self._volume:
+        if previous is None:
             return
+        if previous == self._volume:
+            level, _ = self._volume
+            key, pressed_at = self._volume_key or (None, float("-inf"))
+            at_limit = (key, level) in ((_VOLUME_DOWN, 0), (_VOLUME_UP, 100))
+            if self._volume_reported or not at_limit or abs(window[1] - pressed_at) > 0.45:
+                return
         clipped = self._clipped and self._clipped[0] == hwnd
         if clipped or self._volume_reported or self._hide_indicator(hwnd):
+            self._volume_key = None
             self._volume_reported = True
             self._volume_window = (hwnd, monotonic())
             self._show_volume(previous, self._volume)

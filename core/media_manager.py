@@ -234,12 +234,7 @@ class MediaManager(QObject):
                     self._last_state_hash = "empty"
                 return
 
-            # Clamp selected index
-            selected_app = self.sessions[self._selected_index].app_id if self.sessions and self._selected_index < len(self.sessions) else None
-            if selected_app:
-                self._selected_index = next((i for i, item in enumerate(new_sessions) if item.app_id == selected_app), self._selected_index)
-            if self._selected_index >= len(new_sessions):
-                self._selected_index = 0
+            self._selected_index = self._match_selected_session(new_sessions)
 
             self.sessions = new_sessions
             curr = self.sessions[self._selected_index]
@@ -255,6 +250,24 @@ class MediaManager(QObject):
 
             # Always emit fresh timeline progress
             self.timeline_changed.emit(curr.position_sec, curr.duration_sec, curr.is_playing)
+
+    def _match_selected_session(self, sessions):
+        if self._selected_index >= len(self.sessions):
+            return 0
+        selected = self.sessions[self._selected_index]
+        candidates = [item for item in sessions if item.app_id == selected.app_id]
+        if not candidates:
+            return self._selected_index if self._selected_index < len(sessions) else 0
+        for item in candidates:
+            if item.session_obj == selected.session_obj:
+                return item.index
+        # WinRT can return fresh wrappers for the same session on each poll.
+        matches = [item for item in candidates if (item.title, item.artist, item.album)
+                   == (selected.title, selected.artist, selected.album)]
+        if len(matches) == 1:
+            return matches[0].index
+        ordinal = sum(item.app_id == selected.app_id for item in self.sessions[:self._selected_index])
+        return candidates[min(ordinal, len(candidates) - 1)].index
 
     async def _read_stream(self, stream_ref) -> bytes:
         try:

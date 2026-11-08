@@ -22,22 +22,26 @@ class DiscordRPCManager(QObject):
         self.custom_cfg = self.config.get("custom_presence", {})
         self.templates = self.config.get("dynamic_templates", {})
 
-        self._rpc = None
         self._connected = False
         self._running = True
         self._lock = threading.Lock()
+        self._connection = (0, None)
         self._pending_payload = None
         self._wake_event = threading.Event()
-        self._last_update_time = 0.0
 
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_thread.start()
 
     def start(self):
-        """Asynchronously connect to Discord in background thread."""
-        if not self.enabled:
-            return
-        threading.Thread(target=self._try_connect, daemon=True).start()
+        """Apply the desired connection on the RPC worker."""
+        with self._lock:
+            if not self._running:
+                return
+            revision, _ = self._connection
+            self._connection = (revision + 1, self.client_id if self.enabled else None)
+            self._connected = False
+            self._pending_payload = None
+        self._wake_event.set()
 
     def update_config(self, new_config: dict):
         """Live update configuration without restarting application."""
@@ -51,63 +55,92 @@ class DiscordRPCManager(QObject):
         self.custom_cfg = self.config.get("custom_presence", self.custom_cfg)
         self.templates = self.config.get("dynamic_templates", self.templates)
 
-        if not self.enabled:
-            self.clear()
-            self.close()
-        elif not old_enabled or (old_client_id != self.client_id and self.enabled):
-            self.close()
+        if old_enabled != self.enabled or (self.enabled and (old_client_id != self.client_id or not self._connected)):
             self.start()
-        elif self.mode == "custom":
+        elif self.enabled and self.mode == "custom":
             self.apply_custom_presence()
 
-    def _try_connect(self):
-        try:
-            from pypresence import Presence
-            with self._lock:
-                self._rpc = Presence(self.client_id)
-                self._rpc.connect()
-                self._connected = True
-            self.connection_status.emit(True)
+    @staticmethod
+    def _connect(client_id):
+        from pypresence import Presence
 
-            if self.mode == "custom":
-                self.apply_custom_presence()
+        rpc = Presence(client_id)
+        initial_loop = getattr(rpc, "loop", None)
+        try:
+            rpc.connect()
         except Exception:
-            with self._lock:
-                self._connected = False
-                self._rpc = None
-            self.connection_status.emit(False)
+            DiscordRPCManager._disconnect(rpc)
+            raise
+        finally:
+            if initial_loop is not None and initial_loop is not rpc.loop:
+                initial_loop.close()
+        return rpc
+
+    @staticmethod
+    def _disconnect(rpc):
+        if rpc is None:
+            return
+        try:
+            rpc.close()
+        except Exception:
+            loop = getattr(rpc, "loop", None)
+            if loop is not None and not loop.is_closed():
+                loop.close()
 
     def _worker_loop(self):
-        while self._running:
-            self._wake_event.wait(timeout=1.0)
-            self._wake_event.clear()
-            if not self._running:
-                break
-
-            with self._lock:
-                payload = self._pending_payload
-                self._pending_payload = None
-                connected = self._connected
-                rpc = self._rpc
-
-            if not payload or not connected or not rpc:
-                continue
-
-            # Respect Discord 15-second client IPC rate limit
-            now = time.monotonic()
-            elapsed = now - self._last_update_time
-            if elapsed < 15.0:
-                time.sleep(15.0 - elapsed)
-
-            with self._lock:
-                if not self._connected or not self._rpc:
+        revision, rpc = 0, None
+        delay, next_update = None, 0.0
+        try:
+            while True:
+                self._wake_event.wait(delay)
+                self._wake_event.clear()
+                delay = None
+                with self._lock:
+                    if not self._running:
+                        return
+                    requested, client_id = self._connection
+                if requested != revision:
+                    revision = requested
+                    self._disconnect(rpc)
+                    rpc = None
+                    next_update = 0.0
+                    if client_id:
+                        try:
+                            rpc = self._connect(client_id)
+                        except Exception:
+                            pass
+                    with self._lock:
+                        if not self._running or revision != self._connection[0]:
+                            continue
+                        self._connected = rpc is not None
+                    self.connection_status.emit(rpc is not None)
+                    if rpc is not None and self.mode == "custom":
+                        self.apply_custom_presence()
                     continue
+
+                with self._lock:
+                    payload = self._pending_payload
+                    if rpc is None or payload is None or revision != self._connection[0]:
+                        continue
+                    if payload and (remaining := next_update - time.monotonic()) > 0:
+                        delay = remaining
+                        continue
+                    self._pending_payload = None
                 try:
-                    self._rpc.update(**payload)
-                    self._last_update_time = time.monotonic()
-                except Exception as e:
-                    print(f"[Poppy Discord] Presence update error: {e}")
-                    self._connected = False
+                    if payload:
+                        rpc.update(**payload)
+                        next_update = time.monotonic() + 15.0
+                    else:
+                        rpc.clear()
+                except Exception as error:
+                    print(f"[Poppy Discord] Presence update error: {error}")
+                    self._disconnect(rpc)
+                    rpc = None
+                    with self._lock:
+                        self._connected = False
+                    self.connection_status.emit(False)
+        finally:
+            self._disconnect(rpc)
 
     def set_presence(
         self,
@@ -122,9 +155,6 @@ class DiscordRPCManager(QObject):
         end: int = None
     ):
         """Directly queue a custom presence update with 15s rate-limiting."""
-        if not self._connected or not self.enabled:
-            return
-
         payload = {}
         if details:
             payload["details"] = details[:128]
@@ -154,6 +184,8 @@ class DiscordRPCManager(QObject):
                 payload["buttons"] = valid_buttons
 
         with self._lock:
+            if not self._connected or not self.enabled:
+                return
             self._pending_payload = payload
         self._wake_event.set()
 
@@ -244,26 +276,15 @@ class DiscordRPCManager(QObject):
 
     def clear(self):
         """Clear presence."""
-        if not self._connected:
-            return
-
-        def _do_clear():
-            with self._lock:
-                if self._rpc:
-                    try:
-                        self._rpc.clear()
-                    except Exception:
-                        pass
-
-        threading.Thread(target=_do_clear, daemon=True).start()
+        with self._lock:
+            if not self._connected:
+                return
+            self._pending_payload = {}
+        self._wake_event.set()
 
     def close(self):
         with self._lock:
             self._running = False
-            self._wake_event.set()
-            if self._rpc:
-                try:
-                    self._rpc.close()
-                except Exception:
-                    pass
-                self._connected = False
+            self._connected = False
+            self._pending_payload = None
+        self._wake_event.set()

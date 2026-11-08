@@ -20,18 +20,25 @@ class WeatherManager(QObject):
     fetches live temperature, weather code, and high/low forecasts via Open-Meteo.
     """
     weather_updated = Signal(dict)
+    _received = Signal(int, object, dict)
 
     def __init__(self, config: dict = None, parent=None):
         super().__init__(parent)
         self.config = config or {}
         self._cached_data = {}
+        self._request = 0
+        self._received.connect(self._publish)
         self._timer = QTimer(self)
         self._timer.setInterval(20 * 60 * 1000)  # Refresh every 20 minutes
         self._timer.timeout.connect(self.refresh)
 
     def update_config(self, config: dict):
         """Update weather preferences and trigger immediate background fetch."""
+        previous = self._preferences()
         self.config = config or {}
+        if previous != self._preferences():
+            self._cached_data = {}
+            self.weather_updated.emit({"display_text": "Updating weather…"})
         self.refresh()
 
     def start(self):
@@ -41,15 +48,34 @@ class WeatherManager(QObject):
 
     def refresh(self):
         """Asynchronously queries geolocation and live weather."""
-        threading.Thread(target=self._worker, daemon=True).start()
+        self._request += 1
+        threading.Thread(target=self._worker, args=(self._request, self._preferences()), daemon=True).start()
 
-    def _worker(self):
-        wcfg = self.config.get("weather", {}) if self.config else {}
-        target_city = str(wcfg.get("city") or "").strip()
-        unit = wcfg.get("unit", "celsius").lower()
-        if not target_city:
-            self.weather_updated.emit({"display_text": "Set a weather location in Settings"})
+    def _preferences(self):
+        weather = self.config.get("weather", {})
+        return str(weather.get("city") or "").strip(), str(weather.get("unit") or "celsius").lower()
+
+    def _worker(self, request=None, preferences=None):
+        request = self._request if request is None else request
+        preferences = self._preferences() if preferences is None else preferences
+        data = self._fetch(*preferences)
+        try:
+            self._received.emit(request, preferences, data)
+        except RuntimeError:
+            pass  # The window closed before the fetch finished.
+
+    def _publish(self, request, preferences, data):
+        if request != self._request or preferences != self._preferences():
             return
+        if "temp" in data:
+            self._cached_data = data
+        elif not data and self._cached_data:
+            data = self._cached_data
+        self.weather_updated.emit(data or {"display_text": "Weather unavailable"})
+
+    def _fetch(self, target_city, unit):
+        if not target_city:
+            return {"display_text": "Set a weather location in Settings"}
 
         city = "Local"
         region = ""
@@ -95,8 +121,7 @@ class WeatherManager(QObject):
                     continue
 
         if lat is None or lon is None:
-            self.weather_updated.emit({"display_text": "Weather location unavailable"})
-            return
+            return {"display_text": "Weather location unavailable"}
 
         # 2. Open-Meteo Weather API
         temp_unit_param = "&temperature_unit=fahrenheit" if unit == "fahrenheit" else ""
@@ -123,11 +148,12 @@ class WeatherManager(QObject):
 
                 cond, icon = self._map_wmo_code(code, is_day)
 
-                data = {
+                return {
                     "city": city,
                     "region": region,
                     "country": country,
                     "temp": temp,
+                    "unit": unit_sym,
                     "high": high,
                     "low": low,
                     "humidity": humidity,
@@ -137,10 +163,8 @@ class WeatherManager(QObject):
                     "display_text": f"{temp}{unit_sym} {cond} · H {high}° L {low}° · {city}",
                     "short_text": f"{temp}{unit_sym} {cond} · H {high}° L {low}°"
                 }
-                self._cached_data = data
-                self.weather_updated.emit(data)
         except Exception:
-            self.weather_updated.emit(self._cached_data or {"display_text": "Weather unavailable"})
+            return {}
 
     def _map_wmo_code(self, code: int, is_day: bool) -> tuple[str, str]:
         """Maps WMO Weather Codes to human text and Segoe Fluent glyphs."""

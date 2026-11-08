@@ -7,11 +7,12 @@ import sys
 import os
 import json
 import subprocess
+from html import escape
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QDesktopServices
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox, QToolTip
 
 # Ensure poppy package is importable
 current_dir = Path(__file__).resolve().parent
@@ -30,15 +31,24 @@ from poppy.core.updates import RELEASES_URL, UpdateChecker
 
 def load_config() -> dict:
     user_config = data_path("config.json")
-    config_file = user_config
-    if not config_file.exists():
-        config_file = resource_path("config.json")
+    bundled_config = resource_path("config.json")
+    defaults = {}
+    try:
+        defaults = json.loads(bundled_config.read_text(encoding="utf-8"))
+        if not isinstance(defaults, dict):
+            defaults = {}
+    except (OSError, ValueError):
+        pass
+    config_file = user_config if user_config.exists() else bundled_config
     if config_file.exists():
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 config = json.load(f)
             if not isinstance(config, dict):
                 raise ValueError("Settings must contain a JSON object")
+            for section, default in defaults.items():
+                if isinstance(default, dict) and section in config and not isinstance(config[section], dict):
+                    config[section] = default
             media = config.get("media", {})
             migrate_cookie = isinstance(media, dict) and bool(media.get("spotify_sp_dc"))
             if migrate_cookie:
@@ -55,7 +65,15 @@ def load_config() -> dict:
             return config
         except Exception as e:
             print(f"[Poppy] Config load warning: {e}")
-    return {}
+    return defaults
+
+
+def show_notification(notch, tray, title, message):
+    if tray.isVisible() and tray.supportsMessages():
+        tray.showMessage(title, message)
+    else:
+        position = notch._displayed_geometry().bottomLeft() + QPoint(8, 6)
+        QToolTip.showText(position, f"<b>{escape(title)}</b><br>{escape(message)}", notch, msecShowTime=4500)
 
 
 def create_tray_icon() -> QIcon:
@@ -149,7 +167,7 @@ def main():
     # System Tray Icon Setup
     tray_icon = QSystemTrayIcon(create_tray_icon(), app)
     tray_icon.setToolTip("Poppy - Dynamic Notch & Productivity Island")
-    notch.message_requested.connect(lambda title, message: tray_icon.showMessage(title, message))
+    notch.message_requested.connect(lambda title, message: show_notification(notch, tray_icon, title, message))
 
     tray_menu = QMenu()
     act_show = QAction("Show Notch", tray_menu)

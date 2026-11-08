@@ -47,6 +47,9 @@ class UpdateChecker(QObject):
     def configure(self, automatic: bool):
         if not automatic:
             self._timer.stop()
+            if self._reply is not None and not self._manual:
+                reply, self._reply = self._reply, None
+                reply.abort()
         elif not self._timer.isActive():
             self._timer.start(15_000)
 
@@ -75,6 +78,9 @@ class UpdateChecker(QObject):
             reply.abort()
 
     def _finish(self, reply):
+        if reply is not self._reply:
+            reply.deleteLater()
+            return
         manual, self._manual = self._manual, False
         self._reply = None
         version = ""

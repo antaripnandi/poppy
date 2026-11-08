@@ -825,10 +825,11 @@ class HomeTabView(QWidget):
         h = data.get("high", 0)
         l = data.get("low", 0)
         hum = data.get("humidity", 0)
+        unit = data.get("unit", "°C")
 
         self.lbl_weather_text.setText(text)
         self.lbl_weather_text.setToolTip(
-            f"{city}\n{temp}°C · {cond}\nHigh: {h}°C · Low: {l}°C\nHumidity: {hum}%\n(Click to Refresh)"
+            f"{city}\n{temp}{unit} · {cond}\nHigh: {h}{unit} · Low: {l}{unit}\nHumidity: {hum}%\n(Click to Refresh)"
             if city else text
         )
 
