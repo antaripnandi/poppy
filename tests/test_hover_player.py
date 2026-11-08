@@ -221,7 +221,7 @@ def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
             assert window.lbl_peek_artist.fontMetrics().horizontalAdvance(window.lbl_peek_artist.text()) <= window.lbl_peek_artist.width()
             controls = (window.peek_thumb, window.lbl_peek_title, window.lbl_peek_artist, window.peek_visualizer,
                         window.btn_peek_prev, window.btn_peek_play, window.btn_peek_next,
-                        window.peek_seek, window.btn_peek_volume)
+                        window.peek_seek, window.lbl_peek_time, window.btn_peek_volume)
             for widget in controls:
                 assert window.view_peek.rect().contains(QRect(widget.mapTo(window.view_peek, QPoint()), widget.size()))
             assert window.peek_thumb.width() > window.btn_peek_play.width() * 2
@@ -361,6 +361,7 @@ def test_idle_hover_opens_and_stays_open_when_a_media_session_ends(audit_app, mo
     assert window.lbl_peek_title.text() == "Nothing playing"
     assert all(not button.isEnabled() for button in transport)
     assert window.peek_seek.value() == 0
+    assert not window.lbl_peek_time.text()
 
     window.peek_volume_menu.hide()
     pointer = window.geometry().topLeft() - QPoint(100, 100)
@@ -384,10 +385,14 @@ def test_peek_seeks_and_fixed_color_survives_layout_changes(audit_app, monkeypat
     window._transition_to(NotchState.PEEK)
     settle(window, audit_app)
     assert window.peek_seek.value() == 25
-    assert window.peek_seek.toolTip() == "00:25 / 01:40"
+    assert window.lbl_peek_time.text() == window.peek_seek.accessibleDescription() == "00:25 / 01:40"
+    assert not window.peek_seek.toolTip()
     assert window.peek_seek.isVisible()
+    center = QPointF(window.peek_seek.rect().center())
+    midpoint = window.peek_seek._value_at(center)
     QTest.mouseClick(window.peek_seek, Qt.MouseButton.LeftButton, pos=window.peek_seek.rect().center())
     assert 48 <= calls[-1] <= 52
+    assert window.peek_seek._value_at(center) == midpoint
     assert window.state == NotchState.PEEK
     point = window.rect().center()
     event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, window.mapToGlobal(point))
@@ -404,6 +409,38 @@ def test_peek_seeks_and_fixed_color_survives_layout_changes(audit_app, monkeypat
         assert "background: transparent" in window.btn_peek_play.styleSheet()
         assert not window.btn_peek_play.icon().isNull()
     window.close()
+
+
+def test_peek_drag_previews_time_and_only_commits_on_release(audit_app, monkeypatch):
+    seeks = []
+    monkeypatch.setattr(MediaManager, "seek", lambda _, position: seeks.append(position))
+    window = DynamicNotchWindow()
+    window.show()
+    track = {"title": "Track", "position_sec": 25, "duration_sec": 100, "can_seek": True}
+    window._on_media_changed(track)
+    window._transition_to(NotchState.PEEK, animate=False)
+    slider = window.peek_seek
+    start = slider.rect().center()
+    end = QPoint(slider.width() - 7, start.y())
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(slider, end)
+    assert slider.isSliderDown() and not seeks
+    preview = slider.value()
+    assert preview >= 95 and window.lbl_peek_time.text() == f"01:{preview - 60:02} / 01:40"
+    window._on_media_timeline(27, 100, True)
+    assert slider.value() == preview
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=end)
+    assert seeks == [preview]
+
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=start)
+    audit_app.sendEvent(slider, QEvent(QEvent.Type.UngrabMouse))
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=end)
+    assert seeks == [preview]
+
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=start)
+    window._on_media_changed(dict(track, title="Next track", position_sec=0))
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=end)
+    assert seeks == [preview] and slider.value() == 0
 
 
 def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monkeypatch):

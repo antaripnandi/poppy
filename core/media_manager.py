@@ -9,7 +9,16 @@ import asyncio
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from PySide6.QtCore import QObject, Signal
+
+
+@dataclass
+class _SeekRequest:
+    track: tuple[str, ...]
+    position: float
+    started: float
+    accepted: bool = False
 
 
 def format_source_name(app_id: str, title: str = "") -> str:
@@ -69,6 +78,9 @@ class SessionData:
         self.last_updated_ts = last_updated_ts
         self.can_seek = can_seek
 
+    def track_key(self):
+        return self.app_id, self.title, self.artist, self.album
+
     def to_dict(self) -> dict:
         return {
             "index": self.index,
@@ -105,6 +117,8 @@ class MediaManager(QObject):
         self._thumb_cache: OrderedDict = OrderedDict()  # (app_id, title, artist, album) -> bytes
         self._max_cache_size = 30
         self._last_state_hash = None
+        self._pending_seek = None
+        self._seek_lock = asyncio.Lock()
 
     def start(self):
         """Start media monitoring background event loop."""
@@ -120,6 +134,11 @@ class MediaManager(QObject):
         except Exception as e:
             print(f"[Poppy Media] Loop error: {e}")
         finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             self._loop.close()
 
     async def _media_loop(self):
@@ -209,6 +228,7 @@ class MediaManager(QObject):
         with self._lock:
             # Handle empty session list
             if not new_sessions:
+                self._pending_seek = None
                 if self._last_state_hash != "empty":
                     self.sessions = []
                     self._selected_index = 0
@@ -238,6 +258,7 @@ class MediaManager(QObject):
 
             self.sessions = new_sessions
             curr = self.sessions[self._selected_index]
+            timeline = self._timeline_for(curr)
 
             # Compute fingerprint for track/session changes
             state_fingerprint = self._fingerprint(curr)
@@ -245,11 +266,11 @@ class MediaManager(QObject):
 
             if state_fingerprint != self._last_state_hash:
                 self._last_state_hash = state_fingerprint
-                self.media_changed.emit(curr.to_dict())
+                self.media_changed.emit(dict(curr.to_dict(), position_sec=timeline[0]))
                 self.playback_changed.emit(curr.is_playing)
 
             # Always emit fresh timeline progress
-            self.timeline_changed.emit(curr.position_sec, curr.duration_sec, curr.is_playing)
+            self.timeline_changed.emit(*timeline)
 
     def _match_selected_session(self, sessions):
         if self._selected_index >= len(self.sessions):
@@ -262,8 +283,7 @@ class MediaManager(QObject):
             if item.session_obj == selected.session_obj:
                 return item.index
         # WinRT can return fresh wrappers for the same session on each poll.
-        matches = [item for item in candidates if (item.title, item.artist, item.album)
-                   == (selected.title, selected.artist, selected.album)]
+        matches = [item for item in candidates if item.track_key() == selected.track_key()]
         if len(matches) == 1:
             return matches[0].index
         ordinal = sum(item.app_id == selected.app_id for item in self.sessions[:self._selected_index])
@@ -290,6 +310,8 @@ class MediaManager(QObject):
             if 0 <= index < len(self.sessions):
                 if index == self._selected_index and self._last_state_hash == self._fingerprint(self.sessions[index]):
                     return
+                if index != self._selected_index:
+                    self._pending_seek = None
                 self._selected_index = index
                 curr = self.sessions[index]
                 self._last_state_hash = self._fingerprint(curr)
@@ -323,35 +345,66 @@ class MediaManager(QObject):
         with self._lock:
             if not self.sessions or self._selected_index >= len(self.sessions):
                 return (0.0, 0.0, False)
-            s = self.sessions[self._selected_index]
-            pos = s.position_sec
-            dur = s.duration_sec
-            is_playing = s.is_playing
-            # position_sec already includes extrapolation in _refresh_all_sessions.
-            return (pos, dur, is_playing)
+            return self._timeline_for(self.sessions[self._selected_index])
+
+    def _timeline_for(self, session):
+        position = session.position_sec
+        request = self._pending_seek
+        if request is not None:
+            age = time.monotonic() - request.started
+            if request.track != session.track_key() or not session.can_seek or age >= 2:
+                self._pending_seek = None
+            else:
+                expected = min(session.duration_sec, request.position + (age if session.is_playing else 0))
+                if request.accepted and abs(position - expected) <= 1:
+                    self._pending_seek = None
+                else:
+                    position = expected
+        return position, session.duration_sec, session.is_playing
 
     def seek(self, position_seconds: float):
         """Seek active media session to position in seconds."""
         with self._lock:
-            if not self._loop or not self.sessions or self._selected_index >= len(self.sessions):
+            loop = self._loop
+            if not loop or loop.is_closed() or not self.sessions or self._selected_index >= len(self.sessions):
                 return
-            target_session = self.sessions[self._selected_index].session_obj
             curr = self.sessions[self._selected_index]
             if not curr.can_seek:
                 return
             position_seconds = max(0.0, min(curr.duration_sec, position_seconds))
-            curr.position_sec = position_seconds
-            curr.last_updated_ts = time.time()
+            request = _SeekRequest(curr.track_key(), position_seconds, time.monotonic())
+            self._pending_seek = request
+            self.timeline_changed.emit(position_seconds, curr.duration_sec, curr.is_playing)
 
-        async def _do_seek():
+        operation = self._apply_seek(request)
+        try:
+            asyncio.run_coroutine_threadsafe(operation, loop)
+        except RuntimeError:
+            operation.close()
+            self._seek_result(request, False)
+
+    async def _apply_seek(self, request):
+        async with self._seek_lock:
+            with self._lock:
+                if request is not self._pending_seek:
+                    return
+                session = self.sessions[self._selected_index].session_obj
             try:
-                ticks = int(position_seconds * 10_000_000)
-                await target_session.try_change_playback_position_async(ticks)
-            except Exception as e:
-                print(f"[Poppy Media] Seek error: {e}")
+                ticks = round(request.position * 10_000_000)
+                accepted = await asyncio.wait_for(session.try_change_playback_position_async(ticks), timeout=1.5)
+            except Exception:
+                accepted = False
+            self._seek_result(request, accepted)
 
-        asyncio.run_coroutine_threadsafe(_do_seek(), self._loop)
-        self.timeline_changed.emit(position_seconds, curr.duration_sec, curr.is_playing)
+    def _seek_result(self, request, accepted):
+        with self._lock:
+            if request is not self._pending_seek:
+                return
+            if accepted:
+                request.accepted = True
+            else:
+                self._pending_seek = None
+                self.timeline_changed.emit(*self.get_timeline())
 
     def next_session(self):
         """Cycle to next active media session."""

@@ -77,6 +77,18 @@ class NotchState(Enum):
     EXPANDED = "expanded"
 
 
+class _PeekSeekSlider(ClickableSlider):
+    def cancel_drag(self):
+        self._track_drag = False
+        self.setSliderDown(False)
+
+    def mouseReleaseEvent(self, event):
+        commit = event.button() == Qt.MouseButton.LeftButton and self.isSliderDown()
+        super().mouseReleaseEvent(event)
+        if commit:
+            self.seek_clicked.emit(self.value())
+
+
 _gpu_api = None
 _gpu_handle = None
 _gpu_unavailable = False
@@ -367,7 +379,7 @@ class DynamicNotchWindow(QWidget):
         self.view_peek.setFixedSize(*self.PEEK_SIZE)
         self.view_peek.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout = QHBoxLayout(self.view_peek)
-        layout.setContentsMargins(21, 10, 21, 10)
+        layout.setContentsMargins(21, 7, 21, 7)
         layout.setSpacing(13)
         self.peek_thumb = QLabel(Icons.MUSIC)
         self.peek_thumb.setFixedSize(82, 82)
@@ -377,8 +389,7 @@ class DynamicNotchWindow(QWidget):
         layout.addWidget(self.peek_thumb, 0, Qt.AlignmentFlag.AlignVCenter)
 
         player = QVBoxLayout()
-        player.setContentsMargins(0, 2, 0, 1)
-        player.setSpacing(2)
+        player.setSpacing(1)
         header = QHBoxLayout()
         header.setSpacing(8)
         metadata = QVBoxLayout()
@@ -407,17 +418,17 @@ class DynamicNotchWindow(QWidget):
         ):
             button.clicked.connect(callback)
             button.setEnabled(False)
+            button.setFixedHeight(26)
             controls.addWidget(button, 1, Qt.AlignmentFlag.AlignCenter)
         player.addLayout(controls)
 
         playback = QHBoxLayout()
         playback.setSpacing(7)
-        self.peek_seek = ClickableSlider(Qt.Orientation.Horizontal)
+        self.peek_seek = _PeekSeekSlider(Qt.Orientation.Horizontal)
         self.peek_seek.setAccessibleName("Playback position")
         self.peek_seek.setFixedHeight(16)
         self.peek_seek.setEnabled(False)
-        self.peek_seek.seek_clicked.connect(self.media_manager.seek)
-        self.peek_seek.sliderReleased.connect(lambda: self.media_manager.seek(self.peek_seek.value()))
+        self.peek_seek.seek_clicked.connect(self._seek_peek)
         self.peek_seek.sliderMoved.connect(self._set_peek_elapsed)
         playback.addWidget(self.peek_seek, 1, Qt.AlignmentFlag.AlignVCenter)
         self._peek_volume_muted = False
@@ -426,6 +437,10 @@ class DynamicNotchWindow(QWidget):
         playback.addWidget(self.btn_peek_volume, 0, Qt.AlignmentFlag.AlignVCenter)
         controls.setContentsMargins(0, 0, self.btn_peek_volume.width() + playback.spacing(), 0)
         player.addLayout(playback)
+        self.lbl_peek_time = QLabel()
+        self.lbl_peek_time.setFixedHeight(13)
+        self.lbl_peek_time.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        player.addWidget(self.lbl_peek_time)
         layout.addLayout(player, 1)
 
         self.peek_volume_menu = QMenu(self)
@@ -1714,6 +1729,11 @@ class DynamicNotchWindow(QWidget):
     def _on_media_changed(self, data: dict):
         fields = ("index", "source_app", "display_name", "title", "artist", "album", "thumbnail_bytes", "can_seek")
         unchanged = self._current_media and all(self._current_media.get(field) == data.get(field) for field in fields)
+        track_fields = ("index", "source_app", "title", "artist", "album")
+        if self.peek_seek.isSliderDown() and (
+            not data.get("can_seek") or any(self._current_media.get(key) != data.get(key) for key in track_fields)
+        ):
+            self.peek_seek.cancel_drag()
         self._current_media = dict(data)
         if unchanged:
             self._on_media_timeline(data.get("position_sec", 0), data.get("duration_sec", 0), data.get("is_playing", False))
@@ -1863,22 +1883,28 @@ class DynamicNotchWindow(QWidget):
             self._show_peek_timeline()
 
     def _show_peek_timeline(self):
-        if self._has_media and self.peek_seek.isSliderDown():
-            return
         position, duration = self._peek_timeline if self._has_media else (0, 0)
-        self.peek_seek.setEnabled(bool(duration > 0 and self._current_media.get("can_seek")))
+        seekable = bool(duration > 0 and self._current_media.get("can_seek"))
+        if self.peek_seek.isSliderDown():
+            if seekable:
+                return
+            self.peek_seek.cancel_drag()
+        self.peek_seek.setEnabled(seekable)
         self.peek_seek.setRange(0, max(1, round(duration)))
         self.peek_seek.setValue(round(position) if duration > 0 else 0)
         self._set_peek_elapsed(position if duration > 0 else None)
 
     def _set_peek_elapsed(self, position):
         duration = self._peek_timeline[1]
-        if position is None:
-            text = "Playback position unavailable"
-        else:
-            text = f"{self.tab_music._format_time(position)} / {self.tab_music._format_time(duration)}"
-        self.peek_seek.setToolTip(text)
-        self.peek_seek.setAccessibleDescription(text)
+        text = (f"{self.tab_music._format_time(position)} / {self.tab_music._format_time(duration)}"
+                if position is not None and duration > 0 else "")
+        if self.lbl_peek_time.text() != text:
+            self.lbl_peek_time.setText(text)
+        self.peek_seek.setAccessibleDescription(text or "Playback position unavailable")
+
+    def _seek_peek(self, position):
+        self._set_peek_elapsed(position)
+        self.media_manager.seek(position)
 
     def _refresh_peek_surface(self):
         source = self._appearance["peek_color_source"]
@@ -1900,6 +1926,7 @@ class DynamicNotchWindow(QWidget):
         muted = f"rgba({rgb},0.78)"
         self.lbl_peek_title.setStyleSheet(f"color: {ink}; font-family: 'Segoe UI'; font-size: 13px; font-weight: 600;")
         self.lbl_peek_artist.setStyleSheet(f"color: {muted}; font-family: 'Segoe UI'; font-size: 10px;")
+        self.lbl_peek_time.setStyleSheet(f"color: {muted}; font-family: 'Segoe UI'; font-size: 10px;")
         self.peek_visualizer.set_ink(QColor(ink))
         font = get_fluent_font_family()
         self.peek_thumb.setStyleSheet(
@@ -1931,11 +1958,14 @@ class DynamicNotchWindow(QWidget):
                 QPushButton:disabled {{ color: {muted}; }}
             """)
         self.peek_seek.setStyleSheet(f"""
-            QSlider::groove:horizontal {{ height: 2px; background: rgba({rgb},0.23); }}
-            QSlider::sub-page:horizontal {{ background: {muted}; }}
-            QSlider::handle:horizontal {{ background: {ink}; width: 6px; margin: -2px 0; border-radius: 3px; }}
-            QSlider::handle:horizontal:disabled {{ background: transparent; }}
-            QSlider:focus {{ border: 1px solid {muted}; }}
+            QSlider:focus {{ border: none; outline: none; }}
+            QSlider::groove:horizontal {{ height: 2px; background: rgba({rgb},0.23); border-radius: 1px; }}
+            QSlider::sub-page:horizontal {{ background: {muted}; border-radius: 1px; }}
+            QSlider::handle:horizontal {{
+                background: {ink}; border: 1px solid {ink}; width: 6px; margin: -3px 0; border-radius: 4px;
+            }}
+            QSlider::handle:horizontal:focus {{ background: {color.name()}; }}
+            QSlider::handle:horizontal:disabled {{ background: transparent; border-color: transparent; }}
         """)
         self.peek_volume_menu.setStyleSheet(f"""
             QMenu {{ background: {color.name()}; border: none; border-radius: 8px; padding: 2px; }}

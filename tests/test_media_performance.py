@@ -4,6 +4,7 @@ import threading
 import time
 import asyncio
 import urllib.error
+from datetime import timedelta
 from email.message import Message
 from types import SimpleNamespace
 
@@ -209,6 +210,60 @@ def test_session_reordering_keeps_the_selected_player(audit_app):
     assert roster[-1][1] == 0
     assert roster[-1][0][1]["display_name"] == "Brave"
     assert tracks == []
+
+
+def test_seek_waits_for_fresh_timeline_and_recovers_from_provider_rejection():
+    class Session:
+        source_app_user_model_id = "spotify"
+        position = 25
+        accept = True
+
+        def get_playback_info(self):
+            return SimpleNamespace(playback_status=3, controls=SimpleNamespace(is_playback_position_enabled=True))
+
+        def get_timeline_properties(self):
+            return SimpleNamespace(end_time=timedelta(seconds=200), position=timedelta(seconds=self.position),
+                                   last_updated_time=None)
+
+        async def try_get_media_properties_async(self):
+            return SimpleNamespace(title="Track", artist="", album_title="", thumbnail=None)
+
+        async def try_change_playback_position_async(self, ticks):
+            requests.append(ticks)
+            await release.wait()
+            return self.accept
+
+    manager = MediaManager()
+    session = Session()
+    manager._session_manager = SimpleNamespace(get_sessions=lambda: [session])
+    observed, requests = [], []
+    manager.timeline_changed.connect(lambda position, *_: observed.append(position))
+
+    async def exercise():
+        nonlocal release
+        release = asyncio.Event()
+        manager._loop = asyncio.get_running_loop()
+        await manager._refresh_all_sessions()
+        manager.seek(150)
+        await manager._refresh_all_sessions()
+        assert observed[-2:] == [150, 150]
+        assert manager.sessions[0].position_sec == 25
+        release.set()
+        while not manager._pending_seek.accepted:
+            await asyncio.sleep(0)
+        assert requests == [1_500_000_000]
+        session.position = 150
+        await manager._refresh_all_sessions()
+        assert observed[-1] == 150 and manager._pending_seek is None
+
+        session.accept = False
+        manager.seek(80)
+        while manager._pending_seek is not None:
+            await asyncio.sleep(0)
+        assert requests[-1] == 800_000_000 and observed[-2:] == [80, 150]
+
+    release = None
+    asyncio.run(asyncio.wait_for(exercise(), timeout=2))
 
 
 def test_unexpected_provider_failure_does_not_leak_a_worker_slot(audit_app, monkeypatch):
