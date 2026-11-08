@@ -1,6 +1,7 @@
 """Protect session targeting, local download detection, and their UI entry points."""
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractSlider
 
@@ -47,6 +48,43 @@ def test_windows_writer_probe_waits_for_open_handle(tmp_path):
         writer.flush()
         assert not _writer_closed(candidate)
     assert _writer_closed(candidate)
+
+
+def test_download_watch_reports_a_replacement_at_an_existing_path(tmp_path):
+    candidate = tmp_path / "existing.zip"
+    candidate.touch()
+    baseline, _ = _snapshot(tmp_path)
+    partial = tmp_path / "existing.zip.part"
+    partial.write_bytes(b"completed download")
+    partial.replace(candidate)
+    pending = {}
+    for expected in ([], [], [candidate], []):
+        assert DownloadWatcher._scan(tmp_path, *_snapshot(tmp_path), baseline, pending) == expected
+
+
+def test_download_watch_rechecks_a_file_replaced_during_the_writer_probe(tmp_path, monkeypatch):
+    baseline, pending = {}, {}
+    candidate = tmp_path / "new.zip"
+    replacement = tmp_path / "new.zip.part"
+    candidate.write_bytes(b"first file")
+
+    def replace_during_probe(path):
+        replacement.write_bytes(b"replacement file")
+        replacement.replace(path)
+        return True
+
+    def scan():
+        return DownloadWatcher._scan(tmp_path, *_snapshot(tmp_path), baseline, pending)
+
+    monkeypatch.setattr("poppy.core.download_watcher._writer_closed", replace_during_probe)
+    assert scan() == []
+    assert scan() == []
+    assert scan() == []
+    monkeypatch.setattr("poppy.core.download_watcher._writer_closed", lambda _: True)
+    assert scan() == []
+    assert scan() == []
+    assert scan() == [candidate]
+    assert scan() == []
 
 
 def test_optional_tools_search_and_apply(audit_app, monkeypatch, tmp_path):
@@ -133,6 +171,36 @@ def test_mixer_applies_drag_before_release_and_cancels_pending_on_output_change(
     assert menu._pending_level is None and not menu._level_timer.isActive()
     menu._level_timer.timeout.emit()
     assert len(writes) == 1
+
+
+def test_mixer_wheel_scrolls_the_app_list_without_changing_volume(audit_app, monkeypatch):
+    apps = [AppVolume(f"App {index}", "", (str(index),), 50, False, False) for index in range(16)]
+    writes = []
+    monkeypatch.setattr(app_mixer, "read_app_volumes", lambda: ("speakers", apps))
+    monkeypatch.setattr(app_mixer, "set_app_volume", lambda *args, **change: writes.append(change))
+    monkeypatch.setattr(app_mixer.AudioEndpointManager, "get_output_endpoints", lambda: [])
+    window = DynamicNotchWindow()
+    window.show()
+    window._transition_to(NotchState.PEEK, animate=False)
+    window._open_app_mixer(window.btn_peek_volume)
+    menu = window._app_mixer
+    slider = menu._rows[apps[1].sessions][1]
+    slider.setFocus()
+    audit_app.processEvents()
+    bar = menu.scroll.verticalScrollBar()
+    assert bar.maximum() > 0 and bar.value() == 0
+    point = slider.rect().center()
+    if hasattr(QTest, "wheelEvent"):
+        QTest.wheelEvent(menu.windowHandle(), slider.mapTo(menu, point), QPoint(0, -120))
+        assert bar.value() > 0
+    else:
+        wheel = QWheelEvent(QPointF(point), QPointF(slider.mapToGlobal(point)), QPoint(), QPoint(0, -120),
+                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+        audit_app.sendEvent(slider, wheel)
+        assert not wheel.isAccepted()
+    assert not writes and slider.value() == 50
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    assert writes == [{"level": 51}]
 
 
 def test_mixer_pin_survives_reopening_without_an_audio_write(audit_app, monkeypatch):

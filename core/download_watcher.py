@@ -4,6 +4,7 @@ import ctypes
 import os
 from ctypes import wintypes
 from pathlib import Path
+from stat import S_ISREG
 from threading import Event, Thread
 
 from PySide6.QtCore import QObject, Signal
@@ -28,17 +29,23 @@ def _snapshot(folder):
         for entry in entries:
             if not entry.is_file(follow_symlinks=False):
                 continue
-            try:
-                stat = entry.stat(follow_symlinks=False)
-            except FileNotFoundError:
-                continue
             name = entry.name
             suffix = next((item for item in _PARTIAL_SUFFIXES if name.casefold().endswith(item)), None)
-            if suffix:
-                partials[name[:-len(suffix)]] = stat.st_size
+            try:
+                if suffix:
+                    partials[name[:-len(suffix)]] = entry.stat(follow_symlinks=False).st_size
+                    continue
+                # Windows DirEntry.stat reports a zero file ID.
+                current = os.lstat(entry.path)
+            except FileNotFoundError:
                 continue
-            files[entry.name] = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+            if S_ISREG(current.st_mode):
+                files[name] = _file_stamp(current)
     return files, partials
+
+
+def _file_stamp(current):
+    return current.st_ino, current.st_size, current.st_mtime_ns
 
 
 def _writer_closed(path):
@@ -149,8 +156,16 @@ class DownloadWatcher(QObject):
             count = count + 1 if stamp == previous else 0
             pending[name] = (stamp, count)
             path = folder / name
-            if count >= 2 and _writer_closed(path):
-                baseline[name] = stamp
-                del pending[name]
-                ready.append(path)
+            if count < 2 or not _writer_closed(path):
+                continue
+            try:
+                current = path.lstat()
+            except OSError:
+                continue
+            # The name may point to a different file by the time the probe succeeds.
+            if not S_ISREG(current.st_mode) or stamp != _file_stamp(current):
+                continue
+            baseline[name] = stamp
+            del pending[name]
+            ready.append(path)
         return ready

@@ -18,6 +18,11 @@ from poppy.ui.icons import Icons
 from poppy.ui.theme import set_widget_style, surface_colors
 
 
+class _AppVolumeSlider(ClickableSlider):
+    def wheelEvent(self, event):
+        event.ignore()  # Let the app list scroll without changing volume.
+
+
 class AppMixerMenu(QMenu):
     def __init__(self, parent):
         super().__init__(parent)
@@ -177,7 +182,7 @@ class AppMixerMenu(QMenu):
             artwork.setPixmap(self._icons.icon(QFileInfo(app.path)).pixmap(18, 18))
         layout.addWidget(artwork)
         layout.addWidget(name)
-        slider = ClickableSlider(Qt.Orientation.Horizontal)
+        slider = _AppVolumeSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
         slider.setAccessibleName(f"{app.name} volume")
         layout.addWidget(slider, 1)
