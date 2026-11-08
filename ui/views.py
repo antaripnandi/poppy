@@ -759,10 +759,11 @@ class HomeTabView(QWidget):
         text = self.txt_notes.toPlainText()
         self.tear_off_requested.emit(text)
 
-    def set_volume_display(self, vol: int, is_muted: bool = False):
-        self.slider_vol.blockSignals(True)
-        self.slider_vol.setValue(vol)
-        self.slider_vol.blockSignals(False)
+    def set_volume_display(self, vol: int, is_muted: bool = False, *, sync_slider=True):
+        if sync_slider:
+            self.slider_vol.blockSignals(True)
+            self.slider_vol.setValue(vol)
+            self.slider_vol.blockSignals(False)
         action = "Unmute" if is_muted else "Mute"
         self.btn_vol_mute.setText(action)
         self.btn_vol_mute.setAccessibleName(f"{action} system audio")
@@ -1336,10 +1337,11 @@ class MusicTabView(QWidget):
             self.lbl_large_art.setText(Icons.MUSIC)
             self._set_surface(QColor("#1c2723"))
 
-    def set_volume_display(self, vol: int, is_muted: bool = False):
-        self.vol_slider.blockSignals(True)
-        self.vol_slider.setValue(vol)
-        self.vol_slider.blockSignals(False)
+    def set_volume_display(self, vol: int, is_muted: bool = False, *, sync_slider=True):
+        if sync_slider:
+            self.vol_slider.blockSignals(True)
+            self.vol_slider.setValue(vol)
+            self.vol_slider.blockSignals(False)
         if is_muted:
             self.btn_vol_music.setText(Icons.MUTE)
             self.btn_vol_music.setToolTip("Audio Muted (Click to Unmute)")

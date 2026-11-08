@@ -110,5 +110,5 @@ def test_audio_controller_initialization():
     from poppy.core.system_controls import SystemAudioController
     audio = SystemAudioController()
     vol = audio.get_volume()
-    assert 0 <= vol <= 100
+    assert vol is None or 0 <= vol <= 100
 

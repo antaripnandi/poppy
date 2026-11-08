@@ -88,21 +88,29 @@ class SystemAudioController:
         except Exception:
             return None
 
-    def get_volume(self) -> int:
-        """Returns the current master volume as an integer percent (0-100)."""
+    def read_volume(self) -> tuple[int, bool] | None:
+        """Read master level and mute from the same playback endpoint."""
         pVolume = self._get_volume_interface()
         if not pVolume:
-            return 50
+            return None
         try:
-            vtable_vol = ctypes.cast(pVolume, POINTER(POINTER(c_void_p))).contents
-            GetVol = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(c_float))(vtable_vol[9])
-            val = c_float()
-            GetVol(pVolume, byref(val))
-            return int(round(val.value * 100))
+            table = ctypes.cast(pVolume, POINTER(POINTER(c_void_p))).contents
+            get_level = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(c_float))(table[9])
+            get_mute = ctypes.WINFUNCTYPE(HRESULT, c_void_p, POINTER(wintypes.BOOL))(table[15])
+            level, muted = c_float(), wintypes.BOOL()
+            if get_level(pVolume, byref(level)) < 0 or get_mute(pVolume, byref(muted)) < 0:
+                return None
+            if not 0 <= level.value <= 1:
+                return None
+            return round(level.value * 100), bool(muted.value)
         except Exception:
-            return 50
+            return None
         finally:
             self._release(pVolume)
+
+    def get_volume(self) -> int | None:
+        reading = self.read_volume()
+        return reading[0] if reading is not None else None
 
     def set_volume(self, level: int):
         """Sets the system master volume (0-100)."""

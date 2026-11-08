@@ -100,7 +100,6 @@ def _get_gpu_utilization() -> int | None:
 
 class DynamicNotchWindow(QWidget):
     PEEK_SIZE = (316, 108)
-    VOLUME_KEYS = (0xAD, 0xAE, 0xAF)  # VK_VOLUME_MUTE, DOWN, UP
     # Relative to the drawer duration. The second value is the initial speed
     # as a multiple of the average speed over the transition.
     MOTION_PROFILES = {
@@ -119,7 +118,6 @@ class DynamicNotchWindow(QWidget):
         self.config = config or {}
         self._current_media = {}
         self._has_media = False
-        self._level_hotkeys = set()
         self._brightness_flyout = None
         self._manage_native_levels = False
         self._native_brightness_feedback = False
@@ -438,7 +436,7 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume.setAccessibleName("System volume")
         self.peek_volume.setRange(0, 100)
         self.peek_volume.setFixedSize(30, 144)
-        self.peek_volume.valueChanged.connect(self._on_volume_slider_changed)
+        self.peek_volume.actionTriggered.connect(lambda _: self._on_volume_slider_action(self.peek_volume))
         volume_layout.addWidget(self.peek_volume, 0, Qt.AlignmentFlag.AlignHCenter)
         self.btn_peek_app_mixer = QPushButton("Apps")
         self.btn_peek_app_mixer.setToolTip("Open app mixer")
@@ -619,7 +617,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.btn_ctrl_next.clicked.connect(self.media_manager.next_track)
         self.tab_home.btn_clear_shelf.clicked.connect(self.drop_shelf.clear_shelf)
         self.tab_home.btn_home_shelf_chat.clicked.connect(self._copy_latest_shelf_for_chat)
-        self.tab_home.slider_vol.valueChanged.connect(self._on_volume_slider_changed)
+        self.tab_home.slider_vol.actionTriggered.connect(lambda _: self._on_volume_slider_action(self.tab_home.slider_vol))
         self.tab_home.btn_vol_mute.clicked.connect(self._on_mute_clicked)
         self.tab_home.btn_app_mixer.clicked.connect(lambda: self._open_app_mixer(self.tab_home.btn_app_mixer))
         self.tab_home.slider_bright.valueChanged.connect(self._on_brightness_slider_changed)
@@ -646,7 +644,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_music.session_select_requested.connect(self.media_manager.select_session)
         self.tab_music.btn_prev_session.clicked.connect(self.media_manager.previous_session)
         self.tab_music.btn_next_session.clicked.connect(self.media_manager.next_session)
-        self.tab_music.vol_slider.valueChanged.connect(self._on_volume_slider_changed)
+        self.tab_music.vol_slider.actionTriggered.connect(lambda _: self._on_volume_slider_action(self.tab_music.vol_slider))
         self.tab_music.btn_vol_music.clicked.connect(self._on_mute_clicked)
         self.tab_music.seek_requested.connect(self.media_manager.seek)
         self.tab_music.sound_settings_requested.connect(lambda: self._show_audio_device_dropdown(self.tab_music.btn_output))
@@ -900,6 +898,8 @@ class DynamicNotchWindow(QWidget):
         if self._appearance.get("mode") == "System" and is_light_theme() != resolve_light_mode("System"):
             self._apply_live_appearance(self._appearance)
         self._sync_system_controls()
+        if self._brightness_flyout:
+            self._brightness_flyout.refresh_volume()
         if visible_only and not self.tab_home.card_clock.isVisible():
             return
         try:
@@ -938,9 +938,9 @@ class DynamicNotchWindow(QWidget):
             # Volume sync
             if not any(slider.isSliderDown() for slider in
                        (self.tab_home.slider_vol, self.tab_music.vol_slider, self.peek_volume)):
-                vol = self.audio_ctrl.get_volume()
-                muted = self.audio_ctrl.get_mute()
-                self._show_volume(vol, muted)
+                volume = self.audio_ctrl.read_volume()
+                if volume is not None:
+                    self._show_volume(*volume)
 
             # Brightness sync
             if (force or home_visible) and not self.tab_home.slider_bright.isSliderDown():
@@ -953,27 +953,36 @@ class DynamicNotchWindow(QWidget):
         except Exception:
             pass
 
-    def _on_volume_slider_changed(self, value: int):
+    def _on_volume_slider_action(self, slider):
+        value = slider.sliderPosition()
+        if slider.isVisible() and slider.isEnabled() and value != slider.value():
+            self._on_volume_slider_changed(value, source=slider)
+
+    def _on_volume_slider_changed(self, value: int, *, source=None):
         self.audio_ctrl.set_volume(value)
         muted = self.audio_ctrl.get_mute()
         if muted and value > 0:
             self.audio_ctrl.set_mute(False)
             muted = False
-        self._show_volume(value, muted)
+        self._show_volume(value, muted, source=source)
         return muted
 
     def _on_mute_clicked(self):
         new_muted = self.audio_ctrl.toggle_mute()
         vol = self.audio_ctrl.get_volume()
+        if vol is None:
+            return
         self._show_volume(vol, new_muted)
         self._show_pill_level("Volume", Icons.MUTE if new_muted else Icons.VOLUME,
                               vol if new_muted else 0, vol, muted=new_muted)
 
     def _step_volume(self, step):
         previous = self.audio_ctrl.get_volume()
+        if previous is None:
+            return
         was_muted = self.audio_ctrl.get_mute()
         value = max(0, min(100, previous + step))
-        muted = self._on_volume_slider_changed(value)
+        muted = self._on_volume_slider_changed(value) if value != previous or was_muted else False
         icon = Icons.MUTE if muted or value == 0 else Icons.VOLUME
         self._show_pill_level("Volume", icon, 0 if was_muted else previous, value, muted=muted)
 
@@ -981,40 +990,22 @@ class DynamicNotchWindow(QWidget):
         self._manage_native_levels = True
         if not self.config.get("notch", {}).get("pill_levels", True):
             return
-        user32 = ctypes.windll.user32
-        hwnd = wintypes.HWND(int(self.winId()))
-        owned_all_keys = len(self._level_hotkeys) == len(self.VOLUME_KEYS)
-        for key in self.VOLUME_KEYS:
-            if key not in self._level_hotkeys and user32.RegisterHotKey(hwnd, key, 0, key):
-                self._level_hotkeys.add(key)
-        owns_all_keys = len(self._level_hotkeys) == len(self.VOLUME_KEYS)
-        if self._brightness_flyout and owns_all_keys != owned_all_keys:
-            self._brightness_flyout.close()
-            self._brightness_flyout = None
         if self._brightness_flyout is None:
-            self._brightness_flyout = BrightnessFlyout(self._can_show_pill_level, self._show_native_brightness)
-            self._brightness_flyout.start(hwnd, owns_volume_keys=owns_all_keys)
+            self._brightness_flyout = BrightnessFlyout(
+                self._can_show_pill_level, self._show_native_brightness,
+                read_volume=self.audio_ctrl.read_volume, show_volume=self._show_native_volume,
+            )
+            self._brightness_flyout.start(wintypes.HWND(int(self.winId())))
 
     def _stop_system_level_controls(self):
         if self._brightness_flyout:
             self._brightness_flyout.close()
             self._brightness_flyout = None
-        if self._level_hotkeys:
-            hwnd = wintypes.HWND(int(self.winId()))
-            for key in self._level_hotkeys:
-                ctypes.windll.user32.UnregisterHotKey(hwnd, key)
-            self._level_hotkeys.clear()
 
     def nativeEvent(self, event_type, message):
-        if event_type == b"windows_generic_MSG" and (self._level_hotkeys or self._brightness_flyout):
+        if event_type == b"windows_generic_MSG" and self._brightness_flyout:
             msg = wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0312 and msg.wParam in self._level_hotkeys:  # WM_HOTKEY
-                if msg.wParam == 0xAD:
-                    self._on_mute_clicked()
-                else:
-                    self._step_volume(2 if msg.wParam == 0xAF else -2)
-                return True, 0
-            if msg.message == 0x218 and msg.wParam == 0x8013 and self._brightness_flyout:  # WM_POWERBROADCAST
+            if msg.message == 0x218 and msg.wParam == 0x8013:  # WM_POWERBROADCAST
                 if self._brightness_flyout.power_setting_changed(msg.lParam):
                     return True, 1
         return super().nativeEvent(event_type, message)
@@ -1030,6 +1021,13 @@ class DynamicNotchWindow(QWidget):
         self._native_brightness_feedback = True
         self._brightness_level = value
         self._show_pill_level("Brightness", Icons.BRIGHTNESS, previous, value)
+
+    def _show_native_volume(self, previous, value):
+        old_volume, old_mute = previous
+        volume, muted = value
+        self._show_volume(volume, muted)
+        icon = Icons.MUTE if muted or volume == 0 else Icons.VOLUME
+        self._show_pill_level("Volume", icon, 0 if old_mute else old_volume, volume, muted=muted)
 
     def _sync_brightness_flyout(self):
         if self._brightness_flyout:
@@ -1064,12 +1062,12 @@ class DynamicNotchWindow(QWidget):
         if self.state == NotchState.COLLAPSED and self._displayed_geometry().contains(QCursor.pos()):
             self._hover_peek_timer.start(140)
 
-    def _show_volume(self, volume, muted):
-        self.tab_home.set_volume_display(volume, muted)
-        self.tab_music.set_volume_display(volume, muted)
+    def _show_volume(self, volume, muted, *, source=None):
+        self.tab_home.set_volume_display(volume, muted, sync_slider=source is not self.tab_home.slider_vol)
+        self.tab_music.set_volume_display(volume, muted, sync_slider=source is not self.tab_music.vol_slider)
         self.coll_visualizer.set_muted(muted or volume == 0)
         self.peek_visualizer.set_muted(muted or volume == 0)
-        if not self.peek_volume.isSliderDown():
+        if source is not self.peek_volume and not self.peek_volume.isSliderDown():
             self.peek_volume.blockSignals(True)
             self.peek_volume.setValue(volume)
             self.peek_volume.blockSignals(False)

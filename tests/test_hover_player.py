@@ -77,8 +77,8 @@ def test_shared_indicator_is_clipped_before_show_and_handles_delayed_brightness(
     monkeypatch.setattr(flyout, "_clip_indicator", clip)
     monkeypatch.setattr(flyout, "_restore_indicator", lambda: setattr(flyout, "_clipped", None))
     flyout._record_level(80)
-    assert not clipped  # Windows keeps its shared flyout if any volume key is unowned.
-    flyout._owns_volume_keys = True
+    assert not clipped  # Keep the shared flyout if the volume endpoint is unavailable.
+    flyout._volume = (36, False)
     flyout.sync()
     assert clipped == [42] and not visible and not shown
     visible = True
@@ -90,6 +90,47 @@ def test_shared_indicator_is_clipped_before_show_and_handles_delayed_brightness(
     compact = False
     flyout.sync()
     assert flyout._clipped is None
+
+
+def test_shared_flyout_reads_volume_and_mute_without_writing(audit_app, monkeypatch):
+    from poppy.core import brightness_flyout as module
+
+    current = (45, False)
+    displayed = []
+    flyout = BrightnessFlyout(lambda: True, lambda *_: None, read_volume=lambda: current,
+                              show_volume=lambda old, new: displayed.append((old, new)))
+    flyout._hook = 1
+    monkeypatch.setattr(flyout, "_is_shell_indicator", lambda hwnd: hwnd == 42)
+    monkeypatch.setattr(flyout, "_hide_indicator", lambda hwnd: hwnd == 42)
+    flyout.refresh_volume()
+    assert displayed == []
+    current = (49, False)
+    flyout._window_event(None, module._SHOW, 42, 0, 0, 0, 0)
+    assert displayed == [((45, False), (49, False))]
+    current = (49, True)
+    flyout._poll_volume()
+    assert displayed[-1] == ((49, False), (49, True))
+    flyout._volume_timer.stop()
+
+
+def test_programmatic_volume_sync_cannot_write_master_volume(audit_app, monkeypatch):
+    window = DynamicNotchWindow()
+    writes = []
+    monkeypatch.setattr(window.audio_ctrl, "set_volume", writes.append)
+    monkeypatch.setattr(window.audio_ctrl, "get_mute", lambda: False)
+    window._is_pinned = True
+    window.show()
+    window._transition_to(NotchState.EXPANDED, target_tab="Home", animate=False)
+    slider = window.tab_home.slider_vol
+    for control in (slider, window.tab_music.vol_slider, window.peek_volume):
+        control.setValue(100)
+    window._show_native_volume((36, False), (100, False))
+    assert writes == []
+    QTest.keyClick(slider, Qt.Key.Key_Left)
+    assert writes == [99]
+    monkeypatch.setattr(window.audio_ctrl, "get_volume", lambda: None)
+    window._step_volume(2)
+    assert writes == [99]
 
 
 def test_level_gestures_retarget_the_pill_and_restore_the_clock(audit_app, monkeypatch):

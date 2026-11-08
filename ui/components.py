@@ -997,7 +997,7 @@ class CapsuleSlider(QSlider):
         pct = max(0.0, min(1.0, x / w))
         val = int(round(self.minimum() + pct * (self.maximum() - self.minimum())))
         if val != self.value():
-            self.setValue(val)
+            self.setSliderPosition(val)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -1124,8 +1124,7 @@ class ClickableSlider(QSlider):
         return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), round(position), max(1, span), option.upsideDown)
 
     def _move_to(self, point):
-        self.setValue(self._value_at(point))
-        self.sliderMoved.emit(self.value())
+        self.setSliderPosition(self._value_at(point))
 
     def mousePressEvent(self, event):
         option = QStyleOptionSlider()

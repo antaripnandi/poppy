@@ -1,9 +1,11 @@
-"""Route Windows 11 brightness feedback to the compact pill."""
+"""Mirror Windows brightness and volume feedback in the compact pill."""
 
 import ctypes
 from ctypes import wintypes
 from time import monotonic
 from uuid import UUID
+
+from PySide6.QtCore import QTimer
 
 
 _BRIGHTNESS_GUID = UUID("8ffee2c6-2d01-46be-adb9-398addc5b4ff").bytes_le
@@ -16,14 +18,21 @@ _WIN_EVENT = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.
 
 
 class BrightnessFlyout:
-    def __init__(self, can_show, show):
+    def __init__(self, can_show, show, *, read_volume=None, show_volume=None):
         self._can_show = can_show
         self._show = show
         self._user32 = ctypes.windll.user32
         self._gdi32 = ctypes.windll.gdi32
         self._hook = None
         self._notification = None
-        self._owns_volume_keys = False
+        self._read_volume = read_volume
+        self._show_volume = show_volume
+        self._volume = None
+        self._volume_window = None
+        self._volume_reported = False
+        self._volume_timer = QTimer()
+        self._volume_timer.setInterval(75)
+        self._volume_timer.timeout.connect(self._poll_volume)
         self._clipped = None
         self._level = None
         self._window = None
@@ -31,10 +40,9 @@ class BrightnessFlyout:
         self._last_shown = float("-inf")
         self._callback = _WIN_EVENT(self._window_event)
 
-    def start(self, hwnd, *, owns_volume_keys=False):
+    def start(self, hwnd):
         if not hasattr(self._user32, "GetWindowBand"):
             return
-        self._owns_volume_keys = owns_volume_keys
         self._user32.GetShellWindow.restype = wintypes.HWND
         self._user32.FindWindowExW.restype = wintypes.HWND
         self._user32.SetWinEventHook.restype = wintypes.HANDLE
@@ -44,10 +52,11 @@ class BrightnessFlyout:
         if self._hook:
             self._notification = self._user32.RegisterPowerSettingNotification(
                 hwnd, ctypes.create_string_buffer(_BRIGHTNESS_GUID), 0)
-            if not self._notification:
-                self.close()
+            self.refresh_volume()
 
     def close(self):
+        self._volume_timer.stop()
+        self._volume_window = None
         if self._hook:
             self._user32.UnhookWinEvent(wintypes.HANDLE(self._hook))
             self._hook = None
@@ -88,6 +97,9 @@ class BrightnessFlyout:
         if not hwnd or object_id != 0 or child_id != 0:
             return
         if event == _DESTROY:
+            if self._volume_window and self._volume_window[0] == hwnd:
+                self._volume_window = None
+                self._volume_timer.stop()
             if self._clipped and self._clipped[0] == hwnd:
                 _, saved = self._clipped
                 self._clipped = None
@@ -98,12 +110,44 @@ class BrightnessFlyout:
             return
         self.sync(hwnd)
         if event == _SHOW:
-            self._window = (hwnd, monotonic())
+            now = monotonic()
+            self._window = (hwnd, now)
             self._pair()
+            if self._read_volume and self._can_show():
+                self._volume_window = (hwnd, now)
+                self._volume_reported = False
+                self._volume_timer.start()
+                self._poll_volume()
+
+    def refresh_volume(self):
+        if self._hook and self._read_volume and not self._volume_timer.isActive():
+            was_available = self._volume is not None
+            self._volume = self._read_volume()
+            if was_available != (self._volume is not None):
+                self.sync()
+
+    def _poll_volume(self):
+        window = self._volume_window
+        if window is None or not self._can_show() or monotonic() - window[1] > 2.5:
+            self._volume_timer.stop()
+            self._volume_window = None
+            return
+        hwnd, _ = window
+        previous, self._volume = self._volume, self._read_volume()
+        if self._volume is None:
+            self.sync()
+            return
+        if previous is None or previous == self._volume:
+            return
+        clipped = self._clipped and self._clipped[0] == hwnd
+        if clipped or self._volume_reported or self._hide_indicator(hwnd):
+            self._volume_reported = True
+            self._volume_window = (hwnd, monotonic())
+            self._show_volume(previous, self._volume)
 
     def sync(self, hwnd=None):
-        # This is a shared volume/brightness host. Leave it alone unless Poppy owns both paths.
-        if not (self._notification and self._owns_volume_keys and self._level is not None and self._can_show()):
+        # Clip the shared host only while both levels can be read and shown.
+        if not (self._notification and self._volume is not None and self._level is not None and self._can_show()):
             self._restore_indicator()
             return
         if hwnd is None and self._clipped and self._is_shell_indicator(self._clipped[0]):
