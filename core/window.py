@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, surface_colors, is_light_theme, resolve_light_mode, LAYOUT_THEMES, home_order, contrast_ink
 from poppy.ui.components import (
     IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail, PillLevel,
-    AnimatedTabStrip, AnimatedStackedWidget, CardFrame, ClickableSlider
+    AnimatedTabStrip, AnimatedStackedWidget, CardFrame, ClickableSlider, PlaybackSlider
 )
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.ui.views import (
@@ -75,18 +75,6 @@ class NotchState(Enum):
     PEEK = "peek"
     ISLAND = "island"
     EXPANDED = "expanded"
-
-
-class _PeekSeekSlider(ClickableSlider):
-    def cancel_drag(self):
-        self._track_drag = False
-        self.setSliderDown(False)
-
-    def mouseReleaseEvent(self, event):
-        commit = event.button() == Qt.MouseButton.LeftButton and self.isSliderDown()
-        super().mouseReleaseEvent(event)
-        if commit:
-            self.seek_clicked.emit(self.value())
 
 
 _gpu_api = None
@@ -424,11 +412,12 @@ class DynamicNotchWindow(QWidget):
 
         playback = QHBoxLayout()
         playback.setSpacing(7)
-        self.peek_seek = _PeekSeekSlider(Qt.Orientation.Horizontal)
+        self.peek_seek = PlaybackSlider(Qt.Orientation.Horizontal, time_ruler=False)
         self.peek_seek.setAccessibleName("Playback position")
         self.peek_seek.setFixedHeight(16)
         self.peek_seek.setEnabled(False)
         self.peek_seek.seek_clicked.connect(self._seek_peek)
+        self.peek_seek.seek_cancelled.connect(self._show_peek_timeline)
         self.peek_seek.sliderMoved.connect(self._set_peek_elapsed)
         playback.addWidget(self.peek_seek, 1, Qt.AlignmentFlag.AlignVCenter)
         self._peek_volume_muted = False
@@ -1886,9 +1875,9 @@ class DynamicNotchWindow(QWidget):
         position, duration = self._peek_timeline if self._has_media else (0, 0)
         seekable = bool(duration > 0 and self._current_media.get("can_seek"))
         if self.peek_seek.isSliderDown():
-            if seekable:
-                return
-            self.peek_seek.cancel_drag()
+            if not seekable:
+                self.peek_seek.cancel_drag()
+            return
         self.peek_seek.setEnabled(seekable)
         self.peek_seek.setRange(0, max(1, round(duration)))
         self.peek_seek.setValue(round(position) if duration > 0 else 0)

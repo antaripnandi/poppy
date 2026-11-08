@@ -848,7 +848,8 @@ class MusicTabView(QWidget):
         self._dur_sec = 0.0
         self._is_playing = False
         self._last_tick_ts = time.time()
-        self._is_user_scrubbing = False
+        self._reported_timeline = (0.0, 0.0, False)
+        self._track_key = ()
         self._can_seek = False
         self._surface_mode = "theme"
         self._theme_surface = QColor("#1c2723")
@@ -962,9 +963,8 @@ class MusicTabView(QWidget):
         self.scrubber.setAccessibleName("Playback position")
         self.scrubber.setFixedHeight(18)
         self.scrubber.seek_clicked.connect(self._on_scrubber_clicked)
-        self.scrubber.sliderPressed.connect(self._on_scrubber_pressed)
+        self.scrubber.seek_cancelled.connect(lambda: self.update_timeline(*self._reported_timeline))
         self.scrubber.sliderMoved.connect(self._on_scrubber_moved)
-        self.scrubber.sliderReleased.connect(self._on_scrubber_released)
         player.addWidget(self.scrubber)
         times = QHBoxLayout()
         self.lbl_elapsed, self.lbl_remaining = QLabel("00:00"), QLabel("--:--")
@@ -1005,7 +1005,17 @@ class MusicTabView(QWidget):
         volume.addWidget(self.btn_output)
         player.addLayout(volume)
         for slider in (self.scrubber, self.vol_slider):
-            set_widget_style(slider, "QSlider::groove:horizontal { height: 2px; background: rgba(255,255,255,0.15); border-radius: 1px; } QSlider::sub-page:horizontal { background: #b6c4be; border-radius: 1px; } QSlider::handle:horizontal { background: #b6c4be; width: 8px; margin: -3px 0; border-radius: 4px; } QSlider::handle:horizontal:hover { background: #edf1f0; } QSlider:focus { border: 1px solid #829c8e; }")
+            set_widget_style(slider, """
+                QSlider:focus { border: none; outline: none; }
+                QSlider::groove:horizontal { height: 2px; background: rgba(255,255,255,0.15); border-radius: 1px; }
+                QSlider::sub-page:horizontal { background: #b6c4be; border-radius: 1px; }
+                QSlider::handle:horizontal {
+                    background: #b6c4be; border: 1px solid #b6c4be; width: 6px; margin: -3px 0; border-radius: 4px;
+                }
+                QSlider::handle:horizontal:hover { background: #edf1f0; }
+                QSlider::handle:horizontal:focus { background: #edf1f0; border-color: #61776d; }
+                QSlider::handle:horizontal:disabled { background: transparent; border-color: transparent; }
+            """)
         self.sessions_widget = QWidget()
         self.pills_layout = QHBoxLayout(self.sessions_widget)
         self.pills_layout.setContentsMargins(0, 0, 0, 0)
@@ -1208,19 +1218,9 @@ class MusicTabView(QWidget):
         self._update_time_labels()
         self.seek_requested.emit(float(val))
 
-    def _on_scrubber_pressed(self):
-        self._is_user_scrubbing = True
-
     def _on_scrubber_moved(self, val: int):
         self._pos_sec = float(val)
         self._update_time_labels()
-
-    def _on_scrubber_released(self):
-        self._is_user_scrubbing = False
-        val = self.scrubber.value()
-        self._pos_sec = float(val)
-        self._update_time_labels()
-        self.seek_requested.emit(float(val))
 
     def _format_time(self, seconds: float) -> str:
         s = int(round(max(0.0, seconds)))
@@ -1230,36 +1230,32 @@ class MusicTabView(QWidget):
 
     def _update_time_labels(self):
         self.lbl_elapsed.setText(self._format_time(self._pos_sec))
-        self.lbl_remaining.setText(self._format_time(self._dur_sec))
+        self.lbl_remaining.setText(self._format_time(self._dur_sec) if self._dur_sec > 0 else "--:--")
 
     def update_timeline(self, pos_sec: float, dur_sec: float, is_playing: bool):
+        self._reported_timeline = (pos_sec, dur_sec, is_playing)
         self._is_playing = is_playing
         self._last_tick_ts = time.time()
-        if not self._is_user_scrubbing:
-            self._pos_sec = pos_sec
-            self._dur_sec = dur_sec
-            if dur_sec > 0:
-                self.scrubber.setEnabled(self._can_seek)
-                self.scrubber.blockSignals(True)
-                self.scrubber.setRange(0, int(dur_sec))
-                self.scrubber.setValue(int(pos_sec))
-                self.scrubber.blockSignals(False)
-                self._update_time_labels()
-            else:
-                self.scrubber.setEnabled(False)
-                self.lbl_elapsed.setText("00:00")
-                self.lbl_remaining.setText("--:--")
-            self.lyrics_widget.update_playback_time(self._pos_sec)
+        seekable = dur_sec > 0 and self._can_seek
+        if self.scrubber.isSliderDown():
+            if not seekable:
+                self.scrubber.cancel_drag()
+            return
+        self._pos_sec = pos_sec if dur_sec > 0 else 0.0
+        self._dur_sec = dur_sec
+        self.scrubber.setEnabled(seekable)
+        self.scrubber.setRange(0, max(1, round(dur_sec)))
+        self.scrubber.setValue(round(self._pos_sec))
+        self._update_time_labels()
+        self.lyrics_widget.update_playback_time(self._pos_sec)
 
     def _on_local_playback_tick(self):
-        if self._is_playing and self._dur_sec > 0 and not self._is_user_scrubbing:
+        if self._is_playing and self._dur_sec > 0 and not self.scrubber.isSliderDown():
             now = time.time()
             delta = now - self._last_tick_ts
             self._last_tick_ts = now
             self._pos_sec = min(self._dur_sec, self._pos_sec + delta)
-            self.scrubber.blockSignals(True)
-            self.scrubber.setValue(int(self._pos_sec))
-            self.scrubber.blockSignals(False)
+            self.scrubber.setValue(round(self._pos_sec))
             self._update_time_labels()
             self.lyrics_widget.update_playback_time(self._pos_sec)
 
@@ -1342,6 +1338,10 @@ class MusicTabView(QWidget):
         set_widget_style(self.btn_play, self._play_button_style())
 
     def update_media(self, data: dict):
+        track_key = tuple(data.get(key) for key in ("index", "source_app", "title", "artist", "album"))
+        if track_key != self._track_key:
+            self._track_key = track_key
+            self.scrubber.cancel_drag()
         self._can_seek = data.get("can_seek", False)
         title = data.get("title", "No Media Playing")
         available = title not in ("No Media Playing", "Unknown Title", "")

@@ -1105,9 +1105,12 @@ class ClickableSlider(QSlider):
 
     def event(self, event):
         if event.type() in (QEvent.Type.UngrabMouse, QEvent.Type.Hide):
-            self._track_drag = False
-            self.setSliderDown(False)
+            self.cancel_drag()
         return super().event(event)
+
+    def cancel_drag(self):
+        self._track_drag = False
+        self.setSliderDown(False)
 
     def _value_at(self, point):
         option = QStyleOptionSlider()
@@ -1141,8 +1144,7 @@ class ClickableSlider(QSlider):
 
     def mouseMoveEvent(self, event):
         if not event.buttons() & Qt.MouseButton.LeftButton:
-            self._track_drag = False
-            self.setSliderDown(False)
+            self.cancel_drag()
             event.ignore()
             return
         if not self.isSliderDown():
@@ -1180,10 +1182,27 @@ class ClickableSlider(QSlider):
 
 
 class PlaybackSlider(ClickableSlider):
-    """A time ruler in Console with the same native slider interaction."""
+    """A playback slider that commits pointer seeks on release."""
+    seek_cancelled = Signal()
+
+    def __init__(self, orientation, parent=None, *, time_ruler=True):
+        super().__init__(orientation, parent)
+        self._time_ruler = time_ruler
+
+    def cancel_drag(self):
+        dragging = self.isSliderDown()
+        super().cancel_drag()
+        if dragging:
+            self.seek_cancelled.emit()
+
+    def mouseReleaseEvent(self, event):
+        commit = event.button() == Qt.MouseButton.LeftButton and self.isSliderDown()
+        super().mouseReleaseEvent(event)
+        if commit:
+            self.seek_clicked.emit(self.value())
 
     def paintEvent(self, event):
-        if current_layout() != "Console":
+        if not self._time_ruler or current_layout() != "Console":
             super().paintEvent(event)
             return
         option = QStyleOptionSlider()
@@ -1207,8 +1226,8 @@ class PlaybackSlider(ClickableSlider):
             painter.fillRect(QRectF(x - 1, (self.height() - height) / 2, 2, height),
                              QColor(colors["accent"]) if fraction <= pct and self.isEnabled() else muted)
         if self.hasFocus():
-            painter.setPen(QColor(colors["accent"]))
-            painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+            x = start + span * (1 - pct if option.upsideDown else pct)
+            painter.fillRect(QRectF(x - 2, (self.height() - 14) / 2, 4, 14), QColor(colors["text"]))
         painter.end()
 
 

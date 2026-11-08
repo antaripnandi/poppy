@@ -395,6 +395,44 @@ def test_music_keyboard_and_wheel_changes_commit_real_seeks(dashboard_window, au
     assert seeks[-1] == 200.0
 
 
+@pytest.mark.parametrize("layout", ["Classic", "Console"])
+def test_music_seek_focus_keeps_track_geometry_and_cancel_restores_time(dashboard_window, audit_app, layout):
+    from PySide6.QtCore import QEvent, QPoint, QPointF
+    from PySide6.QtTest import QTest
+
+    dashboard_window._apply_live_appearance({"layout": layout})
+    dashboard_window._transition_to(NotchState.EXPANDED, target_tab="Music", animate=False)
+    view = dashboard_window.tab_music
+    track = {"title": "Test track", "position_sec": 60, "duration_sec": 200, "can_seek": True}
+    view.update_media(track)
+    slider = view.scrubber
+    view.btn_play.setFocus()
+    audit_app.processEvents()
+    seeks = []
+    view.seek_requested.connect(seeks.append)
+    point = slider.rect().center()
+    target = QPoint(slider.width() - 20, point.y())
+    midpoint = slider._value_at(QPointF(point))
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=point)
+    QTest.mouseMove(slider, target)
+    assert slider.isSliderDown() and slider.value() > 150
+    assert slider._value_at(QPointF(point)) == midpoint
+    view.update_timeline(62, 200, False)
+    assert slider.value() > 150 and not seeks
+    audit_app.sendEvent(slider, QEvent(QEvent.Type.UngrabMouse))
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=target)
+    assert not seeks and slider.value() == 62 and view.lbl_elapsed.text() == "01:02"
+
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=point)
+    view.update_media(dict(track, title="Next track", position_sec=0))
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=target)
+    assert not seeks and slider.value() == 0
+    QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=point)
+    assert seeks == [midpoint]
+    view.update_media({"title": "No Media Playing"})
+    assert not slider.isEnabled() and slider.value() == 0
+
+
 @pytest.mark.parametrize("layout", list(LAYOUT_THEMES))
 def test_all_tabs_keep_static_controls_visible_with_loaded_lists(dashboard_window, audit_app, tmp_path, monkeypatch, layout):
     from PySide6.QtWidgets import QPushButton
