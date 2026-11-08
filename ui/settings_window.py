@@ -322,15 +322,14 @@ class SettingsWindow(QWidget):
                 font-size: 12px;
             }
             QListWidget::item {
-                padding: 9px 12px;
-                border-radius: 8px;
+                padding: 8px 10px;
+                border-radius: 5px;
                 color: #9ca3a5;
                 font-weight: 500;
                 margin: 2px 2px;
             }
             QListWidget::item:selected {
                 background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
                 color: #ffffff;
                 font-weight: 600;
             }
@@ -611,7 +610,6 @@ class SettingsWindow(QWidget):
         l_tabs.addSpacing(4)
         lbl_list_hdr = QLabel("Tabs shown in the drawer")
         set_widget_style(lbl_list_hdr, "font-size: 14px; font-weight: 600; color: #eef0f0;")
-        l_tabs.addWidget(lbl_list_hdr)
 
         tab_rows = []
         for tab_name, tab_desc in ALL_AVAILABLE_TABS:
@@ -621,7 +619,6 @@ class SettingsWindow(QWidget):
             tab_rows.append(row)
 
         card_tabs = _create_setting_card(tab_rows)
-        l_tabs.addWidget(card_tabs)
         features_heading = QLabel("Optional features")
         set_widget_style(features_heading, "font-size: 14px; font-weight: 600; color: #eef0f0;")
         l_tabs.addWidget(features_heading)
@@ -647,9 +644,11 @@ class SettingsWindow(QWidget):
             SettingRow("App mixer", "Show per-app volume controls on Home and in the hover player.", self.chk_app_mixer),
             SettingRow("Record clipboard text", "Off by default. Save copied text locally, respecting Windows exclusions.", self.chk_clipboard_history),
             SettingRow("Stage copied images", "Off by default. Save copied images and screenshots to the shelf.", self.chk_capture_images),
-            SettingRow("Download alerts", "Watch one folder for new files that finish writing. Uses your notification and focus settings.", self.chk_downloads),
+            SettingRow("Download alerts", "Show activity in Shelf and watch one folder for files that finish writing.", self.chk_downloads),
             SettingRow("Download folder", "Choose the folder your browser or downloader saves into.", folder_controls),
         ]))
+        l_tabs.addWidget(lbl_list_hdr)
+        l_tabs.addWidget(card_tabs)
         l_tabs.addStretch()
 
         self.stack.addWidget(_make_scroll_area(page_tabs))

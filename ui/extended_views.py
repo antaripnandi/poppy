@@ -8,6 +8,7 @@ import calendar
 from datetime import datetime, date
 from html import escape
 from pathlib import Path
+from urllib.parse import unquote_plus, urlsplit
 import subprocess
 import ctypes
 import uuid
@@ -339,6 +340,26 @@ class CalendarTabView(QWidget):
 # 2. Clipboard History Tab View
 # =====================================================================
 
+def clean_clipboard_link(text):
+    """Remove known tracking fields from a standalone web URL."""
+    link = text.strip()
+    if any(char.isspace() for char in link):
+        return None
+    try:
+        url = urlsplit(link)
+        if url.scheme not in ("http", "https") or not url.hostname or url.username is not None:
+            return None
+    except ValueError:
+        return None
+    parts = url.query.split("&")
+    names = [unquote_plus(part.partition("=")[0]).casefold() for part in parts]
+    if {"x-amz-signature", "x-goog-signature", "signature", "sig"} & set(names):
+        return None
+    known = {"fbclid", "gclid", "dclid", "msclkid", "igshid", "mc_cid", "mc_eid"}
+    remaining = [part for part, name in zip(parts, names) if name not in known and not name.startswith("utm_")]
+    return url._replace(query="&".join(remaining)).geturl() if remaining != parts else None
+
+
 class ClipboardTabView(QWidget):
     """Search saved text, copy it, and manage pinned entries."""
     def __init__(self, clip_mgr, parent=None, *, recording_enabled=False):
@@ -465,6 +486,12 @@ class ClipboardTabView(QWidget):
             btn_copy.setMinimumWidth(64)
             btn_copy.clicked.connect(lambda checked=False, t=txt, b=btn_copy: self._copy_clip(t, b))
             r_l.addWidget(btn_copy)
+            cleaned = clean_clipboard_link(txt)
+            if cleaned:
+                btn_clean = QPushButton("Copy clean link")
+                btn_clean.setToolTip("Copy this link without its tracking parameters")
+                btn_clean.clicked.connect(lambda checked=False, url=cleaned: QApplication.clipboard().setText(url))
+                r_l.addWidget(btn_clean)
 
             # Pin Button
             is_pinned = clip.get("pinned", False)

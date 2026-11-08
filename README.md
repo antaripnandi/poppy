@@ -33,8 +33,13 @@ Close any older running version from its tray menu before launching this update.
 - **Desktops** lists open windows on the current virtual desktop. Press Enter on a window to activate it, or use the desktop buttons to switch, create a desktop, or open Task View.
 - Drop files on the pill to stage them on the shelf, then drag them into another application.
 - Use **App mixer** on Home or **Apps** in the hover volume popup to adjust and mute individual apps playing through the default Windows output. The mixer reads shared-mode audio sessions. App sliders commit on release, and master volume stays separate.
+- Pin a running app in **App mixer** to keep it at the top whenever it has an audio session. Pins are stored locally. Use **Windows volume mixer** to manage output routing in Windows Settings.
 - Enable **Settings > Tools > Download alerts** and choose your download destination if you use a folder other than Windows Downloads. Poppy watches new top-level files locally, skips common partial files, and waits for stable size and a closed writer. Alerts follow the notification and focus settings. This detects files that appear ready and does not verify their contents.
+- Open **Shelf > Downloads** or right-click the pill and choose **Download activity** to see known partial files with their current size and files that became ready during this session. The list stays in memory and clears when the watched folder changes or the feature turns off.
 - Start, pause, reset, or skip a focus timer. Skipped phases do not count as completed sprints.
+- **Timer** also has an independent countdown and stopwatch. A completed countdown uses Poppy’s notification settings.
+- Right-click **Awake** or the power icon for 15-, 30-, 60-, or 120-minute Keep Awake sessions. Poppy releases the Windows power request when the session ends.
+- **Clipboard > Copy clean link** strips common tracking parameters from a saved web link without opening it.
 - **Floating copy** opens a separate saved note and keeps the original scratchpad text. Use **Notes > Saved notes** to reopen a closed floating note.
 - The **Float current tab** button below the content moves the live view into a resizable floating window. Controls, notes and lyrics keep working there. Closing returns the same view to the drawer without changing the tab you are currently using. Repeating the action raises the existing window.
 - **Done** saves settings. Closing Settings without Done discards its previews and unsaved edits.

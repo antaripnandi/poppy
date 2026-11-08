@@ -23,19 +23,19 @@ def default_download_folder():
 
 def _snapshot(folder):
     files = {}
-    partials = set()
+    partials = {}
     with os.scandir(folder) as entries:
         for entry in entries:
             if not entry.is_file(follow_symlinks=False):
                 continue
-            name = entry.name.casefold()
-            suffix = next((item for item in _PARTIAL_SUFFIXES if name.endswith(item)), None)
-            if suffix:
-                partials.add(name[:-len(suffix)])
-                continue
             try:
                 stat = entry.stat(follow_symlinks=False)
             except FileNotFoundError:
+                continue
+            name = entry.name
+            suffix = next((item for item in _PARTIAL_SUFFIXES if name.casefold().endswith(item)), None)
+            if suffix:
+                partials[name[:-len(suffix)]] = stat.st_size
                 continue
             files[entry.name] = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
     return files, partials
@@ -61,11 +61,14 @@ def _writer_closed(path):
 
 class DownloadWatcher(QObject):
     files_ready = Signal(object)
-    _found = Signal(object, object)
+    activity_changed = Signal()
+    _found = Signal(object, object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.folder = None
+        self.partials = ()
+        self.recent = []
         self._stop = None
         self._found.connect(self._deliver)
 
@@ -78,45 +81,60 @@ class DownloadWatcher(QObject):
         if target is not None:
             self._stop = Event()
             Thread(target=self._watch, args=(target, self._stop), daemon=True, name="poppy-downloads").start()
+        self.activity_changed.emit()
 
     def close(self):
         if self._stop is not None:
             self._stop.set()
             self._stop = None
         self.folder = None
+        self.partials = ()
+        self.recent.clear()
 
-    def _deliver(self, stop, paths):
-        if stop is self._stop and not stop.is_set():
+    def _deliver(self, stop, paths, partials):
+        if stop is not self._stop or stop.is_set():
+            return
+        self.partials = partials
+        for path in paths:
+            self.recent = [entry for entry in self.recent if entry != path]
+            self.recent.insert(0, path)
+        del self.recent[20:]
+        self.activity_changed.emit()
+        if paths:
             self.files_ready.emit(paths)
 
     def _watch(self, folder, stop):
         baseline = None
         pending = {}
+        displayed_partials = ()
         while not stop.is_set():
             try:
                 files, partials = _snapshot(folder)
             except FileNotFoundError:
                 baseline = {}
                 pending.clear()
-                stop.wait(2)
-                continue
+                files, partials = {}, {}
             except OSError:
                 stop.wait(2)
                 continue
+            paths = []
             if baseline is None:
                 baseline = files
             else:
                 paths = self._scan(folder, files, partials, baseline, pending)
-                if paths and not stop.is_set():
-                    try:
-                        self._found.emit(stop, paths)
-                    except RuntimeError:
-                        return  # The Qt parent was destroyed during shutdown.
+            activity = tuple(sorted(partials.items(), key=lambda item: item[0].casefold())[:20])
+            if (paths or activity != displayed_partials) and not stop.is_set():
+                displayed_partials = activity
+                try:
+                    self._found.emit(stop, paths, activity)
+                except RuntimeError:
+                    return  # The Qt parent was destroyed during shutdown.
             stop.wait(2)
 
     @staticmethod
     def _scan(folder, files, partials, baseline, pending):
         ready = []
+        partial_names = {name.casefold() for name in partials}
         for name in baseline.keys() - files.keys():
             del baseline[name]
         for name in pending.keys() - files.keys():
@@ -124,7 +142,7 @@ class DownloadWatcher(QObject):
         for name, stamp in files.items():
             if name in baseline and baseline[name][0] == stamp[0]:
                 continue
-            if name.casefold() in partials:
+            if name.casefold() in partial_names:
                 pending.pop(name, None)
                 continue
             previous, count = pending.get(name, (None, 0))

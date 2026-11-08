@@ -29,6 +29,7 @@ Poppy is a small daily utility. Keep controls readable, show real state, and lea
 - Use normal desktop transport buttons, elapsed/total timeline, volume control and an explicit Lyrics toggle. Avoid a phone widget silhouette.
 - Player buttons switch actual sessions; all sessions remain accessible through the player selector.
 - Keyboard focus must remain visible. Icon controls need accessible names and tooltips. Unsupported actions stay hidden or disabled.
+- On Classic Home, lead with the date and clock, keep hardware readings close to them, and reserve a filled panel for system controls. Notes and Shelf read as sections on the drawer surface. Keep the idle media strip compact and bring back the transport controls when a media session is available.
 
 ## Settings
 

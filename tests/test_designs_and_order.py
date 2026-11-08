@@ -136,7 +136,9 @@ def test_new_designs_change_controls_and_restore_the_original(editor, audit_app,
             assert window.tab_home.lbl_big_time.font().family() == "Consolas"
             assert all(label.isVisible() for label in window.tab_home._design_headers)
         if name == "Classic":
-            assert all(label.isHidden() for label in window.tab_home._design_headers)
+            clock_header, controls_header = window.tab_home._design_headers
+            assert clock_header.isHidden()
+            assert not controls_header.isHidden() and controls_header.text() == "System controls"
             assert window.tab_home.lbl_big_time.font().family() != "Cambria"
     assert snapshots["Classic"] != snapshots["Flat"] != snapshots["Paper"] != snapshots["Instrument"]
 

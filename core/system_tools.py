@@ -6,7 +6,7 @@ Native Windows desktop tools: Keep Awake (Caffeine), Screen Color Eyedropper, Sc
 import ctypes
 import subprocess
 
-from PySide6.QtCore import Qt, QPoint, QRectF, Signal
+from PySide6.QtCore import QObject, Qt, QPoint, QRectF, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QCursor, QFont, QGuiApplication, QPainter,
     QPainterPath, QPen
@@ -14,24 +14,47 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QApplication, QWidget
 
 
-class CaffeineManager:
+class CaffeineManager(QObject):
     """Keeps the system and display awake using native SetThreadExecutionState."""
+    changed = Signal(bool)
     ES_CONTINUOUS = 0x80000000
     ES_SYSTEM_REQUIRED = 0x00000001
     ES_DISPLAY_REQUIRED = 0x00000002
 
-    def __init__(self):
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.is_active = False
+        self.minutes = None
+        self._timer = QTimer(self, singleShot=True)
+        self._timer.timeout.connect(self._expire)
 
-    def toggle(self) -> bool:
-        self.is_active = not self.is_active
-        if self.is_active:
-            ctypes.windll.kernel32.SetThreadExecutionState(
-                self.ES_CONTINUOUS | self.ES_SYSTEM_REQUIRED | self.ES_DISPLAY_REQUIRED
-            )
-        else:
-            ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS)
-        return self.is_active
+    def start(self, minutes=None):
+        if not ctypes.windll.kernel32.SetThreadExecutionState(
+            self.ES_CONTINUOUS | self.ES_SYSTEM_REQUIRED | self.ES_DISPLAY_REQUIRED
+        ):
+            return False
+        self._timer.stop()
+        if minutes is not None:
+            self._timer.start(minutes * 60_000)
+        self.is_active = True
+        self.minutes = minutes
+        self.changed.emit(True)
+        return True
+
+    def stop(self):
+        if not self.is_active:
+            return True
+        if not ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS):
+            return False
+        self._timer.stop()
+        self.is_active = False
+        self.minutes = None
+        self.changed.emit(False)
+        return True
+
+    def _expire(self):
+        if not self.stop():
+            self._timer.start(5000)
 
 
 class ColorEyedropperOverlay(QWidget):

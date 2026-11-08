@@ -14,7 +14,8 @@ from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QPainterPath, QDesk
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QTextEdit, QPushButton, QSlider,
-    QFrame, QScrollArea, QApplication, QMenu, QSizePolicy, QFileDialog, QLayout, QBoxLayout
+    QFrame, QScrollArea, QApplication, QMenu, QSizePolicy, QFileDialog, QLayout, QBoxLayout,
+    QComboBox, QSpinBox, QStackedWidget
 )
 
 from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, home_order, home_slots
@@ -225,6 +226,7 @@ class HomeTabView(QWidget):
 
         actions = QGridLayout()
         actions.setSpacing(3)
+        self.quick_actions = []
         for index, (attr, label, tip, signal, toggle) in enumerate((
             ("btn_act_caffeine", "Awake", "Keep the PC awake", self.caffeine_toggle_requested, True),
             ("btn_act_mic", "Mic", "Mute or unmute microphone", self.mic_mute_toggle_requested, True),
@@ -239,6 +241,7 @@ class HomeTabView(QWidget):
             button.setCheckable(toggle)
             button.clicked.connect(signal.emit)
             setattr(self, attr, button)
+            self.quick_actions.append((button, label, button.property("poppyStyleSource")))
             actions.addWidget(button, index // 4, index % 4)
         l_ctrl.addLayout(actions)
         l_ctrl.addStretch()
@@ -480,8 +483,15 @@ class HomeTabView(QWidget):
         self.lbl_music_artist.setVisible(bool(self._track_artist))
         for button in (self.btn_ctrl_prev, self.btn_ctrl_play, self.btn_ctrl_next):
             button.setEnabled(available)
+        self._update_home_player_chrome()
         self._elide_track_labels()
         QTimer.singleShot(0, self, self._elide_track_labels)
+
+    def _update_home_player_chrome(self):
+        compact_idle = self._layout_name == "Classic" and not self.btn_ctrl_play.isEnabled()
+        for button in (self.btn_ctrl_prev, self.btn_ctrl_play, self.btn_ctrl_next):
+            button.setVisible(not compact_idle)
+        self.mini_layout.setContentsMargins(12, 4 if compact_idle else 8, 12, 4 if compact_idle else 8)
 
     def _elide_track_labels(self):
         for label, text in ((self.lbl_music_title, self._track_title), (self.lbl_music_artist, self._track_artist)):
@@ -583,11 +593,39 @@ class HomeTabView(QWidget):
             grid.setRowStretch(row, int(row < rows and (name != "Daily" or row == 1)))
 
     def _apply_design(self, name):
+        classic = name == "Classic"
         for widget, source in self._design_sources.items():
             set_widget_style(widget, source)
         for label in self._design_headers:
             label.setVisible(name == "Instrument" or (name == "Console" and self._dashboard_wide))
             set_widget_style(label, "background: rgba(255,255,255,0.08); color: #b6c3bd; font-family: 'Consolas'; font-size: 10px; padding: 3px 6px; border: none;")
+        controls_title = self._design_headers[1]
+        controls_title.setText("System controls" if classic else "CONTROLS")
+        if classic:
+            controls_title.show()
+            set_widget_style(controls_title, "font-size: 14px; font-weight: 600; color: #edf1f0;")
+            for card in (self.card_clock, self.card_notes, self.card_shelf):
+                set_widget_style(card, "CardFrame#cardFrame { background: transparent; border: none; }")
+            set_widget_style(self.lbl_big_time, "font-size: 40px; font-weight: 500; color: #edf1f0;")
+            set_widget_style(self.lbl_date, "font-size: 13px; color: #a7adab;")
+            set_widget_style(self.txt_notes, """
+                QTextEdit { background: rgba(255,255,255,0.035); border: 1px solid transparent;
+                            border-radius: 6px; color: #edf1f0; padding: 8px; font-size: 13px; }
+                QTextEdit:focus { border-color: #a7adab; }
+            """)
+        clock_layout = self.card_clock.layout()
+        before, after = clock_layout.count() - 2, clock_layout.count() - 1
+        old_index, new_index = (before, after) if classic else (after, before)
+        if clock_layout.itemAt(old_index).spacerItem() is not None:
+            spacer = clock_layout.takeAt(old_index).spacerItem()
+            clock_layout.insertSpacerItem(new_index, spacer)
+            clock_layout.setStretch(new_index, 1)
+        labels = ("Keep awake", "Microphone", "Focus", "Screen snip",
+                  "Pick color", "Calculator", "Bluetooth", "Lock PC")
+        for (button, original, source), label in zip(self.quick_actions, labels):
+            button.setText(label if classic else original)
+            set_widget_style(button, source + " QPushButton { text-align: left; }" if classic else source)
+        self._update_home_player_chrome()
         daily = name == "Daily"
         self.clock_face.setDirection(QBoxLayout.Direction.LeftToRight if daily else QBoxLayout.Direction.TopToBottom)
         self.clock_face.removeWidget(self.lbl_date)
@@ -597,7 +635,7 @@ class HomeTabView(QWidget):
             self.clock_face.insertWidget(0, self.lbl_date, 1)
             self.clock_detail.addWidget(self.lbl_weather_text)
         else:
-            self.clock_detail.insertWidget(1, self.lbl_date)
+            self.clock_detail.insertWidget(0 if classic else 1, self.lbl_date)
             self.clock_detail.addWidget(self.lbl_weather_text)
         metric_columns = 2 if name in ("Deck", "Console") and self._dashboard_wide else 4
         for i, metric in enumerate(self.metrics):
@@ -645,12 +683,15 @@ class HomeTabView(QWidget):
             self.dashboard_grid.invalidate()
             self.body_layout.invalidate()
 
-        def body_height():
+        def fixed_height():
             margins = self.layout().contentsMargins()
-            space = available_height - margins.top() - margins.bottom()
+            space = margins.top() + margins.bottom()
             if self.layout().indexOf(self.mini_player) >= 0 and not self.mini_player.isHidden():
-                space -= self.mini_player.minimumSizeHint().height() + self.layout().spacing()
-            return max(1, space)
+                space += self.mini_player.minimumSizeHint().height() + self.layout().spacing()
+            return space
+
+        def body_height():
+            return max(1, available_height - fixed_height())
 
         padding, gap = spec["padding"], spec["spacing"]
         set_spacing(padding, gap)
@@ -669,6 +710,7 @@ class HomeTabView(QWidget):
             viewport_height += min(max(0, needed - viewport_height), max(0, max_height - available_height))
         self.home_scroll.setMinimumHeight(min(minimum, viewport_height))
         self.body_layout.activate()  # Apply the new content minimum before the scroll area sizes it.
+        return 0 if self.home_scroll.isHidden() else fixed_height() + self.home_scroll.minimumHeight()
 
     def update_sessions_list(self, sessions, active_index):
         self.btn_player_drop.setVisible(len(sessions) > 1)
@@ -1358,6 +1400,100 @@ class MusicTabView(QWidget):
             self.btn_vol_music.setToolTip("Audio (Click to Mute)")
 
 
+class BasicTimer(QWidget):
+    """An independent stopwatch or countdown driven by monotonic time."""
+
+    finished = Signal()
+
+    def __init__(self, *, countdown):
+        super().__init__()
+        self._countdown = countdown
+        self._started = None
+        self._elapsed = 0.0
+        self._clock = time.monotonic
+        self._ticker = QTimer(self, interval=100)
+        self._ticker.timeout.connect(self._update_time)
+        layout = QVBoxLayout(self)
+        layout.addStretch()
+        self.readout = QLabel()
+        self.readout.setAccessibleName("Time remaining" if countdown else "Elapsed time")
+        self.readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_widget_style(self.readout, "font-size: 52px; font-weight: 500; color: #f0f2f2;")
+        layout.addWidget(self.readout)
+        self.duration = QSpinBox()
+        self.duration.setRange(1, 1440)
+        self.duration.setValue(5)
+        self.duration.setSuffix(" min")
+        self.duration.setAccessibleName("Countdown duration in minutes")
+        set_widget_style(self.duration, "QSpinBox { background: #242829; color: #edf0f0; "
+                                        "border: 1px solid #3a3d3e; border-radius: 6px; padding: 4px 8px; }"
+                                        " QSpinBox:focus { border-color: #a6b0b1; }")
+        self.duration.setVisible(countdown)
+        self.duration.valueChanged.connect(self._reset)
+        layout.addWidget(self.duration, alignment=Qt.AlignmentFlag.AlignHCenter)
+        actions = QHBoxLayout()
+        actions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.toggle = QPushButton("Start")
+        self.toggle.setMinimumWidth(84)
+        set_widget_style(self.toggle, "QPushButton { background: #e4eae7; color: #17201c; border: 1px solid transparent;"
+                                      " border-radius: 5px; padding: 6px 12px; font-weight: 600; }"
+                                      " QPushButton:hover { background: #ffffff; }"
+                                      " QPushButton:focus { border-color: #97b2a3; }")
+        self.toggle.clicked.connect(self._toggle)
+        self.reset = QPushButton("Reset")
+        self.reset.clicked.connect(self._reset)
+        actions.addWidget(self.toggle)
+        actions.addWidget(self.reset)
+        layout.addLayout(actions)
+        layout.addStretch()
+        self._update_time()
+
+    def _toggle(self):
+        now = self._clock()
+        if self._started is None:
+            if self._countdown and self._elapsed >= self.duration.value() * 60:
+                self._elapsed = 0.0
+            self._started = now
+            self.duration.setEnabled(False)
+            self.toggle.setText("Pause")
+            self._ticker.start()
+        else:
+            self._update_time()
+            if self._started is None:
+                return
+            self._elapsed += now - self._started
+            self._started = None
+            self._ticker.stop()
+            self.toggle.setText("Resume")
+        self._update_time()
+
+    def _reset(self):
+        self._started = None
+        self._elapsed = 0.0
+        self._ticker.stop()
+        self.toggle.setText("Start")
+        self.duration.setEnabled(True)
+        self._update_time()
+
+    def _update_time(self):
+        elapsed = self._elapsed if self._started is None else self._elapsed + self._clock() - self._started
+        seconds = int(elapsed)
+        if self._countdown:
+            limit = self.duration.value() * 60
+            seconds = max(0, limit - seconds)
+            if not seconds and self._started is not None:
+                self._started = None
+                self._elapsed = limit
+                self._ticker.stop()
+                self.toggle.setText("Start")
+                self.duration.setEnabled(True)
+                self.finished.emit()
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        prefix = f"{hours}:" if hours else ""
+        self.readout.setText(f"{prefix}{minutes:02d}:{seconds:02d}")
+
+
 class TimerTabView(QWidget):
     """Full dedicated Pomodoro / Focus tab matching NotchX TimerView.cs."""
     def __init__(self, parent=None, accent="#6e9bff"):
@@ -1366,7 +1502,31 @@ class TimerTabView(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 8, 16, 8)
+        header = QHBoxLayout()
+        heading = QLabel("Timer")
+        set_widget_style(heading, "font-size: 16px; font-weight: 600; color: #edf1f0;")
+        header.addWidget(heading)
+        header.addStretch()
+        self.mode = QComboBox()
+        self.mode.setAccessibleName("Timer mode")
+        self.mode.addItems(["Focus sessions", "Countdown", "Stopwatch"])
+        set_widget_style(self.mode, "QComboBox { background: #242829; color: #edf0f0; "
+                                    "border: 1px solid #3a3d3e; border-radius: 6px; padding: 4px 8px; }"
+                                    " QComboBox:focus { border-color: #a6b0b1; }"
+                                    " QComboBox QAbstractItemView { background: #242829; color: #edf0f0; }")
+        header.addWidget(self.mode)
+        outer.addLayout(header)
+        modes = QStackedWidget()
+        self.mode.currentIndexChanged.connect(modes.setCurrentIndex)
+        focus = QWidget()
+        self.countdown = BasicTimer(countdown=True)
+        self.stopwatch = BasicTimer(countdown=False)
+        for page in (focus, self.countdown, self.stopwatch):
+            modes.addWidget(page)
+        outer.addWidget(modes, 1)
+        layout = QVBoxLayout(focus)
         layout.setContentsMargins(20, 8, 20, 12)
         layout.setSpacing(14)
         phase_row = QHBoxLayout()
@@ -1571,6 +1731,9 @@ class ShelfTabView(QWidget):
         self.btn_clear.clicked.connect(self.shelf_mgr.clear_shelf)
         hdr.addWidget(self.lbl_title)
         hdr.addStretch()
+        self.btn_downloads = QPushButton("Downloads")
+        self.btn_downloads.hide()
+        hdr.addWidget(self.btn_downloads)
         self.btn_add = QPushButton("Add files")
         self.btn_add.clicked.connect(self._browse_files)
         hdr.addWidget(self.btn_add)

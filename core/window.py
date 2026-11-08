@@ -47,6 +47,7 @@ from poppy.ui.extended_views import (
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
 from poppy.ui.app_mixer import AppMixerMenu
+from poppy.ui.download_activity import DownloadActivityMenu
 from poppy.ui.styles import DEFAULT_THEME, get_theme, get_stylesheet, normalize_appearance
 from poppy.core.pomodoro import PomodoroManager
 from poppy.core.media_manager import MediaManager
@@ -153,12 +154,13 @@ class DynamicNotchWindow(QWidget):
         self.download_watcher = DownloadWatcher(parent=self)
         self.download_watcher.files_ready.connect(self._on_downloads_ready)
         self._island_download_folder = None
+        self._download_activity = None
         self._app_mixer = None
         rpc_cfg = self.config.get("discord_rpc", {})
         self.discord_rpc = DiscordRPCManager(config=rpc_cfg, parent=self)
         self.audio_ctrl = SystemAudioController()
         self.bright_ctrl = SystemBrightnessController()
-        self.caffeine = CaffeineManager()
+        self.caffeine = CaffeineManager(self)
         self._eyedropper_overlay = None
         self.weather_manager = WeatherManager(config=self.config, parent=self)
         self.lyrics_manager = LyricsManager(config=self.config, parent=self)
@@ -232,6 +234,11 @@ class DynamicNotchWindow(QWidget):
 
         self._init_views()
         self._connect_signals()
+        self.caffeine.changed.connect(self._update_caffeine_ui)
+        for button in (self.tab_home.btn_act_caffeine, self.btn_hdr_caffeine):
+            button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            button.customContextMenuRequested.connect(lambda pos, b=button: self._show_awake_menu(b.mapToGlobal(pos)))
+        self._update_caffeine_ui(False)
         self._apply_optional_features()
         self._commands_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Space"), self)
         self._commands_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -677,11 +684,16 @@ class DynamicNotchWindow(QWidget):
         self.tab_timer.btn_phase_focus.clicked.connect(lambda: self.pomodoro.set_phase_focus())
         self.tab_timer.btn_phase_short.clicked.connect(lambda: self.pomodoro.set_phase_break())
         self.tab_timer.btn_phase_long.clicked.connect(lambda: self.pomodoro.set_phase_break(is_long=True))
+        self.tab_timer.countdown.finished.connect(lambda: self.trigger_island("Timer finished", "Your countdown is complete."))
         self.tab_stack.addWidget(self.tab_timer)
 
         # 7: Shelf Tab
         self.tab_shelf = ShelfTabView(self.drop_shelf, screenshot_watcher=self.screenshot_watcher, parent=self)
         self.tab_shelf.pin_requested.connect(self._pin_screenshot_to_screen)
+        self.tab_shelf.btn_downloads.clicked.connect(
+            lambda: self._show_download_activity(self.tab_shelf.btn_downloads.mapToGlobal(
+                self.tab_shelf.btn_downloads.rect().bottomLeft()))
+        )
         self.tab_stack.addWidget(self.tab_shelf)
 
         # 8: Notes Tab
@@ -884,14 +896,20 @@ class DynamicNotchWindow(QWidget):
         except OSError:
             self.message_requested.emit("Downloads", "Windows could not open the download folder.")
 
+    def _show_download_activity(self, position):
+        if self.download_watcher.folder is None:
+            return
+        if self._download_activity is None:
+            self._download_activity = DownloadActivityMenu(self.download_watcher, self._open_download_folder, self)
+        self._download_activity.popup(position)
+
     def _update_clock(self):
         now = datetime.now()
         time_12 = now.strftime("%I:%M:%S %p").lstrip("0")
         time_short = now.strftime("%I:%M %p").lstrip("0")
         date_str = now.strftime("%A, %d %B")
         self.lbl_clock.setText(time_short)
-        date_short = now.strftime("%a, %d %b")
-        self.tab_home.lbl_big_time.setText(time_12)
+        self.tab_home.lbl_big_time.setText(time_short if self._appearance.get("layout") == "Classic" else time_12)
         self.tab_home.lbl_date.setText(date_str)
 
     def _update_system_metrics(self, *, visible_only=False):
@@ -1163,12 +1181,32 @@ class DynamicNotchWindow(QWidget):
         self.tab_home.update_weather(data)
 
     def _toggle_caffeine(self):
-        is_on = self.caffeine.toggle()
-        self._update_caffeine_ui(is_on)
+        if self.caffeine.is_active:
+            self._set_awake(False)
+        else:
+            self._set_awake(True)
+
+    def _set_awake(self, enabled, minutes=None):
+        success = self.caffeine.start(minutes) if enabled else self.caffeine.stop()
+        if not success:
+            self._update_caffeine_ui(self.caffeine.is_active)
+            self.message_requested.emit("Keep awake", "Windows could not change the power request.")
+
+    def _show_awake_menu(self, position):
+        menu = QMenu(self)
+        for minutes in (15, 30, 60, 120):
+            menu.addAction(f"Keep awake for {minutes} minutes",
+                           lambda checked=False, duration=minutes: self._set_awake(True, duration))
+        menu.addAction("Keep awake until turned off", lambda: self._set_awake(True))
+        if self.caffeine.is_active:
+            menu.addAction("Turn off", lambda: self._set_awake(False))
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(position)
 
     def _update_caffeine_ui(self, is_on: bool):
         if is_on:
-            tip = "Keep Awake: ON (Display & PC won't sleep)"
+            duration = self.caffeine.minutes
+            tip = f"Keep awake for {duration} minutes. Click to stop." if duration else "Keeping the PC awake. Click to stop."
             style = """
                 background: rgba(245, 158, 11, 0.22);
                 border: none;
@@ -1178,7 +1216,7 @@ class DynamicNotchWindow(QWidget):
                 font-size: 11px;
             """
         else:
-            tip = "Keep Awake: OFF (Click to prevent sleep)"
+            tip = "Click to keep the PC awake. Right-click for timed options."
             style = """
                 background: transparent;
                 border: none;
@@ -1262,6 +1300,7 @@ class DynamicNotchWindow(QWidget):
         dialog.activateWindow()
 
     def contextMenuEvent(self, event):
+        position = event.globalPos()
         menu = QMenu(self)
         if self.state == NotchState.PEEK:
             menu.addAction("Toggle mute", self._on_mute_clicked)
@@ -1274,14 +1313,16 @@ class DynamicNotchWindow(QWidget):
             menu.addSeparator()
         menu.addAction("Open commands", self.open_commands)
         if self.download_watcher.folder is not None:
+            menu.addAction("Download activity", lambda: self._show_download_activity(position))
             menu.addAction("Open download folder", self._open_download_folder)
+        menu.addAction("Keep awake options", lambda: self._show_awake_menu(position))
         menu.addAction("Settings", self.open_settings)
         menu.addSeparator()
         menu.addAction("Exit Poppy", self.quit_requested.emit)
         menu.aboutToHide.connect(menu.deleteLater)
         if self.state == NotchState.PEEK and self._brightness_flyout:
             menu.aboutToHide.connect(lambda: QTimer.singleShot(0, self, self._sync_brightness_flyout))
-        menu.popup(event.globalPos())
+        menu.popup(position)
         self._sync_brightness_flyout()
         event.accept()
 
@@ -2185,6 +2226,9 @@ class DynamicNotchWindow(QWidget):
             self._app_mixer.hide()
         downloads = self.config.get("downloads", {})
         self.download_watcher.configure(downloads.get("enabled", False), downloads.get("folder", ""))
+        self.tab_shelf.btn_downloads.setVisible(downloads.get("enabled", False))
+        if self._download_activity and not downloads.get("enabled", False):
+            self._download_activity.hide()
         if not self.config.get("notch", {}).get("pill_levels", True):
             self._stop_system_level_controls()
             if self._pill_level_timer.isActive():
@@ -2503,11 +2547,12 @@ class DynamicNotchWindow(QWidget):
                                  for i in range(layout.count()) if layout.itemAt(i).widget() is not self.tab_stack)
             preferred_height = min(max(self._open_h, 480), max_height)
             w = min(max(self._open_w, 780, page.minimumSizeHint().width() + 28), screen.width() - 16)
+            home_height = 0
             if page is self.tab_home:
-                page.fit_height(preferred_height - chrome_height, w, max_height=max_height - chrome_height)
+                home_height = page.fit_height(preferred_height - chrome_height, w, max_height=max_height - chrome_height)
             elif page is self.tab_music:
                 page.fit_height(preferred_height - chrome_height)
-            h = max(preferred_height, page.minimumSizeHint().height() + chrome_height)
+            h = max(preferred_height, max(home_height, page.minimumSizeHint().height()) + chrome_height)
             self._target_size = (w, min(h, max_height))
             self.view_expanded.setFixedSize(*self._target_size)
 
@@ -2780,6 +2825,7 @@ class DynamicNotchWindow(QWidget):
         self._shutting_down = True
         self._stop_system_level_controls()
         self.download_watcher.close()
+        self.caffeine.stop()
         if self._app_mixer:
             self._app_mixer.hide()
         for timer in self.findChildren(QTimer):

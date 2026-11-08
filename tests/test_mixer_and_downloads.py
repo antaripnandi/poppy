@@ -1,6 +1,7 @@
 """Protect session targeting, local download detection, and their UI entry points."""
 
 from PySide6.QtCore import QPoint
+from PySide6.QtWidgets import QAbstractSlider
 
 from poppy.core.app_mixer import AppVolume
 from poppy.core.download_watcher import DownloadWatcher, _snapshot, _writer_closed
@@ -93,7 +94,9 @@ def test_mixer_refresh_does_not_retarget_held_slider(audit_app, monkeypatch):
     menu.refresh()
     assert list(menu._rows) == [music.sessions]
     slider.setSliderDown(False)
-    slider.setValue(40)
+    slider.setValue(39)
+    assert writes == []
+    slider.triggerAction(QAbstractSlider.SliderAction.SliderSingleStepAdd)
     assert writes == [(("speakers", music.sessions), {"level": 40})]
     mute.click()
     assert writes[-1] == (("speakers", music.sessions), {"muted": True})
@@ -101,6 +104,93 @@ def test_mixer_refresh_does_not_retarget_held_slider(audit_app, monkeypatch):
     menu.refresh()
     slider.setValue(100)
     assert len(writes) == 2
+
+
+def test_mixer_pin_survives_reopening_without_an_audio_write(audit_app, monkeypatch):
+    browser = AppVolume("Browser", r"C:\Program Files\Browser\browser.exe", ("browser",), 46, False, False)
+    music = AppVolume("Music", r"C:\Program Files\Music\music.exe", ("music",), 30, False, False)
+    monkeypatch.setattr(app_mixer, "read_app_volumes", lambda: ("speakers", [browser, music]))
+    monkeypatch.setattr(app_mixer.AudioEndpointManager, "get_output_endpoints", lambda: [])
+    writes = []
+    monkeypatch.setattr(app_mixer, "set_app_volume", lambda *args, **kwargs: writes.append(args))
+    window = DynamicNotchWindow()
+    first = app_mixer.AppMixerMenu(window)
+    first.refresh()
+    row = first._rows[music.sessions][0]
+    row.findChild(app_mixer.IconButton, "mixerPin").click()
+    second = app_mixer.AppMixerMenu(window)
+    second.refresh()
+    assert second.rows.itemAt(0).widget() is second._rows[music.sessions][0]
+    assert not writes
+
+
+def test_download_activity_is_scoped_to_current_watch(audit_app, tmp_path):
+    from threading import Event
+
+    window = DynamicNotchWindow()
+    watcher = window.download_watcher
+    watcher.folder = tmp_path
+    token = Event()
+    watcher._stop = token
+    window._show_download_activity(QPoint(0, 0))
+    activity = window._download_activity
+    assert activity.items.item(0).text() == "No new files in this session."
+    bounds = activity.size()
+    watcher._deliver(token, [tmp_path / "Ready.zip"], (("Receiving.zip", 4096),))
+    audit_app.processEvents()
+    assert activity.size() == bounds
+    assert activity.items.isVisible()
+    assert activity.items.item(0).text().startswith("Receiving.zip\nPartial file")
+    assert activity.items.item(1).text() == "Ready.zip\nReady"
+    watcher.close()
+    watcher._deliver(token, [tmp_path / "Stale.zip"], ())
+    assert not watcher.recent and not watcher.partials
+
+
+def test_timed_awake_releases_request_and_updates_controls(audit_app, monkeypatch):
+    from poppy.core import system_tools
+
+    calls = []
+    monkeypatch.setattr(system_tools.ctypes.windll.kernel32, "SetThreadExecutionState",
+                        lambda state: calls.append(state) or 1)
+    window = DynamicNotchWindow()
+    window._set_awake(True, 15)
+    assert window.caffeine.is_active and window.caffeine._timer.isActive()
+    assert window.tab_home.btn_act_caffeine.isChecked()
+    window.caffeine._timer.timeout.emit()
+    assert not window.caffeine.is_active and not window.caffeine._timer.isActive()
+    assert not window.tab_home.btn_act_caffeine.isChecked()
+    assert calls == [0x80000003, 0x80000000]
+
+
+def test_countdown_and_stopwatch_run_independently(audit_app, monkeypatch):
+    window = DynamicNotchWindow()
+    countdown, stopwatch = window.tab_timer.countdown, window.tab_timer.stopwatch
+    now = [100.0]
+    monkeypatch.setattr(countdown, "_clock", lambda: now[0])
+    monkeypatch.setattr(stopwatch, "_clock", lambda: now[0])
+    finished = []
+    countdown.finished.connect(lambda: finished.append(True))
+    countdown.duration.setValue(1)
+    countdown._toggle()
+    stopwatch._toggle()
+    now[0] += 20
+    stopwatch._toggle()
+    now[0] += 40
+    countdown._update_time()
+    countdown._update_time()
+    assert countdown.readout.text() == "00:00" and finished == [True]
+    assert stopwatch.readout.text() == "00:20"
+
+
+def test_clipboard_link_cleanup_preserves_query_encoding_and_signed_links():
+    from poppy.ui.extended_views import clean_clipboard_link
+
+    assert clean_clipboard_link("https://example.com/?utm_source=share&file=a%2Bb&fbclid=1#part") == (
+        "https://example.com/?file=a%2Bb#part"
+    )
+    assert clean_clipboard_link("https://example.com/?signature=xyz&utm_source=share") is None
+    assert clean_clipboard_link("Look at https://example.com/?utm_source=share") is None
 
 
 def test_download_alert_anchors_content_and_opens_folder(audit_app, monkeypatch, tmp_path):
