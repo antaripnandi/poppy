@@ -7,13 +7,13 @@ from PySide6.QtCore import QFileInfo, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileIconProvider, QHBoxLayout, QLabel, QLayout, QMenu, QPushButton,
-    QSlider, QToolTip, QVBoxLayout, QWidget, QWidgetAction,
+    QToolTip, QVBoxLayout, QWidget, QWidgetAction,
 )
 
 from poppy.core.app_mixer import read_app_volumes, set_app_volume
 from poppy.core.storage import data_path, write_json
 from poppy.core.system_features import AudioEndpointManager
-from poppy.ui.components import IconButton, ScrollArea
+from poppy.ui.components import ClickableSlider, IconButton, ScrollArea
 from poppy.ui.icons import Icons
 from poppy.ui.theme import set_widget_style, surface_colors
 
@@ -24,6 +24,9 @@ class AppMixerMenu(QMenu):
         self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
         self._output = None
         self._rows = {}
+        self._pending_level = None
+        self._level_timer = QTimer(self, interval=50, singleShot=True)
+        self._level_timer.timeout.connect(self._flush_level)
         self._pin_file = data_path("mixer_pins.json")
         try:
             saved = json.loads(self._pin_file.read_text(encoding="utf-8"))
@@ -148,6 +151,9 @@ class AppMixerMenu(QMenu):
 
     def _remove_row(self, key):
         row, slider, _, mute = self._rows.pop(key)
+        if self._pending_level and self._pending_level[0] is slider:
+            self._level_timer.stop()
+            self._pending_level = None
         slider.blockSignals(True)
         slider.setSliderDown(False)
         mute.blockSignals(True)
@@ -171,9 +177,8 @@ class AppMixerMenu(QMenu):
             artwork.setPixmap(self._icons.icon(QFileInfo(app.path)).pixmap(18, 18))
         layout.addWidget(artwork)
         layout.addWidget(name)
-        slider = QSlider(Qt.Orientation.Horizontal)
+        slider = ClickableSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
-        slider.setTracking(False)
         slider.setAccessibleName(f"{app.name} volume")
         layout.addWidget(slider, 1)
         readout = QLabel()
@@ -192,6 +197,7 @@ class AppMixerMenu(QMenu):
         output = self._output
         slider.sliderMoved.connect(lambda value: readout.setText(f"{value}%"))
         slider.actionTriggered.connect(lambda _: self._slider_action(slider, output, app.sessions))
+        slider.sliderReleased.connect(lambda: self._finish_level(slider))
         mute.clicked.connect(lambda: self._apply(output, app.sessions, muted=not mute.property("app_muted")))
         self._rows[app.sessions] = row, slider, readout, mute
         self.rows.addWidget(row)
@@ -215,15 +221,35 @@ class AppMixerMenu(QMenu):
 
     def _slider_action(self, slider, output, sessions):
         level = slider.sliderPosition()
-        if slider.isVisible() and level != slider.value():
+        if not slider.isVisible() or level == slider.value():
+            return
+        if slider.isSliderDown():
+            self._pending_level = slider, output, sessions, level
+            if not self._level_timer.isActive():
+                self._level_timer.start()
+        else:
             self._apply(output, sessions, level=level)
+
+    def _flush_level(self):
+        pending, self._pending_level = self._pending_level, None
+        if pending:
+            slider, output, sessions, level = pending
+            if self.isVisible() and slider.isVisible():
+                self._apply(output, sessions, level=level)
+
+    def _finish_level(self, slider):
+        if self._pending_level and self._pending_level[0] is slider:
+            self._level_timer.stop()
+            self._flush_level()
+        QTimer.singleShot(0, self, self._refresh_if_open)
 
     def _apply(self, output, sessions, **change):
         try:
             set_app_volume(output, sessions, **change)
-        except OSError:
-            pass
-        QTimer.singleShot(0, self, self._refresh_if_open)
+        except OSError as error:
+            QToolTip.showText(self.mapToGlobal(self.rect().bottomLeft()), str(error), self)
+        if not any(slider.isSliderDown() for _, slider, _, _ in self._rows.values()):
+            QTimer.singleShot(0, self, self._refresh_if_open)
 
     def _refresh_if_open(self):
         if self.isVisible():

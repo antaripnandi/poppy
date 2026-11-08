@@ -1,6 +1,7 @@
 """Protect session targeting, local download detection, and their UI entry points."""
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractSlider
 
 from poppy.core.app_mixer import AppVolume
@@ -104,6 +105,34 @@ def test_mixer_refresh_does_not_retarget_held_slider(audit_app, monkeypatch):
     menu.refresh()
     slider.setValue(100)
     assert len(writes) == 2
+
+
+def test_mixer_applies_drag_before_release_and_cancels_pending_on_output_change(audit_app, monkeypatch):
+    music = AppVolume("Music", "", ("music",), 55, False, False)
+    snapshot = ["speakers", [music]]
+    writes = []
+    monkeypatch.setattr(app_mixer, "read_app_volumes", lambda: tuple(snapshot))
+    monkeypatch.setattr(app_mixer, "set_app_volume", lambda *args, **kwargs: writes.append((args, kwargs)))
+    monkeypatch.setattr(app_mixer.AudioEndpointManager, "get_output_endpoints", lambda: [])
+    window = DynamicNotchWindow()
+    window.show()
+    window._transition_to(NotchState.PEEK, animate=False)
+    window._open_app_mixer(window.btn_peek_volume)
+    menu = window._app_mixer
+    _, slider, _, _ = menu._rows[music.sessions]
+    left = QPoint(2, slider.height() // 2)
+    right = QPoint(slider.width() - 3, slider.height() // 2)
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=left)
+    assert slider.isSliderDown() and menu._level_timer.isActive()
+    menu._level_timer.timeout.emit()
+    assert writes == [(("speakers", music.sessions), {"level": 0})]
+    QTest.mouseMove(slider, right)
+    assert menu._pending_level is not None
+    snapshot[0] = "headphones"
+    menu.refresh()
+    assert menu._pending_level is None and not menu._level_timer.isActive()
+    menu._level_timer.timeout.emit()
+    assert len(writes) == 1
 
 
 def test_mixer_pin_survives_reopening_without_an_audio_write(audit_app, monkeypatch):

@@ -140,17 +140,23 @@ def read_app_volumes():
 
 def set_app_volume(output, identities, *, level=None, muted=None):
     """Apply a gesture only to the output and session instances it started on."""
+    remaining = set(identities)
     with _sessions(output) as (_, sessions, count):
         for index in range(count):
             try:
                 with ExitStack() as stack:
                     control, _, identity = _session(stack, sessions, index)
-                    if identity not in identities:
+                    if identity not in remaining:
                         continue
                     volume = _volume_interface(stack, control)
                     if level is not None:
                         _call(volume, 3, (c_float, c_void_p), min(100, max(0, level)) / 100, None)
                     if muted is not None:
                         _call(volume, 5, (wintypes.BOOL, c_void_p), muted, None)
+                    remaining.remove(identity)
+                    if not remaining:
+                        return
             except OSError:
                 continue
+    if remaining:
+        raise OSError("Windows could not update every audio session for this app.")
