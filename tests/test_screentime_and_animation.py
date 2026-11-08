@@ -4,13 +4,15 @@ Tests for Screen Time Manager, Settings integration, and Centered Pop-Out Animat
 
 import pytest
 from PySide6.QtWidgets import QApplication, QLayout
-from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QRect, QRectF
+from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from poppy.core.screentime_manager import ScreenTimeManager, format_duration
 from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.ui.components import ToggleSwitch
 from poppy.ui.settings_window import SettingsWindow
+from poppy.ui.styles import get_stylesheet
+from poppy.ui.theme import set_widget_style
 
 
 @pytest.fixture(scope="module")
@@ -213,6 +215,7 @@ def test_screenshot_replacement_preserves_in_flight_opacity(qapp, monkeypatch, t
     image = QImage(40, 30, QImage.Format.Format_RGB32)
     image.fill(0xFF223344)
     w._on_screenshot_captured(str(tmp_path / "first.png"), image)
+    assert w.lbl_isl_title.text() == "Screenshot staged"
     w._thumb_anim.setCurrentTime(75)
     opacity = w._thumb_opacity_fx.opacity()
     assert 0.0 < opacity < 1.0
@@ -222,6 +225,40 @@ def test_screenshot_replacement_preserves_in_flight_opacity(qapp, monkeypatch, t
     w.trigger_island("Reminder", "Check the shelf")
     assert w._thumb_anim.state() == QAbstractAnimation.State.Stopped
     assert not w._thumb_opacity_fx.isEnabled()
+
+
+@pytest.mark.parametrize("layout, mode", [("Daily", "Dark"), ("Console", "Light")])
+def test_screen_time_alerts_keep_native_type_and_aligned_controls(qapp, layout, mode):
+    style, source = qapp.styleSheet(), qapp.property("poppyStyleSource")
+    try:
+        w = DynamicNotchWindow({"appearance": {"layout": layout, "mode": mode},
+                                "notifications": {"sound": False}})
+        set_widget_style(qapp, get_stylesheet("Pure black", layout))
+        w.show()
+        w._on_screentime_break_reminder(60)
+        w.anim.setCurrentTime(w.anim.duration())
+        qapp.processEvents()
+        title, detail, dismiss = w.lbl_isl_title, w.lbl_isl_sub, w.btn_isl_close
+        assert title.text() == "Time for a break"
+        assert detail.text() == "You've been active for 60 minutes."
+        assert title.font().family() == detail.font().family() == "Segoe UI"
+        assert (title.font().pixelSize(), detail.font().pixelSize()) == (14, 12)
+        assert title.x() == detail.x() == w.view_island.width() - dismiss.geometry().right() - 1
+        text_bounds = title.geometry().united(detail.geometry())
+        assert abs(text_bounds.center().y() - dismiss.geometry().center().y()) <= 1
+        assert qapp.focusWidget() is w.view_island
+        QTest.keyClick(w.view_island, Qt.Key.Key_Tab)
+        assert dismiss.hasFocus()
+
+        w._on_screentime_goal_reached(1.5)
+        assert title.text() == "Screen time goal reached"
+        assert detail.text() == "You've used 1.5 hours today."
+        assert dismiss.hasFocus()
+        QTest.keyClick(dismiss, Qt.Key.Key_Space)
+        assert w.state == NotchState.COLLAPSED
+    finally:
+        qapp.setProperty("poppyStyleSource", source)
+        qapp.setStyleSheet(style)
 
 
 def test_immediate_toggle_update_cancels_previous_motion(qapp):

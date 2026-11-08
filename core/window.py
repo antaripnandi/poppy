@@ -478,10 +478,10 @@ class DynamicNotchWindow(QWidget):
         # =====================================================================
         self.view_island = QWidget(self._surface_clip)
         self.view_island.setFixedSize(420, 64)
+        self.view_island.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         v_isl_layout = QHBoxLayout(self.view_island)
-        v_isl_layout.setContentsMargins(12, 6, 12, 8)
-        v_isl_layout.setSpacing(8)
-        v_isl_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        v_isl_layout.setContentsMargins(22, 8, 22, 8)
+        v_isl_layout.setSpacing(6)
 
         # Draggable Thumbnail Preview (44x44, rounded 8px)
         self.island_thumb = DraggableThumbnail(size=44, border_radius=8, parent=self)
@@ -494,30 +494,37 @@ class DynamicNotchWindow(QWidget):
         self._thumb_anim.setEndValue(1.0)
         self._thumb_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._thumb_anim.finished.connect(lambda: self._thumb_opacity_fx.setEnabled(False))
-        v_isl_layout.addWidget(self.island_thumb)
+        v_isl_layout.addWidget(self.island_thumb, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        # Meta info
         isl_meta = QVBoxLayout()
+        isl_meta.setContentsMargins(0, 0, 0, 0)
         isl_meta.setSpacing(2)
         isl_meta.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        isl_title_row = QHBoxLayout()
-        isl_title_row.setSpacing(6)
-        self.lbl_isl_title = QLabel("Screenshot staged")
-        set_widget_style(self.lbl_isl_title, "color: #f8fafc; font-size: 12px; font-weight: 600; background: transparent; border: none;")
-        isl_title_row.addWidget(self.lbl_isl_title)
-        isl_title_row.addStretch()
-        isl_meta.addLayout(isl_title_row)
-
+        self.lbl_isl_title = QLabel()
         self.lbl_isl_sub = QLabel()
-        self.lbl_isl_sub.setTextFormat(Qt.TextFormat.PlainText)
-        self.lbl_isl_sub.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.lbl_isl_sub, "color: #a7b2bf; font-size: 11px; background: transparent; border: none;")
-        isl_meta.addWidget(self.lbl_isl_sub)
+        for label, name in ((self.lbl_isl_title, "islandTitle"), (self.lbl_isl_sub, "islandDetail")):
+            label.setObjectName(name)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            isl_meta.addWidget(label)
+        set_widget_style(self.view_island, """
+            QLabel#islandTitle {
+                font-family: 'Segoe UI'; font-size: 14px; font-weight: 600;
+                color: #f1f3f5; background: transparent; border: none;
+            }
+            QLabel#islandDetail {
+                font-family: 'Segoe UI'; font-size: 12px; font-weight: 400;
+                color: #b0b7bd; background: transparent; border: none;
+            }
+            QPushButton#islandAction {
+                font-family: 'Segoe UI'; font-size: 12px; padding: 4px 8px;
+            }
+        """)
         v_isl_layout.addLayout(isl_meta, stretch=1)
 
         # Action Buttons
         self.btn_isl_chat = QPushButton("Copy")
+        self.btn_isl_chat.setObjectName("islandAction")
         self.btn_isl_chat.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_isl_chat.setToolTip("Copy screenshot to clipboard")
         self.btn_isl_chat.setMinimumWidth(64)
@@ -525,20 +532,22 @@ class DynamicNotchWindow(QWidget):
         v_isl_layout.addWidget(self.btn_isl_chat)
 
         self.btn_isl_pin = QPushButton("Pin")
+        self.btn_isl_pin.setObjectName("islandAction")
         self.btn_isl_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_isl_pin.setToolTip("Pin screenshot as a floating sticky note on screen")
         self.btn_isl_pin.clicked.connect(lambda: self._pin_screenshot_to_screen(self._last_screenshot_path))
         v_isl_layout.addWidget(self.btn_isl_pin)
 
         self.btn_isl_shelf = QPushButton("Shelf")
+        self.btn_isl_shelf.setObjectName("islandAction")
         self.btn_isl_shelf.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_isl_shelf.setToolTip("Open temporary file shelf")
         self.btn_isl_shelf.clicked.connect(self._activate_island)
         v_isl_layout.addWidget(self.btn_isl_shelf)
 
-        self.btn_isl_close = IconButton(Icons.CLOSE, "Dismiss", size=22, font_size=10, is_fluent=True)
+        self.btn_isl_close = IconButton(Icons.CLOSE, "Dismiss notification", size=28, font_size=11, is_fluent=True)
         self.btn_isl_close.clicked.connect(self._collapse_to_pill)
-        v_isl_layout.addWidget(self.btn_isl_close)
+        v_isl_layout.addWidget(self.btn_isl_close, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self.view_island.setVisible(False)
 
@@ -844,10 +853,12 @@ class DynamicNotchWindow(QWidget):
             )
 
     def _on_screentime_break_reminder(self, streak_min: int):
-        self.trigger_island("Take a Rest Break", f"You've been active for {streak_min} mins. Rest your eyes!")
+        unit = "minute" if streak_min == 1 else "minutes"
+        self.trigger_island("Time for a break", f"You've been active for {streak_min} {unit}.")
 
     def _on_screentime_goal_reached(self, goal_hours: float):
-        self.trigger_island("Screen time limit reached", f"You've reached your {goal_hours:g}-hour daily limit.")
+        unit = "hour" if goal_hours == 1 else "hours"
+        self.trigger_island("Screen time goal reached", f"You've used {goal_hours:g} {unit} today.")
 
     def _alerts_allowed(self):
         preferences = self.config.get("notifications", {})
@@ -857,7 +868,19 @@ class DynamicNotchWindow(QWidget):
     def _present_island(self, duration=4500):
         if self.config.get("notifications", {}).get("sound", True):
             QApplication.beep()
+        opening = self.state != NotchState.ISLAND
         self._transition_to(NotchState.ISLAND)
+        if opening:
+            self.view_island.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.view_island.layout().activate()
+        for label in (self.lbl_isl_title, self.lbl_isl_sub):
+            text = label.text()
+            label.setAccessibleName(text)
+            fitted = label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, label.contentsRect().width())
+            if fitted != text:
+                if not label.toolTip():
+                    label.setToolTip(text)
+                label.setText(fitted)
         self._island_timer.start(duration)
 
     def trigger_island(self, title: str, text: str, *, download_folder=None):
@@ -870,8 +893,9 @@ class DynamicNotchWindow(QWidget):
             self.message_requested.emit(title, text)
             return
         self.lbl_isl_title.setText(title)
-        self.lbl_isl_sub.setText(text[:70])
-        self.lbl_isl_sub.setToolTip(text)
+        self.lbl_isl_title.setToolTip("")
+        self.lbl_isl_sub.setText(text)
+        self.lbl_isl_sub.setToolTip("")
         self._island_download_folder = download_folder
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.hide()
@@ -1964,6 +1988,7 @@ class DynamicNotchWindow(QWidget):
         preview_visible = self.state == NotchState.ISLAND and self.island_thumb.isVisible()
         self._island_download_folder = None
         self.lbl_isl_title.setText("Screenshot staged")
+        self.lbl_isl_title.setToolTip("")
         for control in (self.island_thumb, self.btn_isl_chat, self.btn_isl_pin, self.btn_isl_shelf):
             control.show()
         self.btn_isl_shelf.setText("Shelf")
