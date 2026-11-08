@@ -24,7 +24,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
-    QShortcut, QKeySequence, QIcon
+    QShortcut, QKeySequence, QIcon, QPen
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
@@ -419,10 +419,11 @@ class DynamicNotchWindow(QWidget):
         self.peek_seek.seek_clicked.connect(self.media_manager.seek)
         self.peek_seek.sliderReleased.connect(lambda: self.media_manager.seek(self.peek_seek.value()))
         self.peek_seek.sliderMoved.connect(self._set_peek_elapsed)
-        playback.addWidget(self.peek_seek, 1)
-        self.btn_peek_volume = IconButton(Icons.VOLUME, "Show volume slider", size=19, font_size=12, is_fluent=True)
+        playback.addWidget(self.peek_seek, 1, Qt.AlignmentFlag.AlignVCenter)
+        self._peek_volume_muted = False
+        self.btn_peek_volume = IconButton("", "Show volume slider", size=20)
         self.btn_peek_volume.clicked.connect(self._toggle_peek_volume)
-        playback.addWidget(self.btn_peek_volume)
+        playback.addWidget(self.btn_peek_volume, 0, Qt.AlignmentFlag.AlignVCenter)
         controls.setContentsMargins(0, 0, self.btn_peek_volume.width() + playback.spacing(), 0)
         player.addLayout(playback)
         layout.addLayout(player, 1)
@@ -1090,7 +1091,10 @@ class DynamicNotchWindow(QWidget):
             self.peek_volume.setValue(volume)
             self.peek_volume.blockSignals(False)
         self.lbl_peek_volume.setText(f"{volume}%")
-        self.btn_peek_volume.setText(Icons.MUTE if muted else Icons.VOLUME)
+        if self._peek_volume_muted != muted:
+            self._peek_volume_muted = muted
+            self.btn_peek_volume.setIcon(self._peek_icons["Muted" if muted else "Volume"])
+            self.btn_peek_volume.setAccessibleDescription("Muted" if muted else "")
 
     def _toggle_peek_volume(self):
         menu = self.peek_volume_menu
@@ -1755,10 +1759,10 @@ class DynamicNotchWindow(QWidget):
         label = "Pause" if playing else "Play"
         self.btn_peek_play.setAccessibleName(label)
         self.btn_peek_play.setToolTip(label)
-        self.btn_peek_play.setIcon(self._peek_transport_icons[label])
+        self.btn_peek_play.setIcon(self._peek_icons[label])
 
     @staticmethod
-    def _peek_transport_icon(action, ink):
+    def _peek_icon(action, ink):
         pixmap = QPixmap(36, 36)
         pixmap.setDevicePixelRatio(2)
         pixmap.fill(Qt.GlobalColor.transparent)
@@ -1766,7 +1770,22 @@ class DynamicNotchWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(ink))
-        if action == "Pause":
+        if action in ("Volume", "Muted"):
+            speaker = QPainterPath(QPointF(2.5, 6.6))
+            for x, y in ((5.2, 6.6), (9.6, 3.4), (9.6, 14.6), (5.2, 11.4), (2.5, 11.4)):
+                speaker.lineTo(x, y)
+            speaker.closeSubpath()
+            painter.drawPath(speaker)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(ink), 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            if action == "Muted":
+                painter.drawLine(QPointF(12, 7.2), QPointF(15, 10.8))
+                painter.drawLine(QPointF(12, 10.8), QPointF(15, 7.2))
+            else:
+                wave = QPainterPath(QPointF(11.8, 5))
+                wave.quadTo(17.8, 9, 11.8, 13)
+                painter.drawPath(wave)
+        elif action == "Pause":
             for x in (4, 10):
                 painter.drawRoundedRect(QRectF(x, 2, 4, 14), 1, 1)
         else:
@@ -1860,12 +1879,13 @@ class DynamicNotchWindow(QWidget):
         self.peek_thumb.setStyleSheet(
             f"color: {ink}; background: rgba({rgb},0.07); border-radius: 6px; "
             f"font-family: '{font}'; font-size: 24px;")
-        self._peek_transport_icons = {action: self._peek_transport_icon(action, ink)
-                                      for action in ("Previous", "Play", "Pause", "Next")}
-        self.btn_peek_prev.setIcon(self._peek_transport_icons["Previous"])
+        self._peek_icons = {action: self._peek_icon(action, ink)
+                            for action in ("Previous", "Play", "Pause", "Next", "Volume", "Muted")}
+        self.btn_peek_prev.setIcon(self._peek_icons["Previous"])
         action = "Pause" if self._has_media and self._current_media.get("is_playing") else "Play"
-        self.btn_peek_play.setIcon(self._peek_transport_icons[action])
-        self.btn_peek_next.setIcon(self._peek_transport_icons["Next"])
+        self.btn_peek_play.setIcon(self._peek_icons[action])
+        self.btn_peek_next.setIcon(self._peek_icons["Next"])
+        self.btn_peek_volume.setIcon(self._peek_icons["Muted" if self._peek_volume_muted else "Volume"])
         for button in (self.btn_peek_prev, self.btn_peek_next, self.btn_peek_volume, self.btn_peek_play):
             size = 18 if button is self.btn_peek_play else 14
             button.setIconSize(QSize(size, size))

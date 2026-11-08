@@ -230,6 +230,11 @@ def test_hover_metadata_and_controls_fit_all_themes(audit_app, monkeypatch):
             centers = [button.mapTo(window.view_peek, button.rect().center()) for button in buttons]
             assert centers[0].x() < centers[1].x() < centers[2].x()
             assert max(point.y() for point in centers) - min(point.y() for point in centers) <= 1
+            speaker, seek = window.btn_peek_volume, window.peek_seek
+            assert speaker.mapTo(window.view_peek, QPoint(0, speaker.height() // 2)).y() == (
+                seek.mapTo(window.view_peek, QPoint(0, seek.height() // 2)).y()
+            )
+            assert not speaker.text() and not speaker.icon().isNull()
             assert not window.peek_volume.isVisible()
     assert window.btn_peek_play.accessibleName() == "Pause"
     assert not window._peek_opacity.isEnabled()
@@ -411,6 +416,12 @@ def test_volume_opens_a_vertical_slider_and_applies_drag_values(audit_app, monke
     window._transition_to(NotchState.PEEK)
     settle(window, audit_app)
     window._show_volume(45, False)
+    speaker_icon = window.btn_peek_volume.icon().cacheKey()
+    window._show_volume(45, True)
+    assert window.btn_peek_volume.icon().cacheKey() != speaker_icon
+    assert window.btn_peek_volume.accessibleDescription() == "Muted"
+    window._show_volume(45, False)
+    assert window.btn_peek_volume.icon().cacheKey() == speaker_icon
     assert not window.peek_volume_menu.isVisible()
     QTest.mouseClick(window.btn_peek_volume, Qt.MouseButton.LeftButton)
     assert window.peek_volume_menu.isVisible()
