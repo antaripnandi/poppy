@@ -10,7 +10,7 @@ import json
 import uuid
 
 from PySide6.QtCore import Qt, QPoint, Signal, QSize, QTimer, QRectF
-from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QGuiApplication
+from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QGuiApplication, QRegion
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, QPushButton,
     QSizeGrip, QFrame, QApplication
@@ -470,10 +470,66 @@ class ImageCanvas(QWidget):
         )
 
 
+class _ImageResizeBorder(QWidget):
+    """Reserve a narrow hit area for native edge and corner resizing."""
+
+    _width = 9
+    _cursors = {
+        Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
+        Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
+        Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
+        Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
+        Qt.Edge.TopEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeFDiagCursor,
+        Qt.Edge.BottomEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeFDiagCursor,
+        Qt.Edge.TopEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeBDiagCursor,
+        Qt.Edge.BottomEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeBDiagCursor,
+    }
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+
+    def resizeEvent(self, event):
+        inner = self.rect().adjusted(self._width, self._width, -self._width, -self._width)
+        self.setMask(QRegion(self.rect()) - QRegion(inner))
+        super().resizeEvent(event)
+
+    def _edges_at(self, position):
+        x, y = position.x(), position.y()
+        at_side = x < self._width or x >= self.width() - self._width
+        at_end = y < self._width or y >= self.height() - self._width
+        horizontal = 2 * self._width if at_end else self._width
+        vertical = 2 * self._width if at_side else self._width
+        edges = Qt.Edge(0)
+        if x < horizontal:
+            edges |= Qt.Edge.LeftEdge
+        elif x >= self.width() - horizontal:
+            edges |= Qt.Edge.RightEdge
+        if y < vertical:
+            edges |= Qt.Edge.TopEdge
+        elif y >= self.height() - vertical:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    def enterEvent(self, event):
+        self.setCursor(self._cursors.get(self._edges_at(event.position()), Qt.CursorShape.ArrowCursor))
+
+    def mouseMoveEvent(self, event):
+        self.setCursor(self._cursors.get(self._edges_at(event.position()), Qt.CursorShape.ArrowCursor))
+
+    def mousePressEvent(self, event):
+        edges = self._edges_at(event.position())
+        handle = self.window().windowHandle()
+        if event.button() == Qt.MouseButton.LeftButton and edges and handle and handle.startSystemResize(edges):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class FloatingStickyImage(QWidget):
     """
     Floating pinned screenshot / image on screen (like Snipaste / PureRef).
-    Stays always on top, freely draggable with startSystemMove(), resizable with QSizeGrip.
+    Supports native window movement and resizing from any edge or corner.
     Supports mouse-wheel zooming, interactive panning, and maximize/fullscreen toggle.
     """
     closed = Signal(object)
@@ -504,9 +560,10 @@ class FloatingStickyImage(QWidget):
             h = max(70, min(650, content_h + chrome_h))
         else:
             w, h = 320, 240
-        self.resize(w, h)
-
         self._init_ui()
+        self._resize_border = _ImageResizeBorder(self)
+        self.resize(w, h)
+        self._resize_border.setGeometry(self.rect())
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -590,6 +647,7 @@ class FloatingStickyImage(QWidget):
 
         # Image Canvas (Zoomable, Pannable, Fill Viewport)
         self.canvas = ImageCanvas(self._pixmap, parent=self)
+        self.canvas.setMinimumHeight(24)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
         c_layout.addWidget(self.canvas, stretch=1)
 
@@ -614,6 +672,10 @@ class FloatingStickyImage(QWidget):
         orig_dims = f"{self._pixmap.width()}×{self._pixmap.height()}" if not self._pixmap.isNull() else ""
         pct = int(zoom * 100)
         self.lbl_info.setText(f"{orig_dims} · {pct}% (Wheel to zoom)")
+
+    def resizeEvent(self, event):
+        self._resize_border.setGeometry(self.rect())
+        super().resizeEvent(event)
 
     def _start_drag(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -642,6 +704,8 @@ class FloatingStickyImage(QWidget):
             self._is_maximized = True
             self.btn_maximize.setText(Icons.RESTORE)
             self.btn_maximize.setToolTip("Restore Window")
+        self._resize_border.setVisible(not self._is_maximized)
+        self.size_grip.setVisible(not self._is_maximized)
         self.canvas.reset_zoom()
 
     def toggle_pin(self):

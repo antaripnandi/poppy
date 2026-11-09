@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt, QPoint, QCoreApplication, QEvent
-from PySide6.QtGui import QColor, QImage, QMouseEvent
+from PySide6.QtCore import Qt, QPoint, QPointF, QCoreApplication, QEvent
+from PySide6.QtGui import QColor, QImage, QMouseEvent, QWindow
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
@@ -16,7 +16,7 @@ from poppy.core.window import DynamicNotchWindow, NotchState
 from poppy.main import load_config
 from poppy.ui.components import ClickableSlider, ToggleSwitch
 from poppy.ui.extended_views import ClipboardTabView, DocsTabView
-from poppy.ui.sticky_note import FloatingStickyNote
+from poppy.ui.sticky_note import FloatingStickyImage, FloatingStickyNote
 from poppy.ui.views import NotesTabView
 
 
@@ -87,6 +87,61 @@ def test_failed_note_save_does_not_close_or_clear_text(monkeypatch):
         assert note.editor.toPlainText() == "keep this"
         assert "Not saved" in note.lbl_stats.text()
     assert note.close()
+
+
+def test_pinned_screenshot_resizes_from_each_edge_without_covering_canvas(audit_app, monkeypatch, tmp_path):
+    path = tmp_path / "capture.png"
+    image = QImage(347, 65, QImage.Format.Format_RGB32)
+    image.fill(QColor("#344d59"))
+    assert image.save(str(path))
+    requests = []
+    monkeypatch.setattr(QWindow, "startSystemResize", lambda _, edges: requests.append(edges) or True)
+    window = FloatingStickyImage(str(path))
+    window.show()
+    audit_app.processEvents()
+    border = window._resize_border
+    handle = window.windowHandle()
+    right, bottom = window.width() - 7, window.height() - 7
+    left, top = Qt.Edge.LeftEdge, Qt.Edge.TopEdge
+    samples = (
+        (QPoint(6, window.height() // 2), left, Qt.CursorShape.SizeHorCursor),
+        (QPoint(right, window.height() // 2), Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
+        (QPoint(window.width() // 2, 6), top, Qt.CursorShape.SizeVerCursor),
+        (QPoint(window.width() // 2, bottom), Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
+        (QPoint(13, 6), left | top, Qt.CursorShape.SizeFDiagCursor),
+        (QPoint(right - 7, 6), Qt.Edge.RightEdge | top, Qt.CursorShape.SizeBDiagCursor),
+        (QPoint(13, bottom), left | Qt.Edge.BottomEdge, Qt.CursorShape.SizeBDiagCursor),
+        (QPoint(right - 7, bottom), Qt.Edge.RightEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeFDiagCursor),
+    )
+    for point, edges, cursor in samples:
+        assert window.childAt(point) is border
+        move = QMouseEvent(QEvent.Type.MouseMove, QPointF(point), QPointF(window.mapToGlobal(point)),
+                           Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+        audit_app.sendEvent(border, move)
+        assert border.cursor().shape() == cursor
+        QTest.mouseClick(handle, Qt.MouseButton.LeftButton, pos=point)
+        assert requests[-1] == edges
+    assert len(requests) == 8
+    QTest.mouseClick(handle, Qt.MouseButton.RightButton, pos=samples[0][0])
+    assert len(requests) == 8
+
+    window.resize(window.width() + 80, window.height() + 50)
+    assert border.geometry() == window.rect()
+    center = window.canvas.mapTo(window, window.canvas.rect().center())
+    assert window.childAt(center) is window.canvas
+    QTest.mouseDClick(handle, Qt.MouseButton.LeftButton, pos=center)
+    assert window.canvas._zoom == 2
+    QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=center)
+    QTest.mouseMove(handle, center + QPoint(10, 5))
+    QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=center + QPoint(10, 5))
+    assert (window.canvas._pan_x, window.canvas._pan_y) == (10, 5)
+    assert len(requests) == 8
+
+    restored = window.geometry()
+    window.toggle_maximize()
+    assert border.isHidden() and window.size_grip.isHidden()
+    window.toggle_maximize()
+    assert window.geometry() == restored and border.isVisible() and window.size_grip.isVisible()
 
 
 def test_filtered_clipboard_actions_use_original_identity():
