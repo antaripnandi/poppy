@@ -88,12 +88,14 @@ class AppMixerMenu(QMenu):
                 background: {colors['root']}; border: none;
             }}
             QScrollBar::corner {{ background: transparent; }}
-            QSlider::groove:horizontal {{ height: 3px; background: {colors['card']}; }}
-            QSlider::sub-page:horizontal {{ background: {colors['muted']}; }}
+            QSlider:focus {{ border: none; outline: none; }}
+            QSlider::groove:horizontal {{ height: 3px; background: {colors['card']}; border-radius: 1px; }}
+            QSlider::sub-page:horizontal {{ background: {colors['muted']}; border-radius: 1px; }}
             QSlider::handle:horizontal {{
-                width: 9px; margin: -3px 0; border-radius: 4px; background: {colors['text']};
+                width: 7px; margin: -3px 0; border-radius: 4px;
+                background: {colors['text']}; border: 1px solid {colors['text']};
             }}
-            QSlider:focus {{ border: 1px solid {colors['muted']}; border-radius: 4px; }}
+            QSlider::handle:horizontal:focus {{ background: {colors['root']}; }}
         """)
         for label in (self.output, self.status):
             set_widget_style(label, f"color: {colors['muted']};")

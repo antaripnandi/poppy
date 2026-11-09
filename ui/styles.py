@@ -194,10 +194,12 @@ QPushButton:pressed {{
     background-color: rgba(255, 255, 255, 0.18);
 }}
 
+QSlider:focus {{ border: none; outline: none; }}
+
 QSlider::groove:horizontal {{
-    height: 4px;
+    height: 3px;
     background: rgba(255, 255, 255, 0.12);
-    border-radius: 2px;
+    border-radius: 1px;
 }}
 
 QSlider::sub-page:horizontal {{
@@ -207,15 +209,17 @@ QSlider::sub-page:horizontal {{
 
 QSlider::handle:horizontal {{
     background: #7f8b91;
-    width: 12px;
-    margin-top: -4px;
-    margin-bottom: -4px;
-    border-radius: 6px;
+    border: 1px solid #7f8b91;
+    width: 8px;
+    margin: -3px 0;
+    border-radius: 5px;
 }}
 
 QSlider::handle:horizontal:hover {{
     background: #647982;
 }}
+
+QSlider::handle:horizontal:focus {{ background: #d3d9dc; border-color: #576c72; }}
 
 QScrollBar:vertical {{
     border: none;

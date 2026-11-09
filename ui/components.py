@@ -1053,9 +1053,9 @@ class CapsuleSlider(QSlider):
         txt_rect = QRectF(w - 44, 0, 36, h)
         painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
         if self.hasFocus():
-            painter.setPen(QColor("#526c60" if is_light_theme() else "#b7c5bc"))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(track_rect.adjusted(0.5, 0.5, -0.5, -0.5), r, r)
+            x = max(5.0, min(w - 5.0, w * pct))
+            painter.fillRect(QRectF(x - 3, h - 5, 6, 2),
+                             QColor("#202833") if is_light_theme() else QColor("#f1f5f9"))
 
     def _paint_track_control(self, painter, w, h):
         name = current_layout()
@@ -1076,23 +1076,24 @@ class CapsuleSlider(QSlider):
                                  accent if (index + 1) / count <= pct else track)
         else:
             thickness = 2 if name in ("Paper", "Daily") else 4 if name == "Deck" else 3
-            painter.fillRect(QRectF(left, h / 2, width, thickness), track)
-            painter.fillRect(QRectF(left, h / 2, width * pct, thickness), accent)
-        if name == "Deck":
+            track_y = (h - thickness) / 2
+            painter.fillRect(QRectF(left, track_y, width, thickness), track)
+            painter.fillRect(QRectF(left, track_y, width * pct, thickness), accent)
+        thumb_x = left + width * pct
+        focused = self.hasFocus() and self.isEnabled()
+        if self.isEnabled() and name == "Deck":
             painter.setBrush(foreground)
-            painter.drawEllipse(QRectF(left + width * pct - 5, h / 2 - 3, 10, 10))
-        else:
-            painter.fillRect(QRectF(left + width * pct - 1, h / 2 - 7, 2, 14), foreground)
+            radius = 6 if focused else 4
+            painter.drawEllipse(QRectF(thumb_x - radius, h / 2 - radius, 2 * radius, 2 * radius))
+        elif self.isEnabled():
+            thumb_width = 4 if focused else 2
+            painter.fillRect(QRectF(thumb_x - thumb_width / 2, h / 2 - 6, thumb_width, 12), foreground)
         painter.setPen(foreground)
         painter.setFont(QFont(get_fluent_font_family(), 10))
         painter.drawText(QRectF(5, 0, 24, h), Qt.AlignmentFlag.AlignVCenter, self._icon)
         painter.setFont(QFont("Consolas" if name in ("Instrument", "Console") else "Segoe UI", 9))
         value = f"{self.value()}%" if self.isEnabled() else "N/A"
         painter.drawText(QRectF(w - 45, 0, 40, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, value)
-        if self.hasFocus():
-            painter.setPen(QPen(accent, 1))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(QRectF(1, 1, w - 2, h - 2))
 
 
 class ClickableSlider(QSlider):

@@ -353,10 +353,11 @@ class SettingsWindow(QWidget):
                 border: none;
                 width: 18px;
             }
+            QSlider:focus { border: none; outline: none; }
             QSlider::groove:horizontal {
-                height: 4px;
+                height: 3px;
                 background: rgba(255, 255, 255, 0.12);
-                border-radius: 2px;
+                border-radius: 1px;
             }
             QSlider::sub-page:horizontal {
                 background: #bbc4c5;
@@ -364,11 +365,12 @@ class SettingsWindow(QWidget):
             }
             QSlider::handle:horizontal {
                 background: #7f8b91;
-                width: 12px;
-                margin-top: -4px;
-                margin-bottom: -4px;
-                border-radius: 6px;
+                border: 1px solid #7f8b91;
+                width: 8px;
+                margin: -3px 0;
+                border-radius: 5px;
             }
+            QSlider::handle:horizontal:focus { background: #d3d9dc; border-color: #576c72; }
             QScrollBar:vertical {
                 width: 8px;
                 background: transparent;
@@ -824,6 +826,7 @@ class SettingsWindow(QWidget):
 
         # Card 2: Daily Target & Wellbeing
         self.slider_st_goal = ClickableSlider(Qt.Orientation.Horizontal)
+        self.slider_st_goal.setAccessibleName("Daily screen time goal")
         self.slider_st_goal.setRange(1, 16)
         self.slider_st_goal.setValue(6)
         self.slider_st_goal.setFixedWidth(130)

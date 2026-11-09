@@ -1963,9 +1963,11 @@ class DynamicNotchWindow(QWidget):
         self.peek_volume.setStyleSheet(f"""
             QSlider::groove:vertical {{ width: 4px; background: rgba({rgb},0.23); border-radius: 2px; }}
             QSlider::add-page:vertical {{ background: {muted}; border-radius: 2px; }}
-            QSlider::handle:vertical {{ height: 10px; margin: 0 -3px; background: {ink}; border-radius: 5px; }}
+            QSlider::handle:vertical {{
+                height: 8px; margin: 0 -3px; background: {ink}; border: 1px solid {ink}; border-radius: 5px;
+            }}
             QSlider:focus {{ border: none; outline: none; }}
-            QSlider::handle:vertical:focus {{ height: 14px; }}
+            QSlider::handle:vertical:focus {{ background: {color.name()}; }}
         """)
         if self.state == NotchState.PEEK:
             self.update()

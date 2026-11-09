@@ -433,6 +433,29 @@ def test_music_seek_focus_keeps_track_geometry_and_cancel_restores_time(dashboar
     assert not slider.isEnabled() and slider.value() == 0
 
 
+@pytest.mark.parametrize("layout", ["Classic", "Deck", "Console"])
+def test_home_level_focus_only_changes_the_thumb(dashboard_window, audit_app, layout):
+    window = dashboard_window
+    window._apply_live_appearance({"layout": layout})
+    window._transition_to(NotchState.EXPANDED, target_tab="Home", animate=False)
+    for slider in (window.tab_home.slider_vol, window.tab_home.slider_bright):
+        slider.setValue(33)
+        slider.clearFocus()
+        audit_app.processEvents()
+        before = slider.grab().toImage()
+        slider.setFocus()
+        audit_app.processEvents()
+        assert slider.hasFocus()
+        after = slider.grab().toImage()
+        changes = [(x, y) for y in range(after.height()) for x in range(after.width())
+                   if before.pixel(x, y) != after.pixel(x, y)]
+        assert changes
+        x_coords, y_coords = zip(*changes)
+        dpr = after.devicePixelRatio()
+        assert max(x_coords) - min(x_coords) <= 13 * dpr
+        assert max(y_coords) - min(y_coords) <= 13 * dpr
+
+
 @pytest.mark.parametrize("layout", list(LAYOUT_THEMES))
 def test_all_tabs_keep_static_controls_visible_with_loaded_lists(dashboard_window, audit_app, tmp_path, monkeypatch, layout):
     from PySide6.QtWidgets import QPushButton
