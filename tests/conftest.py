@@ -39,7 +39,7 @@ def audit_app():
 
 @pytest.fixture(autouse=True)
 def isolate_runtime(tmp_path, monkeypatch, audit_app):
-    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtCore import QCoreApplication, QEvent, Qt
     from poppy.core.media_manager import MediaManager
     from poppy.core.weather_manager import WeatherManager
     from poppy.core.screenshot_watcher import ScreenshotWatcher
@@ -59,10 +59,13 @@ def isolate_runtime(tmp_path, monkeypatch, audit_app):
     monkeypatch.setattr("poppy.ui.components.system_animations_enabled", lambda: True)
     baseline = set(audit_app.topLevelWidgets())
     yield
-    for widget in set(audit_app.topLevelWidgets()) - baseline:
-        widget.close()
-        widget.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    # Qt controls can own top-level popups that disappear with their windows.
+    for is_popup in (False, True):
+        for widget in set(audit_app.topLevelWidgets()) - baseline:
+            if (widget.windowType() == Qt.WindowType.Popup) == is_popup:
+                widget.close()
+                widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     from poppy.ui.theme import configure_theme, refresh_theme
     configure_theme({"mode": "Dark"})
     refresh_theme()

@@ -23,6 +23,7 @@ from poppy.core import APP_VERSION
 from poppy.core.download_watcher import default_download_folder
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
+from poppy.ui.weather_location import WeatherLocationEdit
 from poppy.core.storage import data_dir, data_path, write_json, spotify_cookie, protect_spotify_cookie
 
 
@@ -960,19 +961,23 @@ class SettingsWindow(QWidget):
         l_weath.addWidget(lbl_weath_hdr)
         l_weath.addWidget(lbl_weath_sub)
 
-        self.txt_weather_city = QLineEdit()
-        self.txt_weather_city.setPlaceholderText("City or Auto-detect")
-        self.txt_weather_city.setFixedWidth(220)
+        self.txt_weather_city = WeatherLocationEdit()
 
         self.combo_weather_unit = QComboBox()
         self.combo_weather_unit.addItems(["Celsius (°C)", "Fahrenheit (°F)"])
         self.combo_weather_unit.setFixedWidth(140)
 
         card_weath = _create_setting_card([
-            SettingRow("Location", "Enter a city or type Auto-detect to look up your IP location", self.txt_weather_city),
+            SettingRow("Location", "Choose a city from the list, or type Auto-detect to use your IP location.", self.txt_weather_city),
             SettingRow("Temperature Unit", "Display temperatures in Celsius or Fahrenheit", self.combo_weather_unit)
         ])
         l_weath.addWidget(card_weath)
+        self.lbl_weather_status = QLabel()
+        self.lbl_weather_status.setWordWrap(True)
+        set_widget_style(self.lbl_weather_status, "font-size: 12px; color: #a7b2bf;")
+        self.lbl_weather_status.hide()
+        self.txt_weather_city.status_changed.connect(self._show_weather_status)
+        l_weath.addWidget(self.lbl_weather_status)
         l_weath.addStretch()
 
         self.stack.addWidget(_make_scroll_area(page_weath))
@@ -1513,7 +1518,7 @@ class SettingsWindow(QWidget):
 
         # 6. Weather
         w_cfg = self.config.get("weather", {})
-        self.txt_weather_city.setText(str(w_cfg.get("city") or ""))
+        self.txt_weather_city.load_location(w_cfg)
         u_idx = 1 if w_cfg.get("unit", "celsius").lower() == "fahrenheit" else 0
         self.combo_weather_unit.setCurrentIndex(u_idx)
 
@@ -1538,6 +1543,12 @@ class SettingsWindow(QWidget):
 
     def _save_settings(self):
         self._preview_timer.stop()
+        location = self.txt_weather_city.selection()
+        if location is None:
+            self.select_page("Weather")
+            self.txt_weather_city.setFocus()
+            self._show_weather_status("Choose a city from the list, type Auto-detect, or clear the field to turn weather off.")
+            return False
         try:
             protected_cookie = protect_spotify_cookie(self.txt_sp_dc.text().strip())
         except OSError as error:
@@ -1555,7 +1566,6 @@ class SettingsWindow(QWidget):
             saved_dtab = sel_dtab_txt
 
         unit_str = "fahrenheit" if self.combo_weather_unit.currentIndex() == 1 else "celsius"
-        city_str = self.txt_weather_city.text().strip()
 
         new_config = {
             "clipboard": {"enabled": self.chk_clipboard_history.isChecked()},
@@ -1596,7 +1606,7 @@ class SettingsWindow(QWidget):
                 "auto_scroll_lyrics": self.chk_lyrics_auto_scroll.isChecked()
             },
             "weather": {
-                "city": city_str,
+                **location,
                 "unit": unit_str
             },
             "pomodoro": {
@@ -1648,6 +1658,10 @@ class SettingsWindow(QWidget):
         self.config = new_config
         self.settings_saved.emit(new_config)
         return True
+
+    def _show_weather_status(self, message):
+        self.lbl_weather_status.setText(message)
+        self.lbl_weather_status.setVisible(bool(message))
 
     def _on_screentime_reset_clicked(self):
         self.screentime_reset_requested.emit()

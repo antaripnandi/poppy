@@ -81,7 +81,7 @@ Fresh profiles leave clipboard text recording, automatic image staging, and scre
 
 Clearing the shelf removes its entries, not the original files. Capture cleanup preserves files still staged on the shelf. Floating notes save on close and are restored after exiting Poppy with them open. Save failures leave note content available and display an error.
 
-Weather stays off until you choose a city or explicitly enter **Auto-detect** in Settings. Weather uses HTTPS, and Auto-detect sends a request to an IP location provider. Lyrics providers receive track queries while lyrics are in use. Windows Data Protection encrypts the optional Spotify lyrics cookie in the active settings file for the current Windows account. Poppy sends Spotify credentials only on the original authenticated requests. Discord presence is optional.
+Weather stays off until you choose a city or explicitly enter **Auto-detect** in Settings. City searches use Open-Meteo over HTTPS, and Auto-detect sends a request to an IP location provider. Lyrics providers receive track queries while lyrics are in use. Windows Data Protection encrypts the optional Spotify lyrics cookie in the active settings file for the current Windows account. Poppy sends Spotify credentials only on the original authenticated requests. Discord presence is optional.
 
 ## Build the installer
 

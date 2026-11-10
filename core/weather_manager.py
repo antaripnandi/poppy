@@ -9,9 +9,59 @@ import threading
 import urllib.request
 import urllib.parse
 import json
+from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Signal, QTimer
 from poppy.ui.icons import Icons
+
+
+@dataclass(frozen=True)
+class WeatherLocation:
+    city: str
+    latitude: float
+    longitude: float
+    region: str = ""
+    country: str = ""
+    district: str = ""
+
+    @property
+    def label(self):
+        return ", ".join(dict.fromkeys(part for part in (self.city, self.district, self.region, self.country) if part))
+
+    @classmethod
+    def from_data(cls, data):
+        if not isinstance(data, dict) or not isinstance(data.get("city"), str) or not data["city"].strip():
+            return None
+        try:
+            latitude, longitude = float(data["latitude"]), float(data["longitude"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return None
+        details = {key: data[key].strip() for key in ("region", "country", "district") if isinstance(data.get(key), str)}
+        return cls(data["city"].strip(), latitude, longitude, **details)
+
+
+def city_search_url(query, count=8):
+    params = urllib.parse.urlencode({"name": query, "count": count})
+    return f"https://geocoding-api.open-meteo.com/v1/search?{params}"
+
+
+def city_search_results(payload):
+    results = payload.get("results", []) if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        raise ValueError("Invalid city search response")
+    cities = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        location = WeatherLocation.from_data({
+            "city": result.get("name"), "latitude": result.get("latitude"), "longitude": result.get("longitude"),
+            "region": result.get("admin1"), "country": result.get("country"), "district": result.get("admin2"),
+        })
+        if location:
+            cities.setdefault(location.label, location)
+    return cities
 
 
 class WeatherManager(QObject):
@@ -53,7 +103,10 @@ class WeatherManager(QObject):
 
     def _preferences(self):
         weather = self.config.get("weather", {})
-        return str(weather.get("city") or "").strip(), str(weather.get("unit") or "celsius").lower()
+        city = str(weather.get("city") or "").strip()
+        unit = str(weather.get("unit") or "celsius").lower()
+        location = WeatherLocation.from_data(weather.get("location"))
+        return city, unit, location if location and city == location.city else None
 
     def _worker(self, request=None, preferences=None):
         request = self._request if request is None else request
@@ -73,7 +126,7 @@ class WeatherManager(QObject):
             data = self._cached_data
         self.weather_updated.emit(data or {"display_text": "Weather unavailable"})
 
-    def _fetch(self, target_city, unit):
+    def _fetch(self, target_city, unit, location=None):
         if not target_city:
             return {"display_text": "Set a weather location in Settings"}
 
@@ -82,22 +135,18 @@ class WeatherManager(QObject):
         country = ""
         lat, lon = None, None
 
-        # 1a. If user supplied a specific city, geocode with Open-Meteo
-        if target_city.lower() != "auto-detect":
+        if location is not None:
+            city, region, country = location.city, location.region, location.country
+            lat, lon = location.latitude, location.longitude
+        elif target_city.lower() != "auto-detect":
+            # Older profiles may have a city name without a selected location.
             try:
-                enc_city = urllib.parse.quote(target_city)
-                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={enc_city}&count=1"
-                req = urllib.request.Request(geo_url, headers={"User-Agent": "Poppy/1.0"})
+                req = urllib.request.Request(city_search_url(target_city, count=1), headers={"User-Agent": "Poppy/1.0"})
                 with urllib.request.urlopen(req, timeout=4) as res:
-                    gdata = json.loads(res.read().decode())
-                    results = gdata.get("results")
-                    if results and isinstance(results, list):
-                        r = results[0]
-                        city = r.get("name", target_city)
-                        region = r.get("admin1", "")
-                        country = r.get("country", "")
-                        lat = float(r.get("latitude"))
-                        lon = float(r.get("longitude"))
+                    match = next(iter(city_search_results(json.load(res)).values()), None)
+                    if match:
+                        city, region, country = match.city, match.region, match.country
+                        lat, lon = match.latitude, match.longitude
             except Exception:
                 pass
 
