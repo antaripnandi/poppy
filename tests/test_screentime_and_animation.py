@@ -2,6 +2,8 @@
 Tests for Screen Time Manager, Settings integration, and Centered Pop-Out Animation.
 """
 
+from datetime import datetime
+
 import pytest
 from PySide6.QtWidgets import QApplication, QLayout
 from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QRect, QRectF, Qt
@@ -30,6 +32,26 @@ def test_screentime_duration_formatting():
     assert format_duration(3600) == "1h 00m"
     assert format_duration(3665) == "1h 01m"
     assert format_duration(7500) == "2h 05m"
+
+
+def test_clock_updates_seconds_only_when_home_shows_them(qapp, monkeypatch):
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 11, 11, 14, 20, 15, 250000)
+
+    monkeypatch.setattr("poppy.core.window.datetime", FixedClock)
+    window = DynamicNotchWindow({"appearance": {"layout": "Paper"}})
+    window.show()
+    assert window.lbl_clock.text() == "2:20 PM"
+    assert window._clock_timer.interval() == 44750
+
+    window._transition_to(NotchState.EXPANDED, "Home", animate=False)
+    assert window.tab_home.lbl_big_time.text() == "2:20:15 PM"
+    assert window._clock_timer.interval() == 750
+
+    window._switch_to_tab_by_name("Music", animate=False)
+    assert window._clock_timer.interval() == 44750
 
 
 def test_screentime_manager_tracking_and_reset(qapp):

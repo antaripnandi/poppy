@@ -83,23 +83,30 @@ class WeatherManager(QObject):
         self._timer.timeout.connect(self.refresh)
 
     def update_config(self, config: dict):
-        """Update weather preferences and trigger immediate background fetch."""
+        """Refresh when the forecast location or units change."""
         previous = self._preferences()
         self.config = config or {}
         if previous != self._preferences():
             self._cached_data = {}
-            self.weather_updated.emit({"display_text": "Updating weather…"})
-        self.refresh()
+            if self._preferences()[0]:
+                self.weather_updated.emit({"display_text": "Updating weather…"})
+            self.refresh()
 
     def start(self):
         """Starts periodic weather refresh and triggers initial fetch."""
         self.refresh()
-        self._timer.start()
 
     def refresh(self):
         """Asynchronously queries geolocation and live weather."""
         self._request += 1
-        threading.Thread(target=self._worker, args=(self._request, self._preferences()), daemon=True).start()
+        preferences = self._preferences()
+        if not preferences[0]:
+            self._timer.stop()
+            self._publish(self._request, preferences, self._fetch(*preferences))
+            return
+        if not self._timer.isActive():
+            self._timer.start()
+        threading.Thread(target=self._worker, args=(self._request, preferences), daemon=True).start()
 
     def _preferences(self):
         weather = self.config.get("weather", {})

@@ -208,11 +208,6 @@ class BluetoothManager(QObject):
         self._scanning = False
         self._closed = False
         self._scan_finished.connect(self._apply_scan)
-        self._timer = QTimer(self)
-        self._timer.setInterval(8000)  # Refresh every 8s
-        self._timer.timeout.connect(self.refresh)
-        self._timer.start()
-        QTimer.singleShot(200, self.refresh)
 
     def refresh(self):
         # Windows enumeration can block even without an inquiry. Keep a single
@@ -242,7 +237,6 @@ class BluetoothManager(QObject):
 
     def close(self):
         self._closed = True
-        self._timer.stop()
 
     @staticmethod
     def _get_devices() -> list[dict]:

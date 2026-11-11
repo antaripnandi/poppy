@@ -24,7 +24,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
-    QShortcut, QKeySequence, QIcon, QPen
+    QShortcut, QKeySequence, QIcon, QPen, QAction
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
@@ -229,10 +229,12 @@ class DynamicNotchWindow(QWidget):
         self._sys_timer.timeout.connect(lambda: self._update_system_metrics(visible_only=True))
 
         self._clock_timer = QTimer(self)
-        self._clock_timer.setInterval(1000)
+        self._clock_timer.setSingleShot(True)
+        self._clock_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._clock_timer.timeout.connect(self._update_clock)
 
         self._init_views()
+        self.tab_home.lbl_big_time.installEventFilter(self)
         self._connect_signals()
         self.caffeine.changed.connect(self._update_caffeine_ui)
         for button in (self.tab_home.btn_act_caffeine, self.btn_hdr_caffeine):
@@ -252,7 +254,6 @@ class DynamicNotchWindow(QWidget):
             self.screenshot_watcher.start()
         self.weather_manager.start()
         self._sys_timer.start()
-        self._clock_timer.start()
 
         # Apply initial collapsed geometry
         self._apply_geometry_for_state(NotchState.COLLAPSED, animate=False)
@@ -932,14 +933,23 @@ class DynamicNotchWindow(QWidget):
             self._download_activity = DownloadActivityMenu(self.download_watcher, self._open_download_folder, self)
         self._download_activity.popup(position)
 
+    def eventFilter(self, watched, event):
+        if (watched is self.tab_home.lbl_big_time and event.type() in (QEvent.Type.Show, QEvent.Type.Hide)
+                and not self._shutting_down):
+            self._update_clock()
+        return super().eventFilter(watched, event)
+
     def _update_clock(self):
         now = datetime.now()
-        time_12 = now.strftime("%I:%M:%S %p").lstrip("0")
+        show_seconds = self.tab_home.lbl_big_time.isVisible() and self._appearance.get("layout") != "Classic"
         time_short = now.strftime("%I:%M %p").lstrip("0")
-        date_str = now.strftime("%A, %d %B")
         self.lbl_clock.setText(time_short)
-        self.tab_home.lbl_big_time.setText(time_short if self._appearance.get("layout") == "Classic" else time_12)
-        self.tab_home.lbl_date.setText(date_str)
+        self.tab_home.lbl_big_time.setText(now.strftime("%I:%M:%S %p").lstrip("0") if show_seconds else time_short)
+        self.tab_home.lbl_date.setText(now.strftime("%A, %d %B"))
+        remaining_ms = 1000 - now.microsecond // 1000
+        if not show_seconds:
+            remaining_ms += (59 - now.second) * 1000
+        self._clock_timer.start(remaining_ms)
 
     def _update_system_metrics(self, *, visible_only=False):
         if self._appearance.get("mode") == "System" and is_light_theme() != resolve_light_mode("System"):
@@ -1491,25 +1501,32 @@ class DynamicNotchWindow(QWidget):
                 margin: 4px 6px;
             }
         """)
-        devices = getattr(self.bt_manager, "devices", [])
-        if devices:
-            for d in devices:
-                is_conn = d.get("connected", False)
-                status_icon = "🟢 " if is_conn else "⚪ "
-                status_text = "Connected" if is_conn else "Paired"
-                act = menu.addAction(f"{status_icon}{d.get('name', 'Device')}  ({status_text})")
-                act.triggered.connect(lambda checked=False: os.startfile("ms-settings:bluetooth"))
-        else:
-            act = menu.addAction("No paired Bluetooth devices detected")
-            act.setEnabled(False)
-
-        menu.addSeparator()
+        status = menu.addAction("Looking for Bluetooth devices…")
+        status.setEnabled(False)
+        separator = menu.addSeparator()
         act_bt = menu.addAction("Bluetooth & Devices Settings...")
         act_bt.triggered.connect(lambda: os.startfile("ms-settings:bluetooth"))
 
+        def show_devices(devices):
+            if not devices:
+                status.setText("No paired Bluetooth devices detected")
+                return
+            menu.removeAction(status)
+            for device in devices:
+                connection = "Connected" if device.get("connected") else "Paired"
+                action = QAction(f"{device.get('name', 'Device')} ({connection})", menu)
+                action.triggered.connect(lambda: os.startfile("ms-settings:bluetooth"))
+                menu.insertAction(separator, action)
+
         btn = self.tab_home.btn_act_bt
         pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
-        menu.exec(pos)
+        self.bt_manager.devices_updated.connect(show_devices)
+        try:
+            self.bt_manager.refresh()
+            menu.exec(pos)
+        finally:
+            self.bt_manager.devices_updated.disconnect(show_devices)
+            menu.deleteLater()
 
     def _on_camera_status_changed(self, active: bool):
         if hasattr(self, 'lbl_cam_dot'):
@@ -2229,6 +2246,7 @@ class DynamicNotchWindow(QWidget):
             self._applied_media_appearance = media_values
         if layout_changed:
             self._apply_layout_theme(app_cfg.get("layout", "Classic"))
+            self._update_clock()
         elif order_changed:
             self.tab_home.apply_layout(app_cfg["layout"], home_order(app_cfg["layout"], app_cfg.get("home_orders")))
         if light_changed or layout_changed:
