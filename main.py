@@ -107,6 +107,7 @@ def _check_install():
     from PySide6.QtNetwork import QSslSocket
     from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
     from winsdk.windows.storage.streams import DataReader
+    from poppy.core.weather_cities import local_city_search
 
     QPdfDocument()
     config = json.loads(resource_path("config.json").read_text(encoding="utf-8"))
@@ -117,7 +118,8 @@ def _check_install():
         if chime.read(4) != b"RIFF":
             return False
     probe = protect_spotify_cookie("poppy-install-check")
-    return spotify_cookie({"spotify_sp_dc_protected": probe}) == "poppy-install-check"
+    return (spotify_cookie({"spotify_sp_dc_protected": probe}) == "poppy-install-check"
+            and any(city.city == "Chennai" for city in local_city_search("Chennnai").values()))
 
 
 def main():

@@ -22,7 +22,10 @@ from PySide6.QtGui import QImage
 
 ROOT = Path(__file__).resolve().parents[1]
 AVATAR = "assets/branding/poppy-avatar.png"
-RESOURCES = ("config.json", AVATAR, "assets/sounds/chime.wav")
+RESOURCES = (
+    "config.json", AVATAR, "assets/sounds/chime.wav",
+    "assets/weather-cities.tsv.gz", "assets/weather-cities-LICENSE.txt",
+)
 RUNTIME_PACKAGES = (
     "PySide6-Essentials", "PySide6-Pdf", "shiboken6", "winsdk",
     "pypresence", "psutil", "pywin32", "nvidia-ml-py", "PyInstaller",

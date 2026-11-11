@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.1-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.2-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -81,7 +81,7 @@ Fresh profiles leave clipboard text recording, automatic image staging, and scre
 
 Clearing the shelf removes its entries, not the original files. Capture cleanup preserves files still staged on the shelf. Floating notes save on close and are restored after exiting Poppy with them open. Save failures leave note content available and display an error.
 
-Weather stays off until you choose a city or explicitly enter **Auto-detect** in Settings. City searches use Open-Meteo over HTTPS, and Auto-detect sends a request to an IP location provider. Lyrics providers receive track queries while lyrics are in use. Windows Data Protection encrypts the optional Spotify lyrics cookie in the active settings file for the current Windows account. Poppy sends Spotify credentials only on the original authenticated requests. Discord presence is optional.
+Weather stays off until you choose a city or explicitly enter **Auto-detect** in Settings. City suggestions use a bundled [GeoNames city index](assets/weather-cities-LICENSE.txt). Additional searches use Open-Meteo over HTTPS, and Auto-detect sends a request to an IP location provider. Lyrics providers receive track queries while lyrics are in use. Windows Data Protection encrypts the optional Spotify lyrics cookie in the active settings file for the current Windows account. Poppy sends Spotify credentials only on the original authenticated requests. Discord presence is optional.
 
 ## Build the installer
 

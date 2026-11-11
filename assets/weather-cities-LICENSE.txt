@@ -1,0 +1,9 @@
+Poppy's weather-cities.tsv.gz contains data from GeoNames (https://www.geonames.org/).
+The data is licensed under Creative Commons Attribution 4.0 International
+(https://creativecommons.org/licenses/by/4.0/).
+
+Sources retrieved 2026-11-11 from https://download.geonames.org/export/dump/:
+cities15000.zip, admin1CodesASCII.txt, and countryInfo.txt.
+
+Poppy combines city coordinates with region and country names, adds normalized
+search names, sorts the records by population, and removes unused columns.

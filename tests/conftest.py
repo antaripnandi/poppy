@@ -46,7 +46,17 @@ def isolate_runtime(tmp_path, monkeypatch, audit_app):
     from poppy.core.system_features import BluetoothManager
     from poppy.core.window import DynamicNotchWindow
     from poppy.ui import extended_views
+
+    autostart_enabled = False
+
+    def set_autostart(enable):
+        nonlocal autostart_enabled
+        autostart_enabled = enable
+        return True
+
     monkeypatch.setenv("POPPY_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("poppy.ui.settings_window.get_autostart_state", lambda: autostart_enabled)
+    monkeypatch.setattr("poppy.ui.settings_window.set_autostart_state", set_autostart)
     monkeypatch.setattr(MediaManager, "start", lambda self: None)
     monkeypatch.setattr(MediaManager, "_dispatch_command", lambda *args: None)
     monkeypatch.setattr(WeatherManager, "start", lambda self: None)
