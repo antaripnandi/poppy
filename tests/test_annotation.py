@@ -1,5 +1,9 @@
 """Screen drawing input, rendering and overlay lifecycle."""
 
+import ctypes
+from ctypes import wintypes
+from unittest.mock import Mock
+
 import pytest
 from PySide6.QtCore import Qt, QEvent, QPoint, QPointF, QRect
 from PySide6.QtGui import QColor, QMouseEvent
@@ -7,6 +11,7 @@ from PySide6.QtTest import QTest
 
 from poppy.ui.extended_views import ScreenAnnotationOverlay
 from poppy.core.window import DynamicNotchWindow, NotchState
+from poppy.core.annotation_wheel import AnnotationWheel, _MouseEvent
 
 
 @pytest.fixture
@@ -31,6 +36,36 @@ def stroke(app, overlay, points):
 def _pixel(image, x, y):
     scale = image.devicePixelRatio()
     return image.pixelColor(round(x * scale), round(y * scale))
+
+
+def test_annotation_wheel_routes_only_in_canvas_and_preserves_native_delta():
+    router = AnnotationWheel(1, 2)
+    native = Mock()
+    router._win = native
+
+    def window_bounds(hwnd, address):
+        bounds = ctypes.cast(address, ctypes.POINTER(wintypes.RECT)).contents
+        bounds.left, bounds.top, bounds.right, bounds.bottom = -800, 0, 0, 600
+        return True
+
+    native.GetWindowRect.side_effect = window_bounds
+    native.WindowFromPoint.return_value = 3
+    native.GetAncestor.return_value = 3
+    native.GetAsyncKeyState.return_value = 0
+    native.PostMessageW.return_value = True
+    native.CallNextHookEx.return_value = 0
+    event = _MouseEvent(wintypes.POINT(-240, 250), (-120 & 0xffff) << 16)
+    address = ctypes.addressof(event)
+    assert router._on_mouse(0, 0x020A, address) == 1
+    native.PostMessageW.assert_called_once_with(3, 0x020A, (-120 & 0xffff) << 16, (250 << 16) | (-240 & 0xffff))
+
+    native.PostMessageW.reset_mock()
+    native.GetAncestor.return_value = 2
+    assert router._on_mouse(0, 0x020A, address) == 0
+    native.GetAncestor.return_value = 3
+    event.point.x = 240
+    assert router._on_mouse(0, 0x020A, address) == 0
+    native.PostMessageW.assert_not_called()
 
 
 def test_empty_canvas_has_an_input_layer_and_clear_preserves_it(canvas, audit_app):
@@ -66,14 +101,14 @@ def test_color_controls_do_not_add_marks_or_recolor_old_strokes(canvas, audit_ap
     assert canvas._paths[1][1] == QColor(56, 189, 248)
 
 
-def test_shift_preserves_ink_and_toolbar_while_canvas_passes_input(canvas, audit_app, monkeypatch):
+def test_hold_to_interact_preserves_ink_and_toolbar(canvas, audit_app, monkeypatch):
     stroke(audit_app, canvas, [QPoint(100, 200), QPoint(150, 200)])
     toggle = Qt.WindowType.WindowTransparentForInput
-    shift = False
-    monkeypatch.setattr(canvas, "_shift_down", lambda: shift)
+    key_down = False
+    monkeypatch.setattr(canvas, "_interact_key_down", lambda: key_down)
     monkeypatch.setattr(canvas, "_mouse_down", lambda: False)
 
-    shift = True
+    key_down = True
     canvas._sync_input_mode()
     assert canvas.windowHandle().flags() & toggle
     assert not canvas.toolbar.windowHandle().flags() & toggle
@@ -83,7 +118,7 @@ def test_shift_preserves_ink_and_toolbar_while_canvas_passes_input(canvas, audit
     QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=QPoint(100, 250))
     assert len(canvas._paths) == 1
 
-    shift = False
+    key_down = False
     canvas._sync_input_mode()
     assert not canvas.windowHandle().flags() & toggle
     stroke(audit_app, canvas, [QPoint(100, 250), QPoint(150, 250)])
@@ -91,19 +126,19 @@ def test_shift_preserves_ink_and_toolbar_while_canvas_passes_input(canvas, audit
 
 
 def test_switches_without_splitting_a_mouse_gesture(canvas, monkeypatch):
-    shift = False
+    key_down = False
     mouse_down = False
-    monkeypatch.setattr(canvas, "_shift_down", lambda: shift)
+    monkeypatch.setattr(canvas, "_interact_key_down", lambda: key_down)
     monkeypatch.setattr(canvas, "_mouse_down", lambda: mouse_down)
     QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=QPoint(100, 200))
-    shift = True
+    key_down = True
     canvas._sync_input_mode()
     assert not canvas._passing_input
     QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=QPoint(150, 200))
     assert canvas._paths[-1][0].currentPosition() == QPointF(150, 200)
     assert canvas._passing_input
 
-    shift = False
+    key_down = False
     mouse_down = True
     canvas._sync_input_mode()
     assert canvas._passing_input

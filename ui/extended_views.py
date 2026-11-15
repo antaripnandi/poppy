@@ -31,6 +31,7 @@ from shiboken6 import isValid
 from poppy.ui.theme import contrast_ink, set_widget_style
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
+from poppy.core.annotation_wheel import AnnotationWheel
 from poppy.core.system_tools import lock_workstation
 from poppy.core.system_features import current_desktop_windows, activate_desktop_window
 from poppy.core.storage import data_path, write_json
@@ -944,7 +945,7 @@ class DesktopsTabView(QWidget):
 class ScreenAnnotationOverlay(QWidget):
     """Draw over the desktop and temporarily pass input to the window below."""
     closed = Signal()
-    _DRAW_HINT = "Hold Shift to interact"
+    _DRAW_HINT = "Hold F8 to interact"
     _INTERACT_HINT = "Interacting with apps"
 
     def __init__(self, parent=None, screen_geometry=None):
@@ -971,6 +972,7 @@ class ScreenAnnotationOverlay(QWidget):
         self._drawing = False
         self._close_emitted = False
         self._passing_input = False
+        self._wheel_router = None
         self._modifier_timer = QTimer(self, interval=12)
         self._modifier_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._modifier_timer.timeout.connect(self._sync_input_mode)
@@ -986,6 +988,7 @@ class ScreenAnnotationOverlay(QWidget):
         self.toolbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.toolbar.setObjectName("annotationToolbar")
         self.toolbar.setAccessibleName("Screen drawing toolbar")
+        self.toolbar.installEventFilter(self)
         self.toolbar.setCursor(Qt.CursorShape.ArrowCursor)
         set_widget_style(self.toolbar, "QFrame#annotationToolbar { background: rgba(18, 21, 28, 0.94); border-radius: 12px; border: none; }")
         tb_layout = QHBoxLayout(self.toolbar)
@@ -1025,7 +1028,7 @@ class ScreenAnnotationOverlay(QWidget):
 
         self.btn_interact = QPushButton("Interact")
         self.btn_interact.setCheckable(True)
-        self.btn_interact.setToolTip("Click and scroll apps under the drawing. Click again to draw, or hold Shift for a temporary switch.")
+        self.btn_interact.setToolTip("Click and scroll apps under the drawing. Click again to draw, or hold F8 to interact temporarily.")
         set_widget_style(self.btn_interact, """
             QPushButton { background: rgba(255,255,255,0.08); border: 1px solid transparent;
                           border-radius: 5px; color: #f1f5f9; font-size: 11px; padding: 2px 8px; }
@@ -1077,10 +1080,11 @@ class ScreenAnnotationOverlay(QWidget):
         super().hideEvent(event)
 
     @staticmethod
-    def _shift_down():
+    def _interact_key_down():
         if QApplication.platformName() == "windows":
-            # The high bit is the current physical state, even when another app has focus.
-            return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+            key_state = ctypes.windll.user32.GetAsyncKeyState
+            # F8 keeps scrolling unmodified. Shift still works for temporary clicks.
+            return bool((key_state(0x77) | key_state(0x10)) & 0x8000)
         return bool(QApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
 
     @staticmethod
@@ -1091,13 +1095,16 @@ class ScreenAnnotationOverlay(QWidget):
         return bool(QApplication.mouseButtons())
 
     def _sync_input_mode(self):
-        passing_input = self.btn_interact.isChecked() or self._shift_down()
+        passing_input = self.btn_interact.isChecked() or self._interact_key_down()
         if passing_input != self._passing_input and not self._drawing and not self._mouse_down():
             self._set_input_mode(passing_input)
 
     def _set_input_mode(self, passing_input):
         if passing_input == self._passing_input:
             return
+        if not passing_input and self._wheel_router is not None:
+            self._wheel_router.close()
+            self._wheel_router = None
         handle = self.windowHandle()
         if handle is not None:
             # Change the existing QWindow so the artwork and topmost position stay put.
@@ -1105,17 +1112,46 @@ class ScreenAnnotationOverlay(QWidget):
             if self.toolbar.isVisible():
                 self.toolbar.raise_()
         self._passing_input = passing_input
+        if passing_input and QApplication.platformName() == "windows":
+            self._wheel_router = AnnotationWheel(int(self.winId()), int(self.toolbar.winId()))
+            self._wheel_router.start()
         self._input_hint.setText(self._INTERACT_HINT if passing_input else self._DRAW_HINT)
         self.update()
 
+    def _forward_wheel(self, event):
+        router = self._wheel_router
+        if router is None:
+            return False
+        angle = event.angleDelta()
+        horizontal = not angle.y() and bool(angle.x())
+        if router.forward(horizontal, angle.x() if horizontal else angle.y()):
+            event.accept()
+            return True
+        return False
+
+    def wheelEvent(self, event):
+        if not self._forward_wheel(event):
+            super().wheelEvent(event)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Wheel and self._forward_wheel(event):
+            return True
+        return super().eventFilter(watched, event)
+
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Shift:
+        if event.key() in (Qt.Key.Key_Shift, Qt.Key.Key_F8):
             self._sync_input_mode()
+        if event.key() == Qt.Key.Key_F8:
+            event.accept()
+            return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
-        if event.key() == Qt.Key.Key_Shift:
+        if event.key() in (Qt.Key.Key_Shift, Qt.Key.Key_F8):
             self._sync_input_mode()
+        if event.key() == Qt.Key.Key_F8:
+            event.accept()
+            return
         super().keyReleaseEvent(event)
 
     def closeEvent(self, event):
