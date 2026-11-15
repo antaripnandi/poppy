@@ -15,7 +15,7 @@ import uuid
 import threading
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QPoint, QSize, Signal, QTimer, QUrl, QMimeData, QDate
+    Qt, QRect, QRectF, QPoint, QSize, Signal, QTimer, QUrl, QMimeData, QDate, QEvent
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
@@ -942,8 +942,10 @@ class DesktopsTabView(QWidget):
 # =====================================================================
 
 class ScreenAnnotationOverlay(QWidget):
-    """Live drawing surface with a nonzero input layer on Windows."""
+    """Draw over the desktop and temporarily pass input to the window below."""
     closed = Signal()
+    _DRAW_HINT = "Hold Shift to interact"
+    _INTERACT_HINT = "Interacting with apps"
 
     def __init__(self, parent=None, screen_geometry=None):
         super().__init__(parent)
@@ -968,20 +970,33 @@ class ScreenAnnotationOverlay(QWidget):
         self._pen_width = 3
         self._drawing = False
         self._close_emitted = False
+        self._passing_input = False
+        self._modifier_timer = QTimer(self, interval=12)
+        self._modifier_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._modifier_timer.timeout.connect(self._sync_input_mode)
         self._escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._escape.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self._escape.activated.connect(self.close)
 
-        # Floating toolbar
-        self.toolbar = QFrame(self)
+        # Give the toolbar its own native window so the canvas can pass input through.
+        self.toolbar = QFrame(self, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+                             | Qt.WindowType.WindowStaysOnTopHint)
+        self.toolbar.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.toolbar.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.toolbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.toolbar.setObjectName("annotationToolbar")
+        self.toolbar.setAccessibleName("Screen drawing toolbar")
         self.toolbar.setCursor(Qt.CursorShape.ArrowCursor)
         set_widget_style(self.toolbar, "QFrame#annotationToolbar { background: rgba(18, 21, 28, 0.94); border-radius: 12px; border: none; }")
         tb_layout = QHBoxLayout(self.toolbar)
         tb_layout.setContentsMargins(10, 4, 10, 4)
         tb_layout.setSpacing(8)
-        hint = QLabel("Drag to draw · Esc to close")
-        set_widget_style(hint, "background: transparent; color: #cbd5e1; font-size: 11px; border: none;")
-        tb_layout.addWidget(hint)
+        self._input_hint = QLabel(self._DRAW_HINT)
+        set_widget_style(self._input_hint, "background: transparent; color: #cbd5e1; font-size: 11px; border: none;")
+        metrics = self._input_hint.fontMetrics()
+        self._input_hint.setMinimumWidth(max(metrics.horizontalAdvance(text) for text in
+                                             (self._DRAW_HINT, self._INTERACT_HINT)) + 2)
+        tb_layout.addWidget(self._input_hint)
 
         # Colors
         colors = [
@@ -1008,6 +1023,18 @@ class ScreenAnnotationOverlay(QWidget):
 
         tb_layout.addStretch()
 
+        self.btn_interact = QPushButton("Interact")
+        self.btn_interact.setCheckable(True)
+        self.btn_interact.setToolTip("Click and scroll apps under the drawing. Click again to draw, or hold Shift for a temporary switch.")
+        set_widget_style(self.btn_interact, """
+            QPushButton { background: rgba(255,255,255,0.08); border: 1px solid transparent;
+                          border-radius: 5px; color: #f1f5f9; font-size: 11px; padding: 2px 8px; }
+            QPushButton:checked { background: rgba(255,255,255,0.23); }
+            QPushButton:focus { border-color: #a3b9ab; }
+        """)
+        self.btn_interact.toggled.connect(self._sync_input_mode)
+        tb_layout.addWidget(self.btn_interact)
+
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
         set_widget_style(self.btn_clear, "background: rgba(255,255,255,0.08); border: none; border-radius: 5px; color: #f1f5f9; font-size: 10px; padding: 2px 8px;")
@@ -1021,10 +1048,15 @@ class ScreenAnnotationOverlay(QWidget):
 
     def _position_toolbar(self):
         self.toolbar.adjustSize()
-        self.toolbar.move(max(8, (self.width() - self.toolbar.width()) // 2), 24)
+        self.toolbar.move(self.mapToGlobal(QPoint(max(8, (self.width() - self.toolbar.width()) // 2), 24)))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "toolbar"):
+            self._position_toolbar()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
         if hasattr(self, "toolbar"):
             self._position_toolbar()
 
@@ -1033,6 +1065,58 @@ class ScreenAnnotationOverlay(QWidget):
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._position_toolbar()
+        self.toolbar.show()
+        self._sync_input_mode()
+        self._modifier_timer.start()
+
+    def hideEvent(self, event):
+        self._modifier_timer.stop()
+        self.toolbar.hide()
+        self._set_input_mode(False)
+        super().hideEvent(event)
+
+    @staticmethod
+    def _shift_down():
+        if QApplication.platformName() == "windows":
+            # The high bit is the current physical state, even when another app has focus.
+            return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+        return bool(QApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+    @staticmethod
+    def _mouse_down():
+        if QApplication.platformName() == "windows":
+            key_state = ctypes.windll.user32.GetAsyncKeyState
+            return any(key_state(key) & 0x8000 for key in (1, 2, 4, 5, 6))
+        return bool(QApplication.mouseButtons())
+
+    def _sync_input_mode(self):
+        passing_input = self.btn_interact.isChecked() or self._shift_down()
+        if passing_input != self._passing_input and not self._drawing and not self._mouse_down():
+            self._set_input_mode(passing_input)
+
+    def _set_input_mode(self, passing_input):
+        if passing_input == self._passing_input:
+            return
+        handle = self.windowHandle()
+        if handle is not None:
+            # Change the existing QWindow so the artwork and topmost position stay put.
+            handle.setFlag(Qt.WindowType.WindowTransparentForInput, passing_input)
+            if self.toolbar.isVisible():
+                self.toolbar.raise_()
+        self._passing_input = passing_input
+        self._input_hint.setText(self._INTERACT_HINT if passing_input else self._DRAW_HINT)
+        self.update()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Shift:
+            self._sync_input_mode()
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Shift:
+            self._sync_input_mode()
+        super().keyReleaseEvent(event)
 
     def closeEvent(self, event):
         self._drawing = False
@@ -1050,7 +1134,16 @@ class ScreenAnnotationOverlay(QWidget):
         self._drawing = False
         self.update()
 
+    def event(self, event):
+        if (event.type() in (QEvent.Type.UngrabMouse, QEvent.Type.WindowDeactivate)
+                and getattr(self, "_drawing", False)):
+            self._finish_stroke()
+        return super().event(event)
+
     def mousePressEvent(self, event):
+        if self._passing_input:
+            event.ignore()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             self._drawing = True
@@ -1073,13 +1166,17 @@ class ScreenAnnotationOverlay(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drawing:
             if event.position() != self._current_path.currentPosition():
                 self._current_path.lineTo(event.position())
-            self._paths.append((QPainterPath(self._current_path), QColor(self._pen_color), self._pen_width))
-            self._drawing = False
-            self._current_path = QPainterPath()
-            self.update()
+            self._finish_stroke()
+            self._sync_input_mode()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def _finish_stroke(self):
+        self._paths.append((self._current_path, QColor(self._pen_color), self._pen_width))
+        self._drawing = False
+        self._current_path = QPainterPath()
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -1087,7 +1184,7 @@ class ScreenAnnotationOverlay(QWidget):
         # Zero-alpha pixels in a Windows layered window pass clicks through.
         # A 1/255 input layer keeps the desktop visible and receives pen strokes.
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
+        painter.fillRect(event.rect(), QColor(0, 0, 0, 0 if self._passing_input else 1))
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
         for path, col, w in self._paths:
