@@ -21,12 +21,21 @@ class NotchShadow(QWidget):
         geometry = QRect(bounds).adjusted(-margin, -margin, margin, margin)
         geometry.setTop(max(geometry.top(), screen_top))
         offset = bounds.topLeft() - geometry.topLeft()
-        self._path = outline.translated(offset.x(), offset.y())
-        self.setGeometry(geometry)
-        self.update()
+        path = outline.translated(offset.x(), offset.y())
+        if geometry != self.geometry():
+            self._path = path
+            self.setGeometry(geometry)
+            self.update()
+        elif path != self._path:
+            dirty = self._path.boundingRect().united(path.boundingRect()).toAlignedRect()
+            self._path = path
+            self.update(dirty.adjusted(-margin, -margin, margin, margin))
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.fillRect(event.rect(), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         outside = QPainterPath()
         outside.addRect(self.rect())

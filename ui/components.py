@@ -521,6 +521,8 @@ class PillLevel(QWidget):
         self._value = 0.0
         self._icon = Icons.VOLUME
         self._label = "0%"
+        self._target = 0
+        self._muted = False
         self._ink = QColor("white")
         self._text_font = QFont("Segoe UI")
         self._text_font.setPixelSize(12)
@@ -531,18 +533,19 @@ class PillLevel(QWidget):
 
     def show_level(self, name, icon, previous, value, duration, *, muted=False):
         continuing = self.isVisible() and self.accessibleName() == name
-        label = "Muted" if muted else f"{value}%"
-        if (continuing and self._icon == icon and self._label == label
+        target = 0 if muted else value
+        if (continuing and self._icon == icon and self._target == target and self._muted == muted
                 and (duration or self._motion.state() != QVariantAnimation.State.Running)):
             return
         start = self._value if continuing else previous
         self._motion.stop()
         self._icon = icon
-        self._label = label
+        self._target = target
+        self._muted = muted
         self.setAccessibleName(name)
-        self.setAccessibleDescription(self._label)
-        target = 0 if muted else value
+        self.setAccessibleDescription("Muted" if muted else f"{target}%")
         if duration and start != target:
+            self._set_fill(float(start))
             self._motion.setDuration(duration)
             self._motion.setStartValue(float(start))
             self._motion.setEndValue(float(target))
@@ -561,6 +564,7 @@ class PillLevel(QWidget):
 
     def _set_fill(self, value):
         self._value = value
+        self._label = "Muted" if self._muted else f"{round(value)}%"
         self.update()
 
     def hideEvent(self, event):
@@ -579,7 +583,9 @@ class PillLevel(QWidget):
         painter.drawText(QRect(inset, 0, 18, height), Qt.AlignmentFlag.AlignCenter, self._icon)
 
         painter.setFont(self._text_font)
-        text_width = max(painter.fontMetrics().horizontalAdvance(text) for text in ("100%", "Muted"))
+        metrics = painter.fontMetrics()
+        digits = 2 * max(metrics.horizontalAdvance(c) for c in "0123456789") + metrics.horizontalAdvance("%")
+        text_width = max(digits, metrics.horizontalAdvance("100%"), metrics.horizontalAdvance("Muted"))
         text_left = self.width() - inset - text_width
         painter.drawText(QRect(text_left, 0, text_width, height), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._label)
 

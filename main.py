@@ -176,7 +176,7 @@ def main():
 
     tray_menu = QMenu()
     act_show = QAction("Show Notch", tray_menu)
-    act_show.triggered.connect(notch.show)
+    act_show.triggered.connect(activate_notch)
     tray_menu.addAction(act_show)
 
     act_focus = QAction("Start Focus Sprint", tray_menu)

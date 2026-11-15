@@ -24,7 +24,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QBrush, QPainterPath, QRegion, QPixmap, QImage, QKeyEvent, QLinearGradient, QGuiApplication, QCursor,
-    QShortcut, QKeySequence, QIcon, QPen, QAction
+    QShortcut, QKeySequence, QIcon, QPen, QAction, QFontMetrics
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
@@ -60,6 +60,7 @@ from poppy.core.discord_rpc import DiscordRPCManager
 from poppy.core.screenshot_watcher import ScreenshotWatcher
 from poppy.core.system_controls import SystemAudioController, SystemBrightnessController, system_animations_enabled
 from poppy.core.brightness_flyout import BrightnessFlyout
+from poppy.core.outside_click import WM_INPUT, is_mouse_press, register_mouse_input
 from poppy.core.system_features import (
     PrivacyMonitor, ScreenCaptureShield, BluetoothManager,
     ClipboardHistoryManager, AudioEndpointManager, AppLauncherIndexer, clipboard_allows_history
@@ -126,7 +127,9 @@ class DynamicNotchWindow(QWidget):
         self._native_brightness_feedback = False
         self._brightness_level = None
         self._pending_brightness_step = 0
-        self._volume_scroll_delta = 0
+        self._level_scroll_delta = 0
+        self._level_scroll_mode = None
+        self._outside_click_registered = False
 
         # Frameless, Always on Top, Hidden from Alt+Tab / Taskbar
         self.setWindowFlags(
@@ -137,6 +140,7 @@ class DynamicNotchWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Poppy notch")
 
         # Core Engines
         pomo_cfg = self.config.get("pomodoro", {})
@@ -190,8 +194,10 @@ class DynamicNotchWindow(QWidget):
         self._start_corner_radius = 14
         self._start_outline_center = 0.0
         self._transition_frame: QRect | None = None
+        self._collapse_snapshot = None
         self.anim = QPropertyAnimation(self, b"notchGeometry", self)
         self.anim.finished.connect(self._on_animation_finished)
+        self.anim.valueChanged.connect(self._update_collapse_opacity)
 
         # Registries
         self._floating_notes = []
@@ -225,6 +231,9 @@ class DynamicNotchWindow(QWidget):
         self._click_outside_timer = QTimer(self)
         self._click_outside_timer.setInterval(35)
         self._click_outside_timer.timeout.connect(self._check_click_outside)
+
+        self._display_timer = QTimer(self, interval=0, singleShot=True)
+        self._display_timer.timeout.connect(self._refresh_display_geometry)
 
         # Periodic Timers
         self._sys_timer = QTimer(self)
@@ -260,6 +269,12 @@ class DynamicNotchWindow(QWidget):
 
         # Apply initial collapsed geometry
         self._apply_geometry_for_state(NotchState.COLLAPSED, animate=False)
+        app = QApplication.instance()
+        for screen in app.screens():
+            screen.geometryChanged.connect(self._schedule_display_refresh)
+        app.screenAdded.connect(self._watch_display)
+        app.screenRemoved.connect(self._schedule_display_refresh)
+        app.primaryScreenChanged.connect(self._schedule_display_refresh)
         self._update_clock()
         self._on_shelf_updated()
         QTimer.singleShot(0, self._restore_saved_notes)
@@ -296,8 +311,8 @@ class DynamicNotchWindow(QWidget):
         self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
         v_coll_layout.setContentsMargins(20, 0, 20, 0)
-        v_coll_layout.setSpacing(0)
-        v_coll_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        v_coll_layout.setSpacing(6)
+        v_coll_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Left zone artwork scales with the configured pill dimensions.
         left_box = QWidget(self)
@@ -310,40 +325,43 @@ class DynamicNotchWindow(QWidget):
         self.coll_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.coll_thumb.setText(Icons.MUSIC)
         l_layout.addWidget(self.coll_thumb)
-        v_coll_layout.addWidget(left_box, 1)
+        v_coll_layout.addWidget(left_box)
 
-        # Center Zone: Dead-center Clock & Pomodoro Badge
+        # Equal side zones leave the clock centered as the timer changes width.
         center_box = QWidget(self)
         c_layout = QHBoxLayout(center_box)
         c_layout.setContentsMargins(0, 0, 0, 0)
-        c_layout.setSpacing(6)
         c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.lbl_clock = QLabel("12:00")
         self.lbl_clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
         c_layout.addWidget(self.lbl_clock)
 
-        self.lbl_coll_pomo = QLabel("")
-        self.lbl_coll_pomo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_coll_pomo.setVisible(False)
-        c_layout.addWidget(self.lbl_coll_pomo)
         v_coll_layout.addWidget(center_box, 0)
 
         # Right zone: equalizer bars.
         right_box = QWidget(self)
         r_layout = QHBoxLayout(right_box)
         r_layout.setContentsMargins(0, 0, 0, 0)
-        r_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        r_layout.setSpacing(3)
+        self.lbl_coll_pomo = QLabel("")
+        self.lbl_coll_pomo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_coll_pomo.hide()
+        r_layout.addWidget(self.lbl_coll_pomo, 0, Qt.AlignmentFlag.AlignVCenter)
+        r_layout.addStretch()
 
         self.coll_visualizer = AudioVisualizerBars(self)
         r_layout.addWidget(self.coll_visualizer)
 
-        v_coll_layout.addWidget(right_box, 1)
+        v_coll_layout.addWidget(right_box)
         for widget in (self.coll_thumb, self.coll_visualizer):
             widget.hide()
 
         self._collapsed_contents = (left_box, center_box, right_box)
         self.pill_level = PillLevel(self.view_collapsed)
+        self._compact_opacity = QGraphicsOpacityEffect(self.view_collapsed)
+        self._compact_opacity.setEnabled(False)
+        self.view_collapsed.setGraphicsEffect(self._compact_opacity)
         self._apply_pill_font()
         self.pill_level.hide()
         self._pill_level_timer = QTimer(self)
@@ -466,7 +484,7 @@ class DynamicNotchWindow(QWidget):
         self._peek_opacity.setEnabled(False)
         self._peek_fade = QPropertyAnimation(self._peek_opacity, b"opacity", self)
         self._peek_fade.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._peek_fade.finished.connect(lambda: self._peek_opacity.setEnabled(False))
+        self._peek_fade.finished.connect(lambda: self._finish_reveal(self.view_peek, self._peek_opacity))
 
         # =====================================================================
         # 2b. Island View (Dynamic Island HUD for Screenshot & Staging)
@@ -558,7 +576,7 @@ class DynamicNotchWindow(QWidget):
         self._expanded_opacity.setEnabled(False)
         self._anim_opacity = QPropertyAnimation(self._expanded_opacity, b"opacity", self)
         self._anim_opacity.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._anim_opacity.finished.connect(lambda: self._expanded_opacity.setEnabled(False))
+        self._anim_opacity.finished.connect(lambda: self._finish_reveal(self.view_expanded, self._expanded_opacity))
         v_exp_layout = QVBoxLayout(self.view_expanded)
         v_exp_layout.setContentsMargins(14, 12, 14, 12)
         v_exp_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
@@ -754,7 +772,7 @@ class DynamicNotchWindow(QWidget):
             self.tab_strip.set_current_index(self._active_tab_names.index(tab_name), animate=animate, emit_signal=False)
         else:
             self.tab_strip.clear_selection()
-        self._resize_expanded_panel()
+        self._resize_expanded_panel(animate=animate)
 
     def _rebuild_tabs(self):
         previous = getattr(self, "_last_tab_name", "Home")
@@ -762,13 +780,18 @@ class DynamicNotchWindow(QWidget):
         self.tab_strip.set_tabs([(name, "") for name in self._active_tab_names])
         self._switch_to_tab_by_name(previous if previous in self._enabled_tab_names else self._active_tab_names[0], animate=False)
 
-    def _resize_expanded_panel(self):
+    def _resize_expanded_panel(self, *, animate=True):
         if self.state != NotchState.EXPANDED:
             return
-        if self.anim.state() != QPropertyAnimation.State.Running:
+        if not self._get_current_screen_geometry().contains(self.geometry()):
             self._apply_geometry_for_state(self.state, animate=False)
             return
         target = self._geometry_for_state(self.state)
+        if self.anim.state() != QPropertyAnimation.State.Running:
+            if target != self._displayed_geometry():
+                duration = min(160, self._transition_duration()) if animate else 0
+                self._animate_geometry(target, duration)
+            return
         if target != self.anim.endValue():
             remaining = self.anim.duration() - self.anim.currentTime()
             self._animate_geometry(target, remaining)
@@ -876,7 +899,11 @@ class DynamicNotchWindow(QWidget):
                 if not label.toolTip():
                     label.setToolTip(text)
                 label.setText(fitted)
-        self._island_timer.start(duration)
+        if opening or not self._point_on_surface(QCursor.pos()):
+            self._island_timer.start(duration)
+        else:
+            self._island_timer.stop()
+            self._peek_presence_timer.start()
 
     def trigger_island(self, title: str, text: str, *, download_folder=None):
         preferences = self.config.get("notifications", {})
@@ -1050,9 +1077,14 @@ class DynamicNotchWindow(QWidget):
             self._brightness_flyout = None
 
     def nativeEvent(self, event_type, message):
-        if event_type == b"windows_generic_MSG" and self._brightness_flyout:
+        if event_type == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
-            if msg.message == 0x218 and msg.wParam == 0x8013:  # WM_POWERBROADCAST
+            if msg.message == WM_INPUT:
+                if self._outside_click_registered and is_mouse_press(msg.lParam):
+                    position = QCursor.pos()
+                    QTimer.singleShot(0, self, lambda: self._dismiss_on_outside_press(position))
+                return False, 0  # Windows still owns raw-input cleanup.
+            if self._brightness_flyout and msg.message == 0x218 and msg.wParam == 0x8013:  # WM_POWERBROADCAST
                 if self._brightness_flyout.power_setting_changed(msg.lParam):
                     return True, 1
         return super().nativeEvent(event_type, message)
@@ -1106,7 +1138,7 @@ class DynamicNotchWindow(QWidget):
         self.pill_level.hide()
         for widget in self._collapsed_contents:
             widget.show()
-        if self.state == NotchState.COLLAPSED and self._displayed_geometry().contains(QCursor.pos()):
+        if self.state == NotchState.COLLAPSED and self._point_on_surface(QCursor.pos()):
             self._hover_peek_timer.start(140)
 
     def _show_volume(self, volume, muted, *, source=None):
@@ -1544,6 +1576,7 @@ class DynamicNotchWindow(QWidget):
 
     def _toggle_pin(self):
         self._is_pinned = not self._is_pinned
+        self._sync_outside_click()
         accent = self._theme["accent"]
         if self._is_pinned:
             set_widget_style(self.btn_hdr_pin, f"""
@@ -1856,7 +1889,7 @@ class DynamicNotchWindow(QWidget):
         return icon
 
     def _size_collapsed_art(self):
-        size = max(12, min(round(self._collapsed_h * 2 / 3), round(self._collapsed_w * 0.11)))
+        size = max(12, min(round(self.view_collapsed.height() * 2 / 3), round(self.view_collapsed.width() * 0.11)))
         radius = max(3, round(size * 0.24))
         self.coll_thumb.setFixedSize(size, size)
         self.coll_thumb.setStyleSheet(f"background: rgba(128,128,128,0.16); border-radius: {radius}px; color: #9ca8b7; font-family: '{get_fluent_font_family()}'; font-size: {max(9, size // 2)}px;")
@@ -2074,11 +2107,11 @@ class DynamicNotchWindow(QWidget):
             self._open_download_folder(folder)
 
     def _on_island_timeout(self):
-        from PySide6.QtGui import QCursor
-        if self.geometry().contains(QCursor.pos()):
-            self._island_timer.start(1500)
+        if self.state != NotchState.ISLAND:
             return
-        if self.state == NotchState.ISLAND:
+        if self._point_on_surface(QCursor.pos()):
+            self._peek_presence_timer.start()
+        else:
             self._collapse_to_pill()
 
     def _tear_off_sticky_note(self, text: str, note_id: str = None):
@@ -2262,13 +2295,26 @@ class DynamicNotchWindow(QWidget):
         self.update()
 
     def _apply_pill_font(self):
-        width = self._collapsed_w - 46 - 2 * max(self.coll_thumb.width(), self.coll_visualizer.width())
-        font = pill_text_font(self._appearance["pill_font"], self._appearance["pill_font_size"], self._collapsed_h, width)
+        width = self.view_collapsed.width()
+        height = self.view_collapsed.height()
+        text_width = width - 46 - 2 * max(self.coll_thumb.width(), self.coll_visualizer.width())
+        font = pill_text_font(self._appearance["pill_font"], self._appearance["pill_font_size"], height, text_width)
         family = "".join(char if char.isalnum() or char in " -_" else f"\\{ord(char):x} " for char in font.family())
-        style = (f'font-family: "{family}"; font-size: {font.pixelSize()}px; '
-                 f'font-weight: {int(font.weight())}; background: transparent; border: none;')
-        set_widget_style(self.lbl_clock, f"{style} color: #e2e8f0;")
-        set_widget_style(self.lbl_coll_pomo, f"{style} color: {self._theme['accent']};")
+        style = f'font-family: "{family}"; font-weight: {int(font.weight())}; background: transparent; border: none;'
+        size = font.pixelSize()
+        metrics = QFontMetrics(font)
+        digit = max(metrics.horizontalAdvance(c) for c in "0123456789")
+        suffix = max(metrics.horizontalAdvance(text) for text in (": AM", ": PM"))
+        clock_width = min(max(1, width - 52), 4 * digit + suffix + 2)
+        side_width = max(0, (width - 52 - clock_width) // 2)
+        left, _, right = self._collapsed_contents
+        left.setFixedWidth(side_width)
+        right.setFixedWidth(side_width)
+        self.lbl_clock.setFixedWidth(clock_width)
+        timer_width = max(0, side_width - self.coll_visualizer.width() - 6)
+        timer_size = max(8, min(size, size * timer_width // max(1, 4 * digit + metrics.horizontalAdvance(":"))))
+        set_widget_style(self.lbl_clock, f"{style} font-size: {size}px; color: #e2e8f0;")
+        set_widget_style(self.lbl_coll_pomo, f"{style} font-size: {timer_size}px; color: {self._theme['accent']};")
         self.pill_level.set_text_font(font)
 
     def _on_settings_saved(self, new_config: dict):
@@ -2329,8 +2375,9 @@ class DynamicNotchWindow(QWidget):
     # --- Mouse & State Transitions ---
     def enterEvent(self, event):
         self._leave_timer.stop()
-        if self.state == NotchState.ISLAND:
+        if self.state == NotchState.ISLAND and self._point_on_surface(QCursor.pos()):
             self._island_timer.stop()
+            self._peek_presence_timer.start()
         if self.state in (NotchState.PEEK, NotchState.EXPANDED):
             super().enterEvent(event)
             return
@@ -2344,12 +2391,12 @@ class DynamicNotchWindow(QWidget):
         if self._is_pinned and self.state == NotchState.EXPANDED:
             super().leaveEvent(event)
             return
-        from PySide6.QtGui import QCursor
-        # If cursor is STILL geometrically within the window, ignore child switch events
-        if self._displayed_geometry().contains(QCursor.pos()):
+        if self._point_on_surface(QCursor.pos()):
             return
-        self._volume_scroll_delta = 0
+        self._level_scroll_delta = 0
+        self._level_scroll_mode = None
         if self.state == NotchState.ISLAND:
+            self._peek_presence_timer.stop()
             self._island_timer.start(1800)
         elif self.state == NotchState.PEEK:
             self._leave_timer.start()
@@ -2358,7 +2405,7 @@ class DynamicNotchWindow(QWidget):
     def _on_hover_peek_timeout(self):
         auto_peek = self.config.get("notch", {}).get("auto_hover_peek", True)
         if (self.state == NotchState.COLLAPSED and auto_peek and not self._pill_level_timer.isActive()
-                and self._displayed_geometry().contains(QCursor.pos())):
+                and self._point_on_surface(QCursor.pos())):
             if self.anim.state() == QPropertyAnimation.State.Running:
                 self._hover_peek_timer.start(70)
                 return
@@ -2369,6 +2416,11 @@ class DynamicNotchWindow(QWidget):
             self._transition_to(NotchState.COLLAPSED)
 
     def _check_peek_presence(self):
+        if self.state == NotchState.ISLAND:
+            if not self._point_on_surface(QCursor.pos()):
+                self._peek_presence_timer.stop()
+                self._island_timer.start(1800)
+            return
         if self.state != NotchState.PEEK:
             return
         if self._peek_should_stay_open():
@@ -2376,22 +2428,33 @@ class DynamicNotchWindow(QWidget):
         elif not self._leave_timer.isActive():
             self._leave_timer.start()
 
+    def _point_on_surface(self, position):
+        return self._notch_path().contains(QPointF(self.mapFromGlobal(position)))
+
+    def _owns_popup(self, popup):
+        while popup is not None:
+            if popup is self:
+                return True
+            popup = popup.parentWidget()
+        return False
+
     def _peek_should_stay_open(self):
         if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
             return True
         pointer = QCursor.pos()
-        local = self.mapFromGlobal(pointer)
-        mask = self.mask()
-        if self._displayed_geometry().contains(pointer) and (mask.isEmpty() or mask.contains(local)):
+        if self._point_on_surface(pointer):
             return True
         if self.peek_volume_menu.isVisible() and self.peek_volume_menu.geometry().contains(pointer):
             return True
         # Leave context menus open until the user dismisses them. The speaker
         # popup is part of the hover surface and follows its leave grace period.
         popup = QApplication.activePopupWidget()
-        return popup is not None and popup is not self.peek_volume_menu
+        return popup is not self.peek_volume_menu and self._owns_popup(popup)
 
     def mousePressEvent(self, event):
+        if not self._point_on_surface(event.globalPosition().toPoint()):
+            event.ignore()
+            return
         pos = event.position().toPoint()
         child = self.childAt(pos)
         if child and (isinstance(child, QPushButton) or isinstance(child.parent(), QPushButton)):
@@ -2415,29 +2478,44 @@ class DynamicNotchWindow(QWidget):
         if self.state in (NotchState.COLLAPSED, NotchState.PEEK):
             delta = event.angleDelta().y()
             phase = event.phase()
-            if phase in (Qt.ScrollPhase.ScrollBegin, Qt.ScrollPhase.ScrollEnd):
-                self._volume_scroll_delta = 0
+            modifiers = event.modifiers()
+            mode = "brightness" if modifiers == Qt.KeyboardModifier.ShiftModifier else None
+            if modifiers == Qt.KeyboardModifier.NoModifier and self.config.get("notch", {}).get("scroll_volume", True):
+                mode = "volume"
+            if mode != self._level_scroll_mode or phase in (Qt.ScrollPhase.ScrollBegin, Qt.ScrollPhase.ScrollEnd):
+                self._level_scroll_delta = 0
+                self._level_scroll_mode = mode
             if phase == Qt.ScrollPhase.ScrollMomentum:
                 event.accept()
                 return
-            if delta and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
-                self._volume_scroll_delta = 0
-                self._step_brightness(5 if delta > 0 else -5)
-                event.accept()
-                return
-            if delta and event.modifiers() == Qt.KeyboardModifier.NoModifier and self.config.get("notch", {}).get("scroll_volume", True):
-                if self._volume_scroll_delta * delta < 0:
-                    self._volume_scroll_delta = 0
-                self._volume_scroll_delta += delta
-                if abs(self._volume_scroll_delta) >= 120:
-                    direction = 1 if self._volume_scroll_delta > 0 else -1
-                    self._volume_scroll_delta = direction * (abs(self._volume_scroll_delta) % 120)
-                    self._step_volume(2 * direction)
+            if mode and delta and self._point_on_surface(event.globalPosition().toPoint()):
+                if self._level_scroll_delta * delta < 0:
+                    self._level_scroll_delta = 0
+                total = self._level_scroll_delta + delta
+                count, remainder = divmod(abs(total), 120)
+                direction = -1 if total < 0 else 1
+                self._level_scroll_delta = remainder * direction
+                if count:
+                    if mode == "brightness":
+                        self._step_brightness(5 * count * direction)
+                    else:
+                        self._step_volume(2 * count * direction)
                 event.accept()
                 return
         super().wheelEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent):
+        if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space)
+                and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+                and not event.isAutoRepeat()):
+            if self.state in (NotchState.COLLAPSED, NotchState.PEEK):
+                self._transition_to(NotchState.EXPANDED)
+                event.accept()
+                return
+            if self.state == NotchState.ISLAND:
+                self._activate_island()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Escape:
             if self.state != NotchState.COLLAPSED:
                 self._collapse_to_pill()
@@ -2467,20 +2545,24 @@ class DynamicNotchWindow(QWidget):
     def _collapse_to_pill(self):
         self._leave_timer.stop()
         self._island_timer.stop()
-        self._click_outside_timer.stop()
         self._transition_to(NotchState.COLLAPSED)
 
-    def _start_click_outside_timer(self):
-        if not self._shutting_down and self.state == NotchState.EXPANDED:
-            self._click_outside_timer.start()
+    def _sync_outside_click(self, *, stop=False):
+        watch = (not stop and not self._shutting_down and not self._is_pinned and self.isVisible()
+                 and not self.isMinimized() and self.state == NotchState.EXPANDED
+                 and QApplication.platformName() == "windows")
+        if watch and not self._outside_click_registered:
+            self._outside_click_registered = register_mouse_input(int(self.winId()))
+        elif not watch and self._outside_click_registered:
+            register_mouse_input(None)
+            self._outside_click_registered = False
+        if watch and not self._outside_click_registered:
+            if not self._click_outside_timer.isActive():
+                self._click_outside_timer.start()
+        else:
+            self._click_outside_timer.stop()
 
     def _check_click_outside(self):
-        if self._is_pinned or self._command_palette is not None:
-            return
-        if self.state != NotchState.EXPANDED:
-            self._click_outside_timer.stop()
-            return
-
         try:
             # 0x01 = VK_LBUTTON, 0x02 = VK_RBUTTON
             left_down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
@@ -2488,11 +2570,13 @@ class DynamicNotchWindow(QWidget):
         except Exception:
             return
 
-        if not (left_down or right_down):
-            return
+        if left_down or right_down:
+            self._dismiss_on_outside_press(QCursor.pos())
 
-        cursor_pos = QCursor.pos()
-        if self._displayed_geometry().contains(cursor_pos):
+    def _dismiss_on_outside_press(self, position):
+        if self._is_pinned or self._command_palette is not None or self.state != NotchState.EXPANDED:
+            return
+        if self._point_on_surface(position) or self._owns_popup(QApplication.activePopupWidget()):
             return
 
         # Don't collapse if user is actively dragging a slider
@@ -2502,32 +2586,24 @@ class DynamicNotchWindow(QWidget):
            (hasattr(self.tab_music, "vol_slider") and self.tab_music.vol_slider.isSliderDown()):
             return
 
-        # Don't collapse if clicking inside child dialogs or popups
-        if self._settings_window and self._settings_window.isVisible() and self._settings_window.geometry().contains(cursor_pos):
+        windows = (self._settings_window, *self._floating_notes, *self._floating_windows)
+        if any(window is not None and window.isVisible() and window.frameGeometry().contains(position)
+               for window in windows):
             return
-        for note in getattr(self, "_sticky_notes", []):
-            if note.isVisible() and note.geometry().contains(cursor_pos):
-                return
-        if QApplication.activePopupWidget():
-            return
-
-        self._click_outside_timer.stop()
         self._collapse_to_pill()
 
     def changeEvent(self, event):
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "anim"):
+            self._sync_outside_click()
+            self._sync_notch_shadow()
         if event.type() == QEvent.Type.ActivationChange:
             if self._is_pinned:
                 super().changeEvent(event)
                 return
             if not self.isActiveWindow() and self.state == NotchState.EXPANDED:
-                if self._settings_window and self._settings_window.isActiveWindow():
-                    pass
-                elif any(getattr(note, "isActiveWindow", lambda: False)() for note in getattr(self, "_sticky_notes", [])):
-                    pass
-                elif QApplication.activePopupWidget():
-                    pass
-                else:
-                    self._click_outside_timer.stop()
+                active = QApplication.activeWindow()
+                own_windows = (self._settings_window, self._command_palette, *self._floating_notes, *self._floating_windows)
+                if not ((active is not None and active in own_windows) or self._owns_popup(QApplication.activePopupWidget())):
                     self._collapse_to_pill()
         super().changeEvent(event)
 
@@ -2542,10 +2618,13 @@ class DynamicNotchWindow(QWidget):
         start_radius = self._outline_radius()
         start_center = self._outline_bounds().center().x() + self.x()
         velocity = self._geometry_velocity()
+        snapshot = (self.grab(), self.pos()) if (new_state == NotchState.COLLAPSED and self.isVisible()
+                                                 and animate and self._transition_duration()) else None
         self.anim.stop()
+        self._collapse_snapshot = snapshot
         self._peek_presence_timer.stop()
+        self._hover_peek_timer.stop()
         self._leave_timer.stop()
-        self._click_outside_timer.stop()
         self.peek_volume_menu.hide()
         if self.state == NotchState.ISLAND:
             self._island_download_folder = None
@@ -2568,7 +2647,8 @@ class DynamicNotchWindow(QWidget):
 
         self.state = new_state
         if new_state not in (NotchState.COLLAPSED, NotchState.PEEK):
-            self._volume_scroll_delta = 0
+            self._level_scroll_delta = 0
+            self._level_scroll_mode = None
         self._sync_brightness_flyout()
         if new_state != NotchState.COLLAPSED and self._pill_level_timer.isActive():
             self._pill_level_timer.stop()
@@ -2576,8 +2656,6 @@ class DynamicNotchWindow(QWidget):
         if new_state == NotchState.PEEK:
             self._show_peek_timeline()
             self._sync_system_controls()
-            self.view_peek.layout().activate()
-            self._elide_peek_metadata()
         self._apply_geometry_for_state(new_state, animate=animate, start_radius=start_radius,
                                        start_center=start_center, velocity=velocity)
         self.update()
@@ -2586,10 +2664,10 @@ class DynamicNotchWindow(QWidget):
             self._sync_system_controls(force=True)
             self.raise_()
             self.activateWindow()
-            QTimer.singleShot(220, self, self._start_click_outside_timer)
         elif new_state == NotchState.PEEK:
             self.view_peek.setFocus(Qt.FocusReason.OtherFocusReason)
             self._peek_presence_timer.start()
+        self._sync_outside_click()
 
     def _get_current_screen_geometry(self) -> QRect:
         """Multi-monitor aware screen lookup using configured display or cursor fallback."""
@@ -2610,27 +2688,67 @@ class DynamicNotchWindow(QWidget):
             screen = QApplication.primaryScreen()
         return screen.geometry() if screen else QRect(0, 0, 1920, 1080)
 
+    def _watch_display(self, screen):
+        screen.geometryChanged.connect(self._schedule_display_refresh)
+        self._schedule_display_refresh()
+
+    def _schedule_display_refresh(self):
+        if not self._shutting_down:
+            self._display_timer.start()
+
+    def _refresh_display_geometry(self):
+        if not self._shutting_down:
+            self._apply_geometry_for_state(self.state, animate=False)
+
     def _recenter_window(self):
         """Ensure the window is mathematically centered on the active screen at all times."""
         screen = self._get_current_screen_geometry()
         w = self.width()
         top_offset = getattr(self, "_top_offset", 0)
         expected_x = screen.x() + (screen.width() - w) // 2
-        expected_y = screen.y() + top_offset if self._style == "Notch" else screen.y() + max(8, 8 + top_offset)
+        top_offset = max(0, top_offset + (8 if self._style != "Notch" else 0))
+        expected_y = screen.y() + min(top_offset, max(0, screen.height() - 1))
         if self.x() != expected_x or self.y() != expected_y:
             self.move(expected_x, expected_y)
 
     def _geometry_for_state(self, state: NotchState) -> QRect:
         screen = self._get_current_screen_geometry()
+        top_offset = max(0, self._top_offset + (8 if self._style != "Notch" else 0))
+        top_offset = min(top_offset, max(0, screen.height() - 1))
+        max_height = max(1, screen.height() - top_offset)
         if state == NotchState.COLLAPSED:
-            self._target_size = (self._collapsed_w, self._collapsed_h)
+            self._target_size = (min(self._collapsed_w, screen.width()), min(self._collapsed_h, max_height))
+            if self.view_collapsed.size() != QSize(*self._target_size):
+                self.view_collapsed.setFixedSize(*self._target_size)
+                self._size_collapsed_art()
+                self._refresh_collapsed_art()
+                self._apply_pill_font()
+                self.pill_level.setGeometry(self.view_collapsed.rect())
         elif state == NotchState.PEEK:
-            self._target_size = self.PEEK_SIZE
+            width, height = self.PEEK_SIZE
+            self._target_size = (min(width, screen.width()), min(height, max_height))
+            self.view_peek.setFixedSize(*self._target_size)
+            art_size = min(82, max(24, self._target_size[0] - 170))
+            self.peek_thumb.setVisible(self._target_size[0] >= 194)
+            if self.peek_thumb.width() != art_size:
+                self.peek_thumb.setFixedSize(art_size, art_size)
+                artwork = self.tab_music._artwork_pixmap
+                if not artwork.isNull():
+                    self.peek_thumb.setPixmap(self.tab_music._rounded_art(artwork, art_size, 6))
+            self.view_peek.layout().activate()
+            self._elide_peek_metadata()
         elif state == NotchState.ISLAND:
-            self._target_size = (420, 64)
+            self._target_size = (min(420, screen.width()), min(64, max_height))
+            self.view_island.setFixedSize(*self._target_size)
+            compact = self._target_size[0] < 340
+            layout = self.view_island.layout()
+            inset = 10 if compact else 22
+            layout.setContentsMargins(inset, 8, inset, 8)
+            layout.setSpacing(4 if compact else 6)
+            self.btn_isl_chat.setMinimumWidth(0 if compact else 64)
         elif state == NotchState.EXPANDED:
             page = self.tab_stack.currentWidget()
-            max_height = screen.height() - 56 - max(0, self._top_offset)
+            max_height = max(1, max_height - 56)
             layout = self.view_expanded.layout()
             layout.activate()
             margins = layout.contentsMargins()
@@ -2638,7 +2756,7 @@ class DynamicNotchWindow(QWidget):
             chrome_height += sum(layout.itemAt(i).minimumSize().height()
                                  for i in range(layout.count()) if layout.itemAt(i).widget() is not self.tab_stack)
             preferred_height = min(max(self._open_h, 480), max_height)
-            w = min(max(self._open_w, 780, page.minimumSizeHint().width() + 28), screen.width() - 16)
+            w = min(max(self._open_w, 780, page.minimumSizeHint().width() + 28), max(1, screen.width() - 16))
             home_height = 0
             if page is self.tab_home:
                 home_height = page.fit_height(preferred_height - chrome_height, w, max_height=max_height - chrome_height)
@@ -2649,10 +2767,8 @@ class DynamicNotchWindow(QWidget):
             self.view_expanded.setFixedSize(*self._target_size)
 
         w, h = self._target_size
-        top_offset = getattr(self, "_top_offset", 0)
         x = screen.x() + (screen.width() - w) // 2
-        y = screen.y() + top_offset if self._style == "Notch" else screen.y() + max(8, 8 + top_offset)
-        return QRect(x, y, w, h)
+        return QRect(x, screen.y() + top_offset, w, h)
 
     def _transition_duration(self) -> int:
         if not system_animations_enabled():
@@ -2663,30 +2779,41 @@ class DynamicNotchWindow(QWidget):
                                   start_radius: float | None = None, start_center: float | None = None,
                                   velocity: tuple[float, float] | None = None):
         self._anim_opacity.stop()
-        self._expanded_opacity.setEnabled(False)
+        self._finish_reveal(self.view_expanded, self._expanded_opacity)
         self._peek_fade.stop()
-        self._peek_opacity.setEnabled(False)
+        self._finish_reveal(self.view_peek, self._peek_opacity)
 
         target = self._geometry_for_state(state)
         duration = round(self._transition_duration() * self.MOTION_PROFILES[state][0]) if animate else 0
         reveal = None
         if duration and target != self._displayed_geometry():
             if state == NotchState.EXPANDED:
-                reveal = self._anim_opacity, self._expanded_opacity, min(56, duration / 4)
+                reveal = self.view_expanded, self._anim_opacity, self._expanded_opacity, min(56, duration / 4)
             elif state == NotchState.PEEK:
-                reveal = self._peek_fade, self._peek_opacity, min(20, duration / 8)
+                reveal = self.view_peek, self._peek_fade, self._peek_opacity, min(20, duration / 8)
         if reveal:
-            fade, opacity, delay = reveal
+            view, fade, opacity, delay = reveal
             fade.setDuration(duration)
             key = fade.easingCurve().valueForProgress(delay / duration)
             fade.setKeyValues([(0.0, 0.0), (key, 0.0), (1.0, 1.0)])
             # Hide the anchored content before the native host changes size.
             opacity.setOpacity(0.0)
             opacity.setEnabled(True)
+            view.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._animate_geometry(target, duration, start_radius=start_radius, start_center=start_center,
                                velocity=velocity)
         if reveal:
             fade.start()
+
+    def _finish_reveal(self, view, effect):
+        effect.setEnabled(False)
+        view.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+
+    def _update_collapse_opacity(self):
+        if self._collapse_snapshot is not None and self.anim.state() == QPropertyAnimation.State.Running:
+            progress = self.anim.currentTime() / self.anim.duration()
+            self._compact_opacity.setOpacity(min(1.0, max(0.0, (progress - 0.10) / 0.55)))
+            self._compact_opacity.setEnabled(progress < 0.65)
 
     def _geometry_velocity(self) -> tuple[float, float] | None:
         if self.anim.state() != QPropertyAnimation.State.Running:
@@ -2748,13 +2875,12 @@ class DynamicNotchWindow(QWidget):
         start = self._displayed_geometry()
         if duration <= 0 or start == target:
             self._release_transition_host()
+            self._clear_collapse_snapshot()
             self.setGeometry(target)
             self._position_surface_view()
             self._update_clickthrough_mask()
             self._sync_notch_shadow()
             return
-        if self._notch_shadow is not None:
-            self._notch_shadow.hide()
         # Clear the native region while resizing to avoid repeated DWM stalls.
         self.clearMask()
         self.anim.setDuration(duration)
@@ -2771,6 +2897,9 @@ class DynamicNotchWindow(QWidget):
         screen_x = self._get_current_screen_geometry().x()
         host.setLeft(host.left() - (host.left() - screen_x) % quantum)
         self.setGeometry(host)
+        if self._collapse_snapshot is not None:
+            self._compact_opacity.setOpacity(0.0)
+            self._compact_opacity.setEnabled(True)
         self._position_surface_view()
         self.anim.start()
 
@@ -2783,14 +2912,17 @@ class DynamicNotchWindow(QWidget):
 
     def _on_animation_finished(self):
         self._release_transition_host()
+        self._clear_collapse_snapshot()
         self._update_clickthrough_mask()
         self._sync_notch_shadow()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_notch_shadow()
+        self._sync_outside_click()
 
     def hideEvent(self, event):
+        self._sync_outside_click(stop=True)
         if self._notch_shadow is not None:
             self._notch_shadow.hide()
         super().hideEvent(event)
@@ -2800,14 +2932,15 @@ class DynamicNotchWindow(QWidget):
         if self._notch_shadow is not None and self._notch_shadow.isVisible() and self._transition_frame is None:
             self._sync_notch_shadow()
 
-    def _sync_notch_shadow(self):
+    def _sync_notch_shadow(self, outline=None):
         show = (self.isVisible() and self._appearance["notch_shadow"]
-                and not self._is_screen_shielded and self._transition_frame is None
+                and not self.isMinimized() and not self._is_screen_shielded
                 and QApplication.platformName() == "windows")
         if show:
             if self._notch_shadow is None:
                 self._notch_shadow = NotchShadow(self)
-            self._notch_shadow.follow(self.geometry(), self._notch_path(), self._get_current_screen_geometry().top())
+            path = self._notch_path() if outline is None else outline
+            self._notch_shadow.follow(self.geometry(), path, self._get_current_screen_geometry().top())
             self._notch_shadow.show()
         elif self._notch_shadow is not None:
             self._notch_shadow.hide()
@@ -2836,7 +2969,9 @@ class DynamicNotchWindow(QWidget):
         anchor = self.anim.endValue().topLeft() - self.geometry().topLeft()
         view.move(anchor)
         # Clip the parent so opacity effects still paint the view at full size.
-        self._surface_clip.setMask(QRegion(self._notch_path().toFillPolygon().toPolygon()))
+        outline = self._notch_path()
+        self._surface_clip.setMask(QRegion(outline.toFillPolygon().toPolygon()))
+        self._sync_notch_shadow(outline)
 
     def _update_clickthrough_mask(self):
         region = QRegion(self._notch_path().toFillPolygon().toPolygon())
@@ -2935,6 +3070,16 @@ class DynamicNotchWindow(QWidget):
         gradient.setColorAt(0.0, grad_col)
         gradient.setColorAt(1.0, bg_col)
         painter.fillPath(path, QBrush(gradient))
+        if self._collapse_snapshot is not None and self.anim.state() == QPropertyAnimation.State.Running:
+            snapshot, origin = self._collapse_snapshot
+            painter.setClipPath(path)
+            progress = self.anim.currentTime() / self.anim.duration()
+            painter.setOpacity(max(0.0, 1.0 - progress / 0.45))
+            painter.drawPixmap(origin - self.pos(), snapshot)
+
+    def _clear_collapse_snapshot(self):
+        self._collapse_snapshot = None
+        self._compact_opacity.setEnabled(False)
 
     def closeEvent(self, event):
         if self._shutting_down:
@@ -2948,6 +3093,7 @@ class DynamicNotchWindow(QWidget):
                 event.ignore()
                 return
         self._shutting_down = True
+        self._sync_outside_click(stop=True)
         self._stop_system_level_controls()
         self.download_watcher.close()
         self.caffeine.stop()
