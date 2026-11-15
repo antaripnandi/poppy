@@ -48,6 +48,7 @@ from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
 from poppy.ui.app_mixer import AppMixerMenu
 from poppy.ui.download_activity import DownloadActivityMenu
+from poppy.ui.drawer_tools import DrawerToolButton
 from poppy.ui.notch_shadow import NotchShadow
 from poppy.ui.pill_fonts import pill_text_font
 from poppy.ui.styles import DEFAULT_THEME, get_theme, get_stylesheet, normalize_appearance
@@ -618,16 +619,12 @@ class DynamicNotchWindow(QWidget):
 
         # Window actions stay directly accessible below the tab content.
         window_tools = (
-            ("btn_hdr_shield", Icons.SHIELD, "Hide from screen capture", self._toggle_screen_shield),
-            ("btn_hdr_pencil", Icons.PENCIL, "Draw on screen", self._toggle_annotation),
-            ("btn_hdr_popout", Icons.TEAR_OFF, "Float current tab", self._pop_out_current_tab),
-            ("btn_hdr_pin", Icons.PIN, "Keep panel open", self._toggle_pin),
-            ("btn_hdr_caffeine", Icons.POWER, "Keep awake", self._toggle_caffeine),
+            ("btn_hdr_shield", "shield", "Hide from screen capture", self._toggle_screen_shield, True),
+            ("btn_hdr_pencil", "pencil", "Draw on screen", self._toggle_annotation, False),
+            ("btn_hdr_popout", "popout", "Float current tab", self._pop_out_current_tab, False),
+            ("btn_hdr_pin", "pin", "Keep panel open", self._toggle_pin, True),
+            ("btn_hdr_caffeine", "awake", "Keep awake", self._toggle_caffeine, True),
         )
-        for name, icon, title, callback in window_tools:
-            button = IconButton(icon, title, size=28, is_fluent=True, parent=self)
-            button.clicked.connect(callback)
-            setattr(self, name, button)
 
         self.btn_settings = IconButton(Icons.SETTINGS, "Settings", size=32, font_size=15, is_fluent=True)
         self.btn_settings.clicked.connect(self.open_settings)
@@ -735,8 +732,11 @@ class DynamicNotchWindow(QWidget):
         commands.clicked.connect(self.open_commands)
         tools.addWidget(commands)
         tools.addStretch()
-        for name, _, _, _ in window_tools:
-            tools.addWidget(getattr(self, name))
+        for name, icon, title, callback, toggle in window_tools:
+            button = DrawerToolButton(icon, title, toggle=toggle, parent=self.view_expanded)
+            button.clicked.connect(callback)
+            tools.addWidget(button)
+            setattr(self, name, button)
         v_exp_layout.addLayout(tools)
         self.view_expanded.setVisible(False)
 
@@ -1271,28 +1271,12 @@ class DynamicNotchWindow(QWidget):
         if is_on:
             duration = self.caffeine.minutes
             tip = f"Keep awake for {duration} minutes. Click to stop." if duration else "Keeping the PC awake. Click to stop."
-            style = """
-                background: rgba(245, 158, 11, 0.22);
-                border: none;
-                border-radius: 6px;
-                color: #fbbf24;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """
         else:
             tip = "Click to keep the PC awake. Right-click for timed options."
-            style = """
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #94a3b8;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """
         self.tab_home.btn_act_caffeine.setChecked(is_on)
         self.tab_home.btn_act_caffeine.setToolTip(tip)
         if hasattr(self, 'btn_hdr_caffeine') and self.btn_hdr_caffeine:
-            set_widget_style(self.btn_hdr_caffeine, style)
+            self.btn_hdr_caffeine.setChecked(is_on)
             self.btn_hdr_caffeine.setToolTip(tip)
 
     def _toggle_mic_mute(self):
@@ -1577,27 +1561,8 @@ class DynamicNotchWindow(QWidget):
     def _toggle_pin(self):
         self._is_pinned = not self._is_pinned
         self._sync_outside_click()
-        accent = self._theme["accent"]
-        if self._is_pinned:
-            set_widget_style(self.btn_hdr_pin, f"""
-                background: rgba(110, 155, 255, 0.25);
-                border: none;
-                border-radius: 6px;
-                color: {accent};
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-            self.btn_hdr_pin.setToolTip("Notch PINNED (Will not auto-collapse on desktop click)")
-        else:
-            set_widget_style(self.btn_hdr_pin, """
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #94a3b8;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-            self.btn_hdr_pin.setToolTip("Pin Notch (Keep open and disable auto-collapse)")
+        self.btn_hdr_pin.setChecked(self._is_pinned)
+        self.btn_hdr_pin.setToolTip("Unpin panel" if self._is_pinned else "Keep panel open")
 
     def _toggle_screen_shield(self):
         enabled = not self._is_screen_shielded
@@ -1606,26 +1571,8 @@ class DynamicNotchWindow(QWidget):
             return
         self._is_screen_shielded = enabled
         self._sync_notch_shadow()
-        if enabled:
-            set_widget_style(self.btn_hdr_shield, """
-                background: rgba(34, 197, 94, 0.25);
-                border: none;
-                border-radius: 6px;
-                color: #4ade80;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-            self.btn_hdr_shield.setToolTip("Capture protection is on for the Poppy drawer and pill.")
-        else:
-            set_widget_style(self.btn_hdr_shield, """
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #94a3b8;
-                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
-                font-size: 11px;
-            """)
-            self.btn_hdr_shield.setToolTip("Screen Capture Shield: OFF (Click to hide Poppy from screen share)")
+        self.btn_hdr_shield.setChecked(enabled)
+        self.btn_hdr_shield.setToolTip("Allow screen capture" if enabled else "Hide from screen capture")
 
     def _toggle_annotation(self):
         if self._annotation_overlay and self._annotation_overlay.isVisible():
