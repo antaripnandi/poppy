@@ -108,6 +108,7 @@ def _check_install():
     from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
     from winsdk.windows.storage.streams import DataReader
     from poppy.core.weather_cities import local_city_search
+    from poppy.ui.pill_fonts import DEFAULT_PILL_FONT, PILL_FONT_LICENSE, pill_font_family
 
     QPdfDocument()
     config = json.loads(resource_path("config.json").read_text(encoding="utf-8"))
@@ -119,6 +120,8 @@ def _check_install():
             return False
     probe = protect_spotify_cookie("poppy-install-check")
     return (spotify_cookie({"spotify_sp_dc_protected": probe}) == "poppy-install-check"
+            and pill_font_family(DEFAULT_PILL_FONT) == DEFAULT_PILL_FONT
+            and resource_path(PILL_FONT_LICENSE).is_file()
             and any(city.city == "Chennai" for city in local_city_search("Chennnai").values()))
 
 

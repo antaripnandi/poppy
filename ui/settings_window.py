@@ -5,8 +5,11 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QSize, QTimer, QEvent, QPointF
-from PySide6.QtGui import QGuiApplication, QPixmap, QColor, QPainter, QIcon, QWheelEvent, QIntValidator, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, Signal, QSize, QTimer, QEvent, QPointF, QUrl
+from PySide6.QtGui import (
+    QGuiApplication, QPixmap, QColor, QPainter, QIcon, QWheelEvent, QIntValidator, QShortcut, QKeySequence,
+    QDesktopServices, QFontDatabase,
+)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QSpinBox, QPushButton, QStackedWidget, QListWidget,
@@ -24,6 +27,9 @@ from poppy.core.download_watcher import default_download_folder
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
 from poppy.ui.weather_location import WeatherLocationEdit
+from poppy.ui.pill_fonts import (
+    DEFAULT_PILL_FONT, SYSTEM_PILL_FONT, export_pill_font, import_pill_font, pill_font_family, pill_font_path,
+)
 from poppy.core.storage import data_dir, data_path, write_json, spotify_cookie, protect_spotify_cookie
 
 
@@ -483,6 +489,45 @@ class SettingsWindow(QWidget):
             SettingRow("Layout theme", f"{len(LAYOUT_THEMES)} layouts for navigation, typography and all tabs", self.combo_layout),
             SettingRow("Appearance mode", "Dark, Light, or follow the Windows app setting", self.combo_mode),
         ]))
+        self.combo_pill_font = QComboBox()
+        self.combo_pill_font.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_pill_font.setMinimumContentsLength(18)
+        self.combo_pill_font.setMaximumWidth(240)
+        self.combo_pill_font.addItem(DEFAULT_PILL_FONT, DEFAULT_PILL_FONT)
+        self.combo_pill_font.addItem(f"{SYSTEM_PILL_FONT} (Windows)", SYSTEM_PILL_FONT)
+        for family in QFontDatabase.families(QFontDatabase.WritingSystem.Latin):
+            if self.combo_pill_font.findData(family) < 0:
+                self.combo_pill_font.addItem(family, family)
+        for path in sorted(data_path("pill-fonts").glob("*")):
+            if pill_font_path(path.name) == path and path.is_file():
+                self.combo_pill_font.insertItem(2, f"{pill_font_family(path.name)} (Imported)", path.name)
+
+        actions = QWidget()
+        font_buttons = QHBoxLayout(actions)
+        font_buttons.setContentsMargins(0, 0, 0, 0)
+        browse_fonts = QPushButton("Google Fonts")
+        browse_fonts.setToolTip("Browse and download fonts from Google Fonts")
+        browse_fonts.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://fonts.google.com/")))
+        import_font = QPushButton("Import…")
+        import_font.clicked.connect(self._import_pill_font)
+        self.btn_export_pill_font = QPushButton("Export…")
+        self.btn_export_pill_font.setToolTip("Export the bundled or imported font file")
+        self.btn_export_pill_font.clicked.connect(self._export_pill_font)
+        for button in (browse_fonts, import_font, self.btn_export_pill_font):
+            font_buttons.addWidget(button)
+        self.combo_pill_font.currentIndexChanged.connect(self._on_pill_font_changed)
+        self.slider_pill_font_size, _, font_size_row = self._make_slider_setting(
+            "Pill text size", "Text size in pixels", 10, 22, 15
+        )
+        self.chk_notch_shadow = ToggleSwitch()
+        self.chk_notch_shadow.toggled.connect(self._on_live_appearance_change)
+        l_app.addWidget(_create_setting_card([
+            SettingRow("Pill font", "Clock, focus timer and level readouts on the compact pill", self.combo_pill_font),
+            SettingRow("Font files", "Import a TTF or OTF file", actions),
+            font_size_row,
+            SettingRow("Drop shadow", "Add depth around the pill and drawer", self.chk_notch_shadow),
+        ]))
+
         self.layout_preview = LayoutPreview()
         self.layout_preview.order_changed.connect(self._on_home_order_changed)
         order_header = QHBoxLayout()
@@ -1356,6 +1401,51 @@ class SettingsWindow(QWidget):
             self._set_peek_color(color)
             self._on_live_appearance_change()
 
+    def _select_pill_font(self, selection):
+        index = self.combo_pill_font.findData(selection)
+        if index < 0:
+            path = pill_font_path(selection)
+            family = pill_font_family(selection)
+            if path and path.is_file():
+                self.combo_pill_font.insertItem(2, f"{family} (Imported)", selection)
+                index = 2
+            else:
+                index = self.combo_pill_font.findData(family)
+        self.combo_pill_font.setCurrentIndex(max(0, index))
+        self._on_pill_font_changed()
+
+    def _on_pill_font_changed(self):
+        path = pill_font_path(self.combo_pill_font.currentData())
+        self.btn_export_pill_font.setEnabled(path is not None and path.is_file())
+        self._on_live_appearance_change()
+
+    def _import_pill_font(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Import pill font", "", "Font files (*.ttf *.otf)")
+        if filename:
+            try:
+                selection = import_pill_font(Path(filename))
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(self, "Could not import font", str(error))
+                return
+            self._select_pill_font(selection)
+
+    def _export_pill_font(self):
+        selection = self.combo_pill_font.currentData()
+        source = pill_font_path(selection)
+        if source is None:
+            return
+        if selection == DEFAULT_PILL_FONT:
+            name, file_filter = "RubikSprayPaint.zip", "Font and license (*.zip)"
+        else:
+            family = "".join(char for char in pill_font_family(selection) if char.isalnum() or char in " -_").strip()
+            name, file_filter = (family or "Pill font") + source.suffix, f"Font file (*{source.suffix})"
+        filename, _ = QFileDialog.getSaveFileName(self, "Export pill font", name, file_filter)
+        if filename:
+            try:
+                export_pill_font(selection, Path(filename))
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(self, "Could not export font", str(error))
+
     def _appearance_values(self):
         return {
             "theme": self._get_current_selected_theme(),
@@ -1363,6 +1453,9 @@ class SettingsWindow(QWidget):
             "home_orders": {name: list(order) for name, order in self._home_orders.items()},
             "mode": "System" if self.combo_mode.currentIndex() == 2 else self.combo_mode.currentText(),
             "style": self.combo_style.currentText(),
+            "pill_font": self.combo_pill_font.currentData(),
+            "pill_font_size": self.slider_pill_font_size.value(),
+            "notch_shadow": self.chk_notch_shadow.isChecked(),
             "peek_color_source": self.combo_peek_color.currentData(),
             "peek_color": self._peek_color,
             "collapsed_width": self.slider_col_w.value(),
@@ -1422,6 +1515,9 @@ class SettingsWindow(QWidget):
         self.chk_capture_images.setChecked(self.config.get("capture", {}).get("enabled", False), animate=False)
         # 0. Appearance
         app_cfg = normalize_appearance(self.config.get("appearance", {}))
+        self._select_pill_font(app_cfg["pill_font"])
+        self.slider_pill_font_size.setValue(app_cfg["pill_font_size"])
+        self.chk_notch_shadow.setChecked(app_cfg["notch_shadow"], animate=False)
         self._set_peek_color(QColor(app_cfg["peek_color"]))
         self.combo_peek_color.setCurrentIndex(self.combo_peek_color.findData(app_cfg["peek_color_source"]))
         self.btn_peek_color.setEnabled(app_cfg["peek_color_source"] == "fixed")

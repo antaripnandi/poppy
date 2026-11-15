@@ -522,6 +522,9 @@ class PillLevel(QWidget):
         self._icon = Icons.VOLUME
         self._label = "0%"
         self._ink = QColor("white")
+        self._text_font = QFont("Segoe UI")
+        self._text_font.setPixelSize(12)
+        self._text_font.setWeight(QFont.Weight.DemiBold)
         self._motion = QVariantAnimation(self)
         self._motion.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._motion.valueChanged.connect(self._set_fill)
@@ -552,6 +555,10 @@ class PillLevel(QWidget):
         self._ink = QColor(ink)
         self.update()
 
+    def set_text_font(self, font):
+        self._text_font = QFont(font)
+        self.update()
+
     def _set_fill(self, value):
         self._value = value
         self.update()
@@ -571,10 +578,7 @@ class PillLevel(QWidget):
         painter.setPen(self._ink)
         painter.drawText(QRect(inset, 0, 18, height), Qt.AlignmentFlag.AlignCenter, self._icon)
 
-        font = QFont("Segoe UI")
-        font.setPixelSize(min(12, max(9, height - 8)))
-        font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(font)
+        painter.setFont(self._text_font)
         text_width = max(painter.fontMetrics().horizontalAdvance(text) for text in ("100%", "Muted"))
         text_left = self.width() - inset - text_width
         painter.drawText(QRect(text_left, 0, text_width, height), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._label)

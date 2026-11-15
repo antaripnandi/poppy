@@ -48,6 +48,8 @@ from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
 from poppy.ui.app_mixer import AppMixerMenu
 from poppy.ui.download_activity import DownloadActivityMenu
+from poppy.ui.notch_shadow import NotchShadow
+from poppy.ui.pill_fonts import pill_text_font
 from poppy.ui.styles import DEFAULT_THEME, get_theme, get_stylesheet, normalize_appearance
 from poppy.core.pomodoro import PomodoroManager
 from poppy.core.media_manager import MediaManager
@@ -169,6 +171,7 @@ class DynamicNotchWindow(QWidget):
         self.clip_mgr = ClipboardHistoryManager(parent=self)
         self._is_pinned = False
         self._is_screen_shielded = False
+        self._notch_shadow = None
         self._annotation_overlay = None
         self._floating_windows = []
         self._shutting_down = False
@@ -318,24 +321,10 @@ class DynamicNotchWindow(QWidget):
 
         self.lbl_clock = QLabel("12:00")
         self.lbl_clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        set_widget_style(self.lbl_clock, """
-            color: #e2e8f0;
-            font-size: 11px;
-            font-weight: 600;
-            background: transparent;
-            border: none;
-        """)
         c_layout.addWidget(self.lbl_clock)
 
         self.lbl_coll_pomo = QLabel("")
         self.lbl_coll_pomo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        set_widget_style(self.lbl_coll_pomo, f"""
-            color: {self._theme['accent']};
-            font-size: 11px;
-            font-weight: 600;
-            background: transparent;
-            border: none;
-        """)
         self.lbl_coll_pomo.setVisible(False)
         c_layout.addWidget(self.lbl_coll_pomo)
         v_coll_layout.addWidget(center_box, 0)
@@ -355,6 +344,7 @@ class DynamicNotchWindow(QWidget):
 
         self._collapsed_contents = (left_box, center_box, right_box)
         self.pill_level = PillLevel(self.view_collapsed)
+        self._apply_pill_font()
         self.pill_level.hide()
         self._pill_level_timer = QTimer(self)
         self._pill_level_timer.setSingleShot(True)
@@ -1582,6 +1572,7 @@ class DynamicNotchWindow(QWidget):
             self.message_requested.emit("Screen Capture Shield", "Windows could not change capture protection.")
             return
         self._is_screen_shielded = enabled
+        self._sync_notch_shadow()
         if enabled:
             set_widget_style(self.btn_hdr_shield, """
                 background: rgba(34, 197, 94, 0.25);
@@ -2235,7 +2226,6 @@ class DynamicNotchWindow(QWidget):
         if palette_changed or layout_changed:
             set_widget_style(QApplication.instance(), get_stylesheet(self._theme_name, app_cfg["layout"]))
             accent = self._theme["accent"]
-            set_widget_style(self.lbl_coll_pomo, f"color: {accent}; font-size: 11px; font-weight: 600; min-width: 44px;")
             self.tab_music.set_accent(accent)
             self.tab_timer.set_accent(accent)
             self.tab_calendar.set_accent(accent)
@@ -2261,12 +2251,25 @@ class DynamicNotchWindow(QWidget):
             self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
             self._size_collapsed_art()
             self._refresh_collapsed_art()
+        if palette_changed or layout_changed or any(previous.get(key) != app_cfg.get(key) for key in
+                                                     ("pill_font", "pill_font_size", "collapsed_height", "collapsed_width")):
+            self._apply_pill_font()
         self._refresh_peek_surface()
         if self.pill_level.isVisible():
             self.pill_level.setGeometry(self.view_collapsed.rect())
             self._update_pill_level_ink()
         self._apply_geometry_for_state(self.state, animate=False)
         self.update()
+
+    def _apply_pill_font(self):
+        width = self._collapsed_w - 46 - 2 * max(self.coll_thumb.width(), self.coll_visualizer.width())
+        font = pill_text_font(self._appearance["pill_font"], self._appearance["pill_font_size"], self._collapsed_h, width)
+        family = "".join(char if char.isalnum() or char in " -_" else f"\\{ord(char):x} " for char in font.family())
+        style = (f'font-family: "{family}"; font-size: {font.pixelSize()}px; '
+                 f'font-weight: {int(font.weight())}; background: transparent; border: none;')
+        set_widget_style(self.lbl_clock, f"{style} color: #e2e8f0;")
+        set_widget_style(self.lbl_coll_pomo, f"{style} color: {self._theme['accent']};")
+        self.pill_level.set_text_font(font)
 
     def _on_settings_saved(self, new_config: dict):
         self.config = new_config or {}
@@ -2748,7 +2751,10 @@ class DynamicNotchWindow(QWidget):
             self.setGeometry(target)
             self._position_surface_view()
             self._update_clickthrough_mask()
+            self._sync_notch_shadow()
             return
+        if self._notch_shadow is not None:
+            self._notch_shadow.hide()
         # Clear the native region while resizing to avoid repeated DWM stalls.
         self.clearMask()
         self.anim.setDuration(duration)
@@ -2778,6 +2784,33 @@ class DynamicNotchWindow(QWidget):
     def _on_animation_finished(self):
         self._release_transition_host()
         self._update_clickthrough_mask()
+        self._sync_notch_shadow()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_notch_shadow()
+
+    def hideEvent(self, event):
+        if self._notch_shadow is not None:
+            self._notch_shadow.hide()
+        super().hideEvent(event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if self._notch_shadow is not None and self._notch_shadow.isVisible() and self._transition_frame is None:
+            self._sync_notch_shadow()
+
+    def _sync_notch_shadow(self):
+        show = (self.isVisible() and self._appearance["notch_shadow"]
+                and not self._is_screen_shielded and self._transition_frame is None
+                and QApplication.platformName() == "windows")
+        if show:
+            if self._notch_shadow is None:
+                self._notch_shadow = NotchShadow(self)
+            self._notch_shadow.follow(self.geometry(), self._notch_path(), self._get_current_screen_geometry().top())
+            self._notch_shadow.show()
+        elif self._notch_shadow is not None:
+            self._notch_shadow.hide()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2786,6 +2819,8 @@ class DynamicNotchWindow(QWidget):
         if self._transition_frame is None and self.anim.state() != QPropertyAnimation.State.Running:
             self._recenter_window()
             self._update_clickthrough_mask()
+            if self._notch_shadow is not None and self._notch_shadow.isVisible():
+                self._sync_notch_shadow()
 
     def _position_surface_view(self):
         self._surface_clip.setGeometry(self.rect())

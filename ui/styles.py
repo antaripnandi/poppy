@@ -5,6 +5,7 @@ Features NotchX's 7 theme presets, frosted card styling, and clean sans-serif ty
 """
 
 from PySide6.QtGui import QColor
+from poppy.ui.pill_fonts import DEFAULT_PILL_FONT
 from poppy.ui.theme import DESIGN_PALETTES, LAYOUT_THEMES, home_order
 
 
@@ -95,6 +96,12 @@ def normalize_appearance(appearance: dict) -> dict:
     result["home_orders"] = {name: list(home_order(name, orders)) for name in LAYOUT_THEMES
                              if isinstance(orders, dict) and name in orders}
     result.setdefault("mode", "Dark")
+    family = result.get("pill_font")
+    if not isinstance(family, str) or not family.strip() or len(family) > 200:
+        result["pill_font"] = DEFAULT_PILL_FONT
+    size = result.get("pill_font_size")
+    result["pill_font_size"] = min(22, max(10, size)) if type(size) is int else 15
+    result["notch_shadow"] = result.get("notch_shadow") is not False
     if result.get("peek_color_source") not in ("artwork", "fixed", "theme"):
         result["peek_color_source"] = "artwork"
     color = result.get("peek_color")

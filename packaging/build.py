@@ -25,6 +25,7 @@ AVATAR = "assets/branding/poppy-avatar.png"
 RESOURCES = (
     "config.json", AVATAR, "assets/sounds/chime.wav",
     "assets/weather-cities.tsv.gz", "assets/weather-cities-LICENSE.txt",
+    "assets/fonts/RubikSprayPaint-Regular.ttf", "assets/fonts/RubikSprayPaint-OFL.txt",
 )
 RUNTIME_PACKAGES = (
     "PySide6-Essentials", "PySide6-Pdf", "shiboken6", "winsdk",
