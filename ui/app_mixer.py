@@ -10,12 +10,12 @@ from PySide6.QtWidgets import (
     QToolTip, QVBoxLayout, QWidget, QWidgetAction,
 )
 
-from poppy.core.app_mixer import read_app_volumes, set_app_volume
+from poppy.core.app_mixer import AppVolume, read_app_volumes, set_app_volume
 from poppy.core.storage import data_path, write_json
 from poppy.core.system_features import AudioEndpointManager
 from poppy.ui.components import ClickableSlider, IconButton, ScrollArea
 from poppy.ui.icons import Icons
-from poppy.ui.spotify_controls import SpotifyVolumeControls
+from poppy.ui.spotify_controls import SpotifyVolumeBinding
 from poppy.ui.theme import set_widget_style, surface_colors
 
 
@@ -30,6 +30,13 @@ class AppMixerMenu(QMenu):
         self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
         self._output = None
         self._rows = {}
+        self._spotify_rows = {}
+        self._spotify_restore_volumes = {}
+        self._playback = getattr(parent, "spotify_playback", None)
+        self._spotify_timer = QTimer(self, interval=2000)
+        if self._playback is not None:
+            self._spotify_timer.timeout.connect(self._playback.refresh)
+            self._playback.changed.connect(self._spotify_changed)
         self._pending_level = None
         self._level_timer = QTimer(self, interval=50, singleShot=True)
         self._level_timer.timeout.connect(self._flush_level)
@@ -69,10 +76,6 @@ class AppMixerMenu(QMenu):
         self.rows.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.scroll.setWidget(body)
         layout.addWidget(self.scroll)
-        playback = getattr(parent, "spotify_playback", None)
-        if playback is not None:
-            self.spotify_volume = SpotifyVolumeControls(playback, self._open_spotify_account)
-            layout.addWidget(self.spotify_volume)
         windows_mixer = QPushButton("Windows volume mixer")
         windows_mixer.clicked.connect(self._open_windows_mixer)
         layout.addWidget(windows_mixer, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -106,12 +109,17 @@ class AppMixerMenu(QMenu):
             set_widget_style(label, f"color: {colors['muted']};")
         self.refresh()
         self._refresh_timer.start()
+        self._sync_spotify_polling()
+        if self._playback is not None and self._playback.connected:
+            self._playback.refresh()
 
     def refresh(self):
         try:
             output, apps = read_app_volumes()
         except OSError:
             output, apps = None, []
+        if self._playback is not None and self._playback.connected and not any(self._is_spotify(app) for app in apps):
+            apps = [*apps, AppVolume("Spotify", "", ("spotify-playback",), 0, False, False)]
         if self._output != output:
             self._clear_rows()
             self._output = output
@@ -140,12 +148,20 @@ class AppMixerMenu(QMenu):
                 pin.setText(Icons.UNPIN if pinned else Icons.PIN)
                 pin.setAccessibleName(label)
                 pin.setToolTip(label)
-            with QSignalBlocker(slider):
-                slider.setValue(app.volume)
-            readout.setText("Mixed" if app.mixed else f"{app.volume}%")
-            mute.setText("Unmute" if app.muted else "Mute")
-            mute.setAccessibleName(f"{mute.text()} {app.name}")
-            mute.setProperty("app_muted", app.muted)
+            binding = self._spotify_rows.get(app.sessions)
+            if binding is not None and binding.active:
+                binding._update()
+            else:
+                slider.setEnabled(True)
+                mute.setEnabled(True)
+                row.setToolTip(f"{app.name} · Windows app volume")
+                slider.setAccessibleName(f"{app.name} volume")
+                with QSignalBlocker(slider):
+                    slider.setValue(app.volume)
+                readout.setText("Mixed" if app.mixed else f"{app.volume}%")
+                mute.setText("Unmute" if app.muted else "Mute")
+                mute.setAccessibleName(f"{mute.text()} {app.name}")
+                mute.setProperty("app_muted", app.muted)
         self.status.setText("Start playing sound in an app to adjust it here." if output
                             else "Windows playback output is unavailable.")
         self.status.setVisible(not apps)
@@ -157,15 +173,30 @@ class AppMixerMenu(QMenu):
         for key in tuple(self._rows):
             self._remove_row(key)
 
-    def _open_spotify_account(self):
-        self.close()
-        self.parentWidget().open_settings("Music")
+    @staticmethod
+    def _is_spotify(app):
+        return app.name.casefold() == "spotify" or os.path.basename(app.path).casefold() == "spotify.exe"
+
+    def _sync_spotify_polling(self):
+        if self._playback is not None and self._playback.connected:
+            self._spotify_timer.start()
+        else:
+            self._spotify_timer.stop()
+
+    def _spotify_changed(self):
+        if self.isVisible():
+            self._sync_spotify_polling()
+            self.refresh()
 
     def _closed(self):
         self._refresh_timer.stop()
+        self._spotify_timer.stop()
         self._clear_rows()
 
     def _remove_row(self, key):
+        binding = self._spotify_rows.pop(key, None)
+        if binding is not None:
+            binding.close()
         row, slider, _, mute = self._rows.pop(key)
         if self._pending_level and self._pending_level[0] is slider:
             self._level_timer.stop()
@@ -216,6 +247,9 @@ class AppMixerMenu(QMenu):
         slider.sliderReleased.connect(lambda: self._finish_level(slider))
         mute.clicked.connect(lambda: self._apply(output, app.sessions, muted=not mute.property("app_muted")))
         self._rows[app.sessions] = row, slider, readout, mute
+        if self._playback is not None and self._is_spotify(app):
+            self._spotify_rows[app.sessions] = SpotifyVolumeBinding(
+                self._playback, slider, readout, mute, row, self._spotify_restore_volumes)
         self.rows.addWidget(row)
 
     @staticmethod
@@ -236,6 +270,10 @@ class AppMixerMenu(QMenu):
         self.refresh()
 
     def _slider_action(self, slider, output, sessions):
+        binding = self._spotify_rows.get(sessions)
+        if binding is not None and binding.active:
+            binding.volume_gesture()
+            return
         level = slider.sliderPosition()
         if not slider.isVisible() or level == slider.value():
             return
@@ -254,12 +292,21 @@ class AppMixerMenu(QMenu):
                 self._apply(output, sessions, level=level)
 
     def _finish_level(self, slider):
+        binding = next((item for item in self._spotify_rows.values() if item.slider is slider), None)
+        if binding is not None and binding.active:
+            binding._write_volume()
+            return
         if self._pending_level and self._pending_level[0] is slider:
             self._level_timer.stop()
             self._flush_level()
         QTimer.singleShot(0, self, self._refresh_if_open)
 
     def _apply(self, output, sessions, **change):
+        binding = self._spotify_rows.get(sessions)
+        if binding is not None and binding.active:
+            if "muted" in change:
+                binding.toggle_mute()
+            return
         try:
             set_app_volume(output, sessions, **change)
         except OSError as error:

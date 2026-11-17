@@ -5,11 +5,14 @@ import socket
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from PySide6.QtCore import QObject, QEventLoop, QTimer, Signal
+from PySide6.QtCore import QObject, QEventLoop, QPoint, Qt, QTimer, Signal
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QWidget
 
+from poppy.core.app_mixer import AppVolume
 from poppy.core.spotify_playback import REDIRECT_URI, SCOPES, SpotifyPlayback
 from poppy.ui.settings_window import SettingsWindow
-from poppy.ui.spotify_controls import SpotifyVolumeControls
+from poppy.ui.app_mixer import AppMixerMenu
 
 
 class Reply(QObject):
@@ -129,34 +132,88 @@ def test_mixer_reads_without_writes_and_gestures_target_device(audit_app, monkey
     manager = SpotifyPlayback()
     authorized(manager)
     requests = network_for(manager, monkeypatch)
-    control = SpotifyVolumeControls(manager, lambda: None)
-    control.show()
+    spotify = AppVolume("Spotify", "", ("spotify-session",), 100, False, False)
+    browser = AppVolume("Browser", "", ("browser-session",), 30, False, False)
+    windows_writes = []
+    monkeypatch.setattr("poppy.ui.app_mixer.read_app_volumes", lambda: (None, [spotify, browser]))
+    monkeypatch.setattr("poppy.ui.app_mixer.set_app_volume", lambda *args, **kwargs: windows_writes.append((args, kwargs)))
+    parent = QWidget()
+    parent.spotify_playback = manager
+    menu = AppMixerMenu(parent)
+    menu.prepare()
+    menu.popup(QPoint(0, 0))
     audit_app.processEvents()
     assert [request.method for request in requests] == [b"GET"]
     requests[-1].complete(200, playback_state())
-    assert control.slider.value() == 35
+    _, slider, readout, mute = menu._rows[spotify.sessions]
+    control = menu._spotify_rows[spotify.sessions]
+    assert len(menu._rows) == 2 and not hasattr(menu, "spotify_volume")
+    assert slider.value() == 35 and readout.text() == "35%"
     requests.clear()
-    control.slider.setValue(70)
+    slider.setValue(70)
     assert not requests  # A polling or programmatic update must never become an audio write.
 
-    control.slider.setSliderPosition(52)
-    control._volume_gesture(7)
+    slider.setValue(35)
+    QTest.keyClick(slider, Qt.Key.Key_Right)
     control._write_volume()
     put, = requests
     assert put.method == b"PUT"
-    assert parse_qs(urlsplit(put.request.url().toString()).query) == {"volume_percent": ["52"], "device_id": ["desktop"]}
+    assert parse_qs(urlsplit(put.request.url().toString()).query) == {"volume_percent": ["36"], "device_id": ["desktop"]}
     assert bytes(put.request.rawHeader("Authorization")) == b"Bearer test-access"
     put.complete(204)
-    assert manager.device["volume_percent"] == 52 and control.readout.text() == "52%"
+    assert manager.device["volume_percent"] == 36 and readout.text() == "36%"
+    mute.click()
+    assert "volume_percent=0" in requests[-1].request.url().toString()
+    requests[-1].complete(204)
+    assert mute.text() == "Unmute"
+    menu.hide()
+    assert not menu._spotify_timer.isActive()
+    menu.prepare()
+    menu.popup(QPoint(0, 0))
+    requests[-1].complete(200, playback_state(level=0))
+    _, slider, readout, mute = menu._rows[spotify.sessions]
+    control = menu._spotify_rows[spotify.sessions]
+    mute.click()
+    assert "volume_percent=36" in requests[-1].request.url().toString()
+    requests[-1].complete(204)
 
-    control.slider.setSliderPosition(63)
-    control._volume_gesture(7)
+    QTest.keyClick(slider, Qt.Key.Key_Right)
     manager._received_playback(200, playback_state("phone", 20))
     count = len(requests)
     control._write_volume()
-    assert len(requests) == count and control.slider.value() == 20
-    control.hide()
-    assert not control._timer.isActive() and control._pending is None
+    assert len(requests) == count and slider.value() == 20
+    assert not windows_writes
+    manager.disconnect_account()
+    assert slider.value() == 100
+    QTest.keyClick(slider, Qt.Key.Key_Left)
+    assert windows_writes[-1] == ((None, spotify.sessions), {"level": 99})
+    menu.hide()
+    assert not menu._spotify_timer.isActive() and control._pending is None
+    manager.close()
+
+
+def test_remote_spotify_uses_single_row_and_no_device_disables_it(audit_app, monkeypatch):
+    manager = SpotifyPlayback()
+    authorized(manager)
+    requests = network_for(manager, monkeypatch)
+    monkeypatch.setattr("poppy.ui.app_mixer.read_app_volumes", lambda: (None, []))
+    parent = QWidget()
+    parent.spotify_playback = manager
+    menu = AppMixerMenu(parent)
+    menu.prepare()
+    menu.popup(QPoint(0, 0))
+    audit_app.processEvents()
+    requests[-1].complete(200, playback_state())
+    assert len(menu._rows) == 1
+    _, slider, readout, mute = next(iter(menu._rows.values()))
+    assert slider.isEnabled() and slider.value() == 35
+    QTest.keyClick(slider, Qt.Key.Key_Left)
+    manager._received_playback(204, {})
+    binding = next(iter(menu._spotify_rows.values()))
+    binding._write_volume()
+    assert len(requests) == 1
+    assert not slider.isEnabled() and not mute.isEnabled() and readout.text() == "—"
+    menu.hide()
     manager.close()
 
 
