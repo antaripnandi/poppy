@@ -6,13 +6,13 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.9-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.10-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
 Installed Poppy checks GitHub after startup and daily while it runs. Use **Settings > About** or the tray menu to check manually. You can turn off scheduled checks in About. When a newer stable installer is available, you can open its release page and install it yourself.
 
-After connecting in **Settings > Music**, the existing Spotify row in App mixer controls Spotify's playback volume, including mute. Without a connection, that row controls Windows app volume.
+After connecting in **Settings > Music**, the existing Spotify row in App mixer controls Spotify's playback volume, including mute. Dragging updates playback continuously, and changes made in Spotify refresh about once per second while the mixer is open. Without a connection, that row controls Windows app volume.
 Create an app in the [Spotify Developer dashboard](https://developer.spotify.com/dashboard), select Web API,
 and register `http://127.0.0.1:43821/callback` as a redirect URI. Enter its public Client ID in Poppy and
 choose **Connect Spotify**. Spotify requires Premium for playback-volume access. The browser asks for

@@ -35,6 +35,8 @@ class SpotifyPlayback(QObject):
         self._reply = None
         self._pending = None
         self._blocked_until = 0
+        self._device_available = True
+        self._readback_target = None
         self._state = ""
         self._verifier = ""
         self._auth_exchange = False
@@ -181,6 +183,8 @@ class SpotifyPlayback(QObject):
         self._cancel_request()
         self._tokens = {}
         self.device = {}
+        self._device_available = False
+        self._readback_target = None
         self._report("Spotify disconnected.")
 
     def _cancel_request(self):
@@ -285,7 +289,8 @@ class SpotifyPlayback(QObject):
                 except ValueError:
                     delay = 30
                 self._blocked_until = time.time() + delay
-                self.device = {}
+                self._device_available = False
+                self._readback_target = None
                 self._report(f"Spotify asked Poppy to wait {delay} seconds. Try again shortly.")
             else:
                 callback(status, data)
@@ -293,9 +298,18 @@ class SpotifyPlayback(QObject):
         self._request(method, url, None, complete, bearer=True)
 
     def _received_playback(self, status, data):
-        self.device = data.get("device", {}) if status == 200 else {}
-        if not isinstance(self.device, dict):
-            self.device = {}
+        self._device_available = status == 200
+        if status in (200, 204, 403, 404):
+            device = data.get("device", {}) if status == 200 else {}
+            self.device = dict(device) if isinstance(device, dict) else {}
+            if self._readback_target is not None:
+                device_id, level, deadline = self._readback_target
+                if (self.device.get("id") != device_id or self.device.get("volume_percent") == level
+                        or time.monotonic() >= deadline):
+                    self._readback_target = None
+                else:
+                    # Spotify can briefly return pre-command state after acknowledging a write.
+                    self.device["volume_percent"] = level
         if status == 403:
             text = "Spotify playback control requires Premium and access to this Developer app."
         elif status in (200, 204) and not self.device:
@@ -316,11 +330,15 @@ class SpotifyPlayback(QObject):
         url = _API + "/volume?" + urlencode({"volume_percent": level, "device_id": device_id})
 
         def written(status, data):
+            if self.device.get("id") != device_id:
+                return
             if status == 204:
                 self.device["volume_percent"] = level
+                self._readback_target = (device_id, level, time.monotonic() + 1.5)
                 self.changed.emit()
             else:
-                self.device = {}
+                self._device_available = False
+                self._readback_target = None
                 self._report("Spotify could not change this device's volume. Refresh playback and try again.")
 
         self._api("PUT", url, written)
@@ -329,7 +347,8 @@ class SpotifyPlayback(QObject):
     @property
     def can_set_volume(self):
         level = self.device.get("volume_percent")
-        return bool(self.device.get("id") and not self.device.get("is_restricted")
+        return bool(self._device_available and time.time() >= self._blocked_until
+                    and self.device.get("id") and not self.device.get("is_restricted")
                     and self.device.get("supports_volume", True) and type(level) is int and 0 <= level <= 100)
 
     def _report(self, text):

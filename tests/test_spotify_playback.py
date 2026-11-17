@@ -5,6 +5,7 @@ import socket
 import time
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from PySide6.QtCore import QObject, QEventLoop, QPoint, Qt, QTimer, Signal
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QWidget
@@ -85,6 +86,169 @@ def authorized(manager):
     manager.device = playback_state()["device"]
 
 
+@pytest.fixture
+def connected_mixer(audit_app, monkeypatch):
+    manager = SpotifyPlayback()
+    authorized(manager)
+    requests = network_for(manager, monkeypatch)
+    snapshot = [None, [AppVolume("Spotify", "", ("local-spotify",), 100, False, False)]]
+    windows_writes = []
+    monkeypatch.setattr("poppy.ui.app_mixer.read_app_volumes", lambda: tuple(snapshot))
+    monkeypatch.setattr("poppy.ui.app_mixer.set_app_volume", lambda *args, **kwargs: windows_writes.append(kwargs))
+    monkeypatch.setattr("poppy.ui.app_mixer.AudioEndpointManager.get_output_endpoints", lambda: [])
+    monkeypatch.setattr("poppy.ui.spotify_controls.system_animations_enabled", lambda: True)
+    parent = QWidget()
+    parent.spotify_playback = manager
+    menu = AppMixerMenu(parent)
+    menu.prepare()
+    menu.popup(QPoint(0, 0))
+    audit_app.processEvents()
+    requests[-1].complete(200, playback_state())
+    yield manager, requests, menu, snapshot, windows_writes
+    menu.hide()
+    manager.close()
+
+
+def test_delayed_volume_replies_never_rollback_the_latest_gesture(connected_mixer):
+    manager, requests, menu, _, windows_writes = connected_mixer
+    control = next(iter(menu._spotify_rows.values()))
+    slider = control.slider
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    control._write_volume()
+    first_write = requests[-1]
+    assert first_write.method == b"PUT"
+    menu.refresh()  # Windows refresh arrives before Spotify acknowledges the write.
+    assert slider.value() == 36 and control.readout.text() == "36%"
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    first_write.complete(204)
+    menu.refresh()
+    assert slider.value() == 38 and control.readout.text() == "38%"
+    control._write_volume()
+    assert "volume_percent=38" in requests[-1].request.url().toString()
+    requests[-1].complete(204)
+    assert manager.device["volume_percent"] == 38 and not windows_writes
+
+
+def test_spotify_row_survives_windows_session_churn_and_read_errors(connected_mixer, monkeypatch):
+    _, _, menu, snapshot, _ = connected_mixer
+    control = next(iter(menu._spotify_rows.values()))
+    spotify = snapshot[1][0]
+    others = [AppVolume("Browser", "", ("browser",), 50, False, False),
+              AppVolume("System sounds", "", ("system",), 100, False, False)]
+    snapshot[1] = [spotify, *others]
+    menu.refresh()
+    row_index = menu.rows.indexOf(control.parent())
+    snapshot[1] = others
+    menu.refresh()
+    assert next(iter(menu._spotify_rows.values())) is control
+    assert menu.rows.indexOf(control.parent()) == row_index
+    snapshot[:] = ["headphones", [AppVolume("Spotify", "", ("replacement-session",), 100, False, False), *others]]
+    menu.refresh()
+    assert next(iter(menu._spotify_rows.values())) is control
+    assert menu.rows.indexOf(control.parent()) == row_index
+    def failed_read():
+        raise OSError("temporary output enumeration failure")
+    monkeypatch.setattr("poppy.ui.app_mixer.read_app_volumes", failed_read)
+    menu.refresh()
+    assert next(iter(menu._spotify_rows.values())) is control and control.slider.value() == 35
+
+
+def test_continuous_drag_updates_spotify_before_mouse_release(connected_mixer):
+    manager, requests, menu, _, windows_writes = connected_mixer
+    control = next(iter(menu._spotify_rows.values()))
+    slider = control.slider
+    y = slider.height() // 2
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=QPoint(2, y))
+    for step in range(1, 13):
+        QTest.mouseMove(slider, QPoint(2 + (slider.width() - 5) * step // 12, y))
+        QTest.qWait(35)
+        if requests[-1].method == b"PUT" and manager.busy:
+            requests[-1].complete(204)
+    assert slider.isSliderDown()
+    assert sum(reply.method == b"PUT" for reply in requests) >= 2
+    final_level = slider.value()
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider.width() - 3, y))
+    if manager.busy:
+        requests[-1].complete(204)
+    control._write_volume()
+    if manager.busy:
+        requests[-1].complete(204)
+    assert manager.device["volume_percent"] == final_level
+    assert not windows_writes
+
+
+def test_live_poll_animates_external_changes_without_audio_writes(connected_mixer):
+    _, requests, menu, _, windows_writes = connected_mixer
+    control = next(iter(menu._spotify_rows.values()))
+    menu._spotify_timer.timeout.emit()
+    assert requests[-1].method == b"GET"
+    requests[-1].complete(200, playback_state(level=65))
+    assert control.slider.value() == 35  # External changes ease into place instead of snapping.
+    QTest.qWait(65)
+    assert 35 < control.slider.value() < 65
+    QTest.qWait(100)
+    assert control.slider.value() == 65 and control.readout.text() == "65%"
+    assert all(reply.method == b"GET" for reply in requests) and not windows_writes
+
+
+def test_external_volume_respects_reduced_motion(connected_mixer, monkeypatch):
+    manager, requests, menu, _, _ = connected_mixer
+    monkeypatch.setattr("poppy.ui.spotify_controls.system_animations_enabled", lambda: False)
+    control = next(iter(menu._spotify_rows.values()))
+    manager._received_playback(200, playback_state(level=62))
+    assert control.slider.value() == 62 and control.readout.text() == "62%"
+    assert all(reply.method == b"GET" for reply in requests)
+
+
+def test_inflight_poll_and_stale_readback_do_not_override_local_changes(connected_mixer, monkeypatch):
+    manager, requests, menu, _, _ = connected_mixer
+    control = next(iter(menu._spotify_rows.values()))
+    manager.refresh()
+    QTest.keyClick(control.slider, Qt.Key.Key_Right)
+    control._write_volume()
+    assert requests[-1].method == b"GET"
+    requests[-1].complete(200, playback_state(level=5))
+    menu.refresh()
+    assert control.slider.value() == 36 and control.readout.text() == "36%"
+    control._write_volume()
+    assert "volume_percent=36" in requests[-1].request.url().toString()
+    requests[-1].complete(204)
+    manager.refresh()
+    requests[-1].complete(200, playback_state(level=5))
+    assert control.slider.value() == 36
+    later = time.monotonic() + 2
+    monkeypatch.setattr("poppy.core.spotify_playback.time.monotonic", lambda: later)
+    manager.refresh()
+    requests[-1].complete(200, playback_state(level=18))
+    QTest.qWait(170)
+    assert control.slider.value() == 18 and control.readout.text() == "18%"
+
+
+def test_transient_api_failure_preserves_last_volume_and_device_switch_cancels_write(connected_mixer):
+    manager, requests, menu, _, windows_writes = connected_mixer
+    control = next(iter(menu._spotify_rows.values()))
+    manager.refresh()
+    requests[-1].complete(503)
+    assert manager.device["volume_percent"] == 35
+    assert not control.slider.isEnabled() and control.readout.text() == "35%"
+    manager.refresh()
+    requests[-1].complete(200, playback_state())
+    assert control.slider.isEnabled()
+    QTest.keyClick(control.slider, Qt.Key.Key_Right)
+    control._write_volume()
+    old_device_write = requests[-1]
+    manager._received_playback(200, playback_state("phone", 20))
+    old_device_write.complete(204)
+    assert manager.device["id"] == "phone" and manager.device["volume_percent"] == 20
+    assert control.slider.value() == 20 and not windows_writes
+    QTest.keyClick(control.slider, Qt.Key.Key_Right)
+    count = len(requests)
+    menu.hide()
+    QTest.qWait(200)
+    assert len(requests) == count  # Closing the menu cancels its queued gestures and reads.
+
+
 def test_oauth_state_pkce_and_encrypted_persistence(audit_app, monkeypatch):
     manager = SpotifyPlayback()
     urls = []
@@ -145,8 +309,8 @@ def test_mixer_reads_without_writes_and_gestures_target_device(audit_app, monkey
     audit_app.processEvents()
     assert [request.method for request in requests] == [b"GET"]
     requests[-1].complete(200, playback_state())
-    _, slider, readout, mute = menu._rows[spotify.sessions]
-    control = menu._spotify_rows[spotify.sessions]
+    _, slider, readout, mute = menu._rows[("spotify-playback",)]
+    control = menu._spotify_rows[("spotify-playback",)]
     assert len(menu._rows) == 2 and not hasattr(menu, "spotify_volume")
     assert slider.value() == 35 and readout.text() == "35%"
     requests.clear()
@@ -171,8 +335,8 @@ def test_mixer_reads_without_writes_and_gestures_target_device(audit_app, monkey
     menu.prepare()
     menu.popup(QPoint(0, 0))
     requests[-1].complete(200, playback_state(level=0))
-    _, slider, readout, mute = menu._rows[spotify.sessions]
-    control = menu._spotify_rows[spotify.sessions]
+    _, slider, readout, mute = menu._rows[("spotify-playback",)]
+    control = menu._spotify_rows[("spotify-playback",)]
     mute.click()
     assert "volume_percent=36" in requests[-1].request.url().toString()
     requests[-1].complete(204)
@@ -184,6 +348,8 @@ def test_mixer_reads_without_writes_and_gestures_target_device(audit_app, monkey
     assert len(requests) == count and slider.value() == 20
     assert not windows_writes
     manager.disconnect_account()
+    audit_app.processEvents()
+    _, slider, readout, mute = menu._rows[spotify.sessions]
     assert slider.value() == 100
     QTest.keyClick(slider, Qt.Key.Key_Left)
     assert windows_writes[-1] == ((None, spotify.sessions), {"level": 99})

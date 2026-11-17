@@ -29,11 +29,14 @@ class AppMixerMenu(QMenu):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
         self._output = None
+        self._last_apps = []
         self._rows = {}
         self._spotify_rows = {}
         self._spotify_restore_volumes = {}
+        self._spotify_app = None
+        self._spotify_connected = False
         self._playback = getattr(parent, "spotify_playback", None)
-        self._spotify_timer = QTimer(self, interval=2000)
+        self._spotify_timer = QTimer(self, interval=1000)
         if self._playback is not None:
             self._spotify_timer.timeout.connect(self._playback.refresh)
             self._playback.changed.connect(self._spotify_changed)
@@ -116,12 +119,24 @@ class AppMixerMenu(QMenu):
     def refresh(self):
         try:
             output, apps = read_app_volumes()
+            self._last_apps = apps
         except OSError:
-            output, apps = None, []
-        if self._playback is not None and self._playback.connected and not any(self._is_spotify(app) for app in apps):
-            apps = [*apps, AppVolume("Spotify", "", ("spotify-playback",), 0, False, False)]
+            output, apps = self._output, self._last_apps
+        self._spotify_connected = self._playback is not None and self._playback.connected
+        if self._spotify_connected:
+            spotify = next((app for app in apps if self._is_spotify(app)), None)
+            self._spotify_app = spotify or self._spotify_app or AppVolume("Spotify", "", (), 0, False, False)
+            # Spotify Connect is independent of Windows' changing audio-session IDs.
+            source = self._spotify_app
+            stable = AppVolume(source.name, source.path, ("spotify-playback",), 0, False, False)
+            apps = sorted([app for app in apps if not self._is_spotify(app)] + [stable],
+                          key=lambda app: (app.name.casefold(), app.sessions))
+        else:
+            self._spotify_app = None
         if self._output != output:
-            self._clear_rows()
+            for key in tuple(self._rows):
+                if key not in self._spotify_rows or not self._spotify_rows[key].active:
+                    self._remove_row(key)
             self._output = output
             name = next((item["name"] for item in AudioEndpointManager.get_output_endpoints()
                          if item["id"] == output), "Default playback output") if output else ""
@@ -179,14 +194,16 @@ class AppMixerMenu(QMenu):
 
     def _sync_spotify_polling(self):
         if self._playback is not None and self._playback.connected:
-            self._spotify_timer.start()
+            if not self._spotify_timer.isActive():
+                self._spotify_timer.start()
         else:
             self._spotify_timer.stop()
 
     def _spotify_changed(self):
         if self.isVisible():
             self._sync_spotify_polling()
-            self.refresh()
+            if self._spotify_connected != self._playback.connected:
+                self.refresh()
 
     def _closed(self):
         self._refresh_timer.stop()
