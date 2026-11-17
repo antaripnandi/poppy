@@ -27,6 +27,8 @@ from poppy.core.download_watcher import default_download_folder
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
 from poppy.ui.weather_location import WeatherLocationEdit
+from poppy.core.spotify_playback import SpotifyPlayback
+from poppy.ui.spotify_controls import SpotifyAccountControls
 from poppy.ui.pill_fonts import (
     DEFAULT_PILL_FONT, SYSTEM_PILL_FONT, export_pill_font, import_pill_font, pill_font_family, pill_font_path,
 )
@@ -294,8 +296,9 @@ class SettingsWindow(QWidget):
     screentime_reset_requested = Signal()
     update_check_requested = Signal()
 
-    def __init__(self, config: dict = None, parent=None):
+    def __init__(self, config: dict = None, parent=None, *, spotify=None):
         super().__init__(parent)
+        self._spotify_playback = spotify if spotify is not None else SpotifyPlayback(self)
         self.config = config or {}
         self.setWindowTitle("Poppy Settings")
         self.resize(860, 640)
@@ -970,6 +973,8 @@ class SettingsWindow(QWidget):
             SettingRow("Follow playback", "Follow song timeline and center current line in real time", self.chk_lyrics_auto_scroll)
         ])
         l_media.addWidget(card_media)
+        self.spotify_account = SpotifyAccountControls(self._spotify_playback)
+        l_media.addWidget(self.spotify_account)
 
         lbl_cookie_hint = QLabel(
             "Lyrics sources:\n"

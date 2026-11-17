@@ -54,6 +54,7 @@ from poppy.ui.pill_fonts import pill_text_font
 from poppy.ui.styles import DEFAULT_THEME, get_theme, get_stylesheet, normalize_appearance
 from poppy.core.pomodoro import PomodoroManager
 from poppy.core.media_manager import MediaManager
+from poppy.core.spotify_playback import SpotifyPlayback
 from poppy.core.lyrics_manager import LyricsManager
 from poppy.core.drop_shelf import DropShelfManager
 from poppy.core.download_watcher import DownloadWatcher
@@ -163,6 +164,7 @@ class DynamicNotchWindow(QWidget):
         self._island_download_folder = None
         self._download_activity = None
         self._app_mixer = None
+        self.spotify_playback = SpotifyPlayback(self)
         rpc_cfg = self.config.get("discord_rpc", {})
         self.discord_rpc = DiscordRPCManager(config=rpc_cfg, parent=self)
         self.audio_ctrl = SystemAudioController()
@@ -2115,7 +2117,7 @@ class DynamicNotchWindow(QWidget):
         self.clearFocus()
 
         if self._settings_window is None:
-            self._settings_window = SettingsWindow(config=self.config)
+            self._settings_window = SettingsWindow(config=self.config, spotify=self.spotify_playback)
             self._settings_window.settings_saved.connect(self._on_settings_saved)
             self._settings_window.appearance_live_updated.connect(self._apply_live_appearance)
             self._settings_window.screentime_reset_requested.connect(self.screentime.reset_today)
@@ -3052,6 +3054,7 @@ class DynamicNotchWindow(QWidget):
             animation.stop()
         self.screentime.close()
         self.lyrics_manager.close()
+        self.spotify_playback.close()
         self.media_manager.stop()
         self.bright_ctrl.close()
         self.discord_rpc.close()

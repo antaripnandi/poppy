@@ -15,6 +15,7 @@ from poppy.core.storage import data_path, write_json
 from poppy.core.system_features import AudioEndpointManager
 from poppy.ui.components import ClickableSlider, IconButton, ScrollArea
 from poppy.ui.icons import Icons
+from poppy.ui.spotify_controls import SpotifyVolumeControls
 from poppy.ui.theme import set_widget_style, surface_colors
 
 
@@ -68,6 +69,10 @@ class AppMixerMenu(QMenu):
         self.rows.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.scroll.setWidget(body)
         layout.addWidget(self.scroll)
+        playback = getattr(parent, "spotify_playback", None)
+        if playback is not None:
+            self.spotify_volume = SpotifyVolumeControls(playback, self._open_spotify_account)
+            layout.addWidget(self.spotify_volume)
         windows_mixer = QPushButton("Windows volume mixer")
         windows_mixer.clicked.connect(self._open_windows_mixer)
         layout.addWidget(windows_mixer, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -151,6 +156,10 @@ class AppMixerMenu(QMenu):
     def _clear_rows(self):
         for key in tuple(self._rows):
             self._remove_row(key)
+
+    def _open_spotify_account(self):
+        self.close()
+        self.parentWidget().open_settings("Music")
 
     def _closed(self):
         self._refresh_timer.stop()
