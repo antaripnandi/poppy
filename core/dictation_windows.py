@@ -552,7 +552,7 @@ def copy_text(hwnd, text, *, history=False, preserve_complex=False):
 
 
 def paste_text(hwnd, target, text, *, validate=None):
-    """Paste into the original field; leave complex clipboard content alone."""
+    """Queue paste into the original field and keep its text available for the target."""
     import win32clipboard as cb
 
     current = focused_target()
@@ -583,12 +583,15 @@ def paste_text(hwnd, target, text, *, validate=None):
                 and _user32().GetClipboardSequenceNumber() == sequence):
             sent = _user32().SendInput(4, keys, ct.sizeof(_Input))
             if sent == 4:
-                return sequence, saved
+                return True
             if sent:
                 releases = (_Input * 2)(keys[2], keys[3])
                 _user32().SendInput(2, releases, ct.sizeof(_Input))
+                if sent >= 2:  # Ctrl+V was already queued, including the V key-down.
+                    return True
     finally:
-        if sent != 4:
+        # SendInput does not wait for applications to read the clipboard.
+        if sent < 2:
             restore_clipboard(hwnd, sequence, saved)
     return None
 

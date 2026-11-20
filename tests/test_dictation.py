@@ -592,6 +592,43 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     manager.close()
 
 
+def test_failed_long_take_offers_only_its_current_draft_for_manual_copy(monkeypatch):
+    parent = QWidget()
+    manager = DictationController(parent)
+    copies = []
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text) or True)
+    manager.last_text = "Old result."
+    manager._status("Listening", "")
+    api = manager._pipeline()
+    api.set_keys({"gemini": ["fixture"]})
+    replies = mock_network(api, monkeypatch)
+    manager._pcm = bytearray(60 * 32000)
+    manager._stopped_at = dictation_api.time.monotonic()
+    manager._remember_live_draft("This new take has English. আমি বাংলায় বলছি।")
+    manager._transcribe_recording()
+    assert 13000 < api._deadline.interval() <= 14000
+    api._timed_out()
+    assert manager._indicator.title.text() == "Review transcript"
+    assert not copies
+    manager._indicator.action.click()
+    assert copies == ["This new take has English. আমি বাংলায় বলছি।"]
+    manager.close()
+
+
+def test_empty_result_clears_old_dictation_and_never_copies_it(monkeypatch):
+    parent = QWidget()
+    manager = DictationController(parent)
+    copies = []
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text) or True)
+    manager.last_text = "Old result."
+    manager._finished("", "Dictation timed out")
+    manager.copy_last()
+    assert not manager.last_text and not copies
+    assert manager._indicator.title.text() == "Dictation timed out"
+    assert manager._indicator.detail.text() == "No new text copied"
+    manager.close()
+
+
 def test_dictation_preserves_files_until_copy_is_clicked(monkeypatch):
     formats = {15: "copied file list"}
     clipboard = SimpleNamespace(
@@ -642,6 +679,16 @@ def test_paste_revalidates_the_field_and_keeps_previous_clipboard(monkeypatch):
         GetClipboardSequenceNumber=lambda: 1, SendInput=lambda count, *_: sent.append(count) or count))
     assert native.paste_text(1, target, "Dictated text.") is None
     assert not sent and formats == {13: "clipboard before dictation"}
+
+    # The target may read Ctrl+V after Poppy's pill closes.
+    clipboard.CloseClipboard = lambda: None
+    focus[0] = target
+    parent = QWidget()
+    manager = DictationController(parent)
+    manager._target = target
+    manager._finished("Dictated text.", "")
+    manager.close()
+    assert sent == [4] and formats[13] == "Dictated text."
 
 
 def test_pill_keeps_preview_during_language_check_and_respects_reduced_motion(monkeypatch):
@@ -744,7 +791,7 @@ def test_edit_replaces_only_the_original_selection_and_never_inserts_the_command
     assert manager._indicator.title.text() == "Edit ready"
     say_edit()
     replies[-1].complete(200, gemini_text("[EDIT_UNAVAILABLE]"))
-    assert editor.text() == "first middle last" and "Could not edit" in manager._indicator.detail.text()
+    assert editor.text() == "first middle last" and "Could not edit" in manager._indicator.title.text()
     manager.close()
 
 

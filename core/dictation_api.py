@@ -394,6 +394,7 @@ class DictationApi(QObject):
         self._text = ""
         self._live_text = ""
         self._preview_reference = ""
+        self._recovery_draft = ""
         self._selection = ""
         self._context = ""
         self._queue = []
@@ -406,7 +407,7 @@ class DictationApi(QObject):
 
     def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False,
               language_mode="auto", romanize=False, live_text="", preview_reference="", selection="", context="",
-              stopped_at=None):
+              recovery_draft="", stopped_at=None):
         self.cancel()
         self._audio = audio
         self._selection = selection
@@ -421,13 +422,20 @@ class DictationApi(QObject):
         self._romanize = romanize
         self._live_text = live_text
         self._preview_reference = preview_reference
+        self._recovery_draft = recovery_draft if not selection else ""
         self._preview = preview
         short_take = stopped_at is not None and len(audio) <= 640044  # WAV header + 20 s.
-        self._audio_timeout = 4500 if short_take or preview_reference else 13000
+        self._audio_timeout = 4500 if short_take or preview_reference else (8000 if self._recovery_draft else 13000)
         self._cleanup_timeout = 2500 if short_take and not selection else 7000
         self._cleanup_attempts = 1 if short_take and not selection else 5
-        self._attempt_limit = 1 if preview or preview_reference else (2 if short_take else 5)
-        self._start_deadline(8000 if preview or short_take else 40000, stopped_at)
+        self._attempt_limit = 1 if preview or preview_reference else (2 if stopped_at is not None else 5)
+        if preview or short_take or preview_reference:
+            budget = 8000
+        elif self._recovery_draft:
+            budget = 14000
+        else:
+            budget = 25000 if stopped_at is not None else 40000
+        self._start_deadline(budget, stopped_at)
         self._stage = "audio"
         self._attempts = 0
         if preview_reference:
@@ -459,10 +467,10 @@ class DictationApi(QObject):
         self._prompt = _output_prompt(style, vocabulary, snippets, cleanup=cleanup, romanize=romanize,
                                       mixed=language_mode != "auto", context=self._context, selection=selection)
         fast = short_take and not selection
-        self._cleanup_timeout = 2500 if fast else 7000
-        self._cleanup_attempts = 1 if fast else 5
+        self._cleanup_timeout = 7000 if selection else (2500 if fast else 5000)
+        self._cleanup_attempts = 5 if selection else 1
         if cleanup or selection or (romanize and _has_non_latin_letters(text)):
-            self._start_deadline(4000 if fast else 14000, stopped_at)
+            self._start_deadline(14000 if selection else (4000 if fast else 8000), stopped_at)
             self._start_cleanup(text)
         else:
             self._finish(text, "")
@@ -493,6 +501,7 @@ class DictationApi(QObject):
         self._text = ""
         self._live_text = ""
         self._preview_reference = ""
+        self._recovery_draft = ""
         self._selection = ""
         self._context = ""
         self._prompt = ""
@@ -510,8 +519,8 @@ class DictationApi(QObject):
         _LOG.debug("Dictation deadline reached stage=%s attempts=%d", self._stage, self._attempts)
         if self._stage == "cleanup":
             self._finish(self._text, "Cleanup timed out")
-        elif self._preview_reference:
-            self._finish(self._preview_reference, REVIEW_TRANSCRIPT)
+        elif self._preview_reference or self._recovery_draft:
+            self._finish(self._preview_reference or self._recovery_draft, REVIEW_TRANSCRIPT)
         elif self._text or self._live_text:
             self._finish(self._text or self._live_text, "Language check timed out")
         else:
@@ -553,7 +562,7 @@ class DictationApi(QObject):
             reply.finished.connect(lambda: self._received(reply, provider, model, slot))
             self._request_timeout.start(self._audio_timeout if self._stage == "audio" else self._cleanup_timeout)
             return
-        if self._stage == "audio" and (self._preview_reference or self._text or self._live_text):
+        if self._stage == "audio" and (self._preview_reference or self._recovery_draft or self._text or self._live_text):
             self._use_audio_fallback()
         else:
             self._finish(self._text, "Cleanup unavailable" if self._text else "Transcription unavailable. Check your keys or try again later.")
@@ -608,7 +617,7 @@ class DictationApi(QObject):
                                   for reference in (self._live_text, self._preview_reference) if reference)):
             _LOG.debug("Dictation rejected a conflicting batch transcript")
             self._finish(self._preview_reference or self._live_text, REVIEW_TRANSCRIPT)
-        elif not result and self._stage == "audio" and (self._text or self._live_text):
+        elif not result and self._stage == "audio" and (self._recovery_draft or self._text or self._live_text):
             self._use_audio_fallback()
         elif self._stage == "audio" and result and (self._cleanup or needs_romanization):
             self._start_cleanup(result)
@@ -619,6 +628,7 @@ class DictationApi(QObject):
         self._audio = b""
         self._live_text = ""
         self._preview_reference = ""
+        self._recovery_draft = ""
         if self._audio_prompt:
             self._deadline.start(min(6000, max(1, self._deadline.remainingTime())))
         self._text = text
@@ -633,8 +643,8 @@ class DictationApi(QObject):
 
     def _use_audio_fallback(self):
         text = self._text or self._live_text
-        if self._preview_reference:
-            self._finish(self._preview_reference, REVIEW_TRANSCRIPT)
+        if self._preview_reference or self._recovery_draft:
+            self._finish(self._preview_reference or self._recovery_draft, REVIEW_TRANSCRIPT)
         elif self._cleanup:
             self._start_cleanup(text)
         else:

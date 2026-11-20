@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.16-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.17-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -34,14 +34,15 @@ up to 200 characters before the caret as reference for the cleanup provider. Pop
 With **Live transcript** on and a Gemini key, Poppy streams to Gemini Transcribe Live while you speak and uses
 that session’s final transcript. When live streaming is unavailable, the existing providers can show a preview
 in chunks and transcribe the saved recording at Stop. Optional cleanup runs after recognition.
-If Gemini’s final transcript appears to cut off the live preview, Poppy rechecks the recording. When it cannot
-confirm the ending, the pill shows **Review transcript** and offers a copy action.
-Choose **Mixed languages** under **Speech languages** if you switch languages in a recording. Poppy still shows
-the live preview and checks the full recording at Stop with Gemini when available. The Hindi, Bengali and English
+If the live transcript appears incomplete, Poppy rechecks the recording. When that fails, **Review transcript**
+lets you copy the current take’s draft. A failed take without a draft shows **No new text copied**.
+Choose **Mixed languages** under **Speech languages** if you switch languages in a recording. Poppy reuses
+a completed live transcript and sends text for any formatting. The Hindi, Bengali and English
 and Hindi, Marathi and English options also give Gemini language hints. **Writing system > Roman letters** uses
 phonetic spelling in the final text, including Hinglish and Banglish, while keeping the spoken language.
 If the transcription comes back in a different script, Poppy can use Windows’ built-in transliteration.
-Without a verified editable field, Poppy can copy the result to the clipboard. If the clipboard holds an image,
+Poppy keeps the new dictation on the clipboard after sending it to another app. Without a verified editable field,
+Poppy can copy the result to the clipboard. If the clipboard holds an image,
 files, or other rich content, the pill offers a **Copy** button so you decide when to replace it. Automatic
 copies stay out of Windows clipboard history, while an explicit copy can appear there.
 

@@ -146,8 +146,11 @@ class GeminiLiveDictation(QObject):
                 self._fail()
             return
         if isinstance(final, dict) and not live:
-            preview = self._last_preview if self._turn_closed else ""
-            self.preview.emit(preview or " ".join(self._parts).strip())
+            confirmed = " ".join(self._parts).strip()
+            if self._turn_closed and transcript_needs_recovery(confirmed, self._last_preview):
+                self.preview.emit(self._last_preview)
+            else:
+                self.preview.emit(confirmed)
 
     def cancel(self):
         if self._active:

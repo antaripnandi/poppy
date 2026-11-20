@@ -339,7 +339,8 @@ class DictationController(QObject):
         self._editing = False
         self._holding = False
         self._pending_insert = ""
-        self._restore = None
+        self._live_draft = ""
+        self._previewing = False
         self._phase = ""
         self._stopped_at = None
         self._position_file = data_path("dictation-position.json")
@@ -360,8 +361,6 @@ class DictationController(QObject):
         self._hide_timer.timeout.connect(self._hide)
         self._paste_timer = QTimer(self, singleShot=True)
         self._paste_timer.timeout.connect(self._deliver)
-        self._restore_timer = QTimer(self, singleShot=True)
-        self._restore_timer.timeout.connect(self._restore_clipboard)
 
     def configure(self, config):
         config = config if isinstance(config, dict) else {}
@@ -439,6 +438,8 @@ class DictationController(QObject):
     def _start_capture(self, *, hold=False, editing=False):
         if self._phase or not self.available:
             return
+        self.last_text = ""
+        self._live_draft = ""
         focus = native.focused_target()
         self._target = focus[0] if focus else None
         self._local_target = self._local_editor() if not self._target else None
@@ -595,7 +596,7 @@ class DictationController(QObject):
         if key:
             self._live_credential = key
             self._live = GeminiLiveDictation(self)
-            self._live.preview.connect(self._indicator.set_preview)
+            self._live.preview.connect(self._remember_live_draft)
             self._live.finalized.connect(self._live_result)
             self._live.failed.connect(self._live_failed)
             self._live.start(key, self._config.get("vocabulary", []),
@@ -607,6 +608,10 @@ class DictationController(QObject):
             self._live_credential = None
             live.cancel()
             live.deleteLater()
+
+    def _remember_live_draft(self, text):
+        self._live_draft = text[:12000]
+        self._indicator.set_preview(text)
 
     def _live_result(self, text, preview_reference):
         self._close_live()
@@ -653,7 +658,8 @@ class DictationController(QObject):
             self._close_live()
             self._phase = ""
             self._text_scope = None
-            self._status("No speech heard", "Ctrl+Alt+D to try again", auto_hide=2100)
+            self._live_draft = ""
+            self._status("No speech heard", "No new text copied", auto_hide=4800)
             return
         self._pcm = pcm
         if self._live is not None:
@@ -677,7 +683,8 @@ class DictationController(QObject):
     def _transcribe_recording(self, *, live_text="", preview_reference=""):
         pcm, self._pcm = self._pcm, bytearray()
         self._pipeline().start(native.wav_data(pcm), **self._output_options(), live_text=live_text,
-                               preview_reference=preview_reference)
+                               preview_reference=preview_reference,
+                               recovery_draft=self._live_draft if not live_text and not self._editing else "")
 
     def _processing(self, phase):
         if self._previewing:
@@ -693,15 +700,19 @@ class DictationController(QObject):
                 self._indicator.set_preview(self._preview_text)
             return
         self._phase = ""
+        self._live_draft = ""
         if not text:
+            self.last_text = ""
             self._text_scope = None
-            self._status("Dictation", message, auto_hide=4800)
+            if self._indicator is not None:
+                self._indicator.set_preview("")
+            self._status(message.partition(".")[0] or "Dictation failed", "No new text copied", auto_hide=6800)
             return
         self.last_text = text
         if message == REVIEW_TRANSCRIPT:
             self._text_scope = None
             self._indicator.set_preview(text)
-            self._status(REVIEW_TRANSCRIPT, "Copy to review before using", auto_hide=12000, offer_copy=True)
+            self._status(REVIEW_TRANSCRIPT, "May be incomplete · Copy to review", offer_copy=True)
             return
         self._pending_insert = text
         self._insertion_deadline = time.monotonic() + 0.8
@@ -713,7 +724,8 @@ class DictationController(QObject):
         if native.modifiers_down() and time.monotonic() < self._insertion_deadline:
             self._paste_timer.start(40)
             return
-        text, self._pending_insert = self._pending_insert, ""
+        output, self._pending_insert = self._pending_insert, ""
+        text = output
         self._phase = ""
         pasted = False
         scope = self._text_scope
@@ -733,17 +745,12 @@ class DictationController(QObject):
                 else:
                     editor.insertPlainText(text)
                 pasted = True
-            elif self._target and self._restore is None:
+            elif self._target:
                 try:
-                    restored = native.paste_text(int(self._notch.winId()), self._target, text,
-                                                 validate=same_text_scope if scope else None)
+                    pasted = native.paste_text(int(self._notch.winId()), self._target, text,
+                                               validate=same_text_scope if scope else None)
                 except (OSError, WindowsError):
-                    restored = None
-                if restored:
-                    pasted = True
-                    self._restore = restored
-                    self._restore_attempts = 0
-                    self._restore_timer.start(2500)
+                    pasted = False
         self._text_scope = None
         if pasted:
             self._status("Text sent", "Selection replaced" if editing else self._cleanup_message or "Copy it again from Poppy’s menu",
@@ -751,31 +758,16 @@ class DictationController(QObject):
         elif editing:
             self._status("Edit ready", "Copy the revised text", auto_hide=10000, offer_copy=True)
         else:
-            self._copy_result(explicit=False)
-
-    def _restore_clipboard(self):
-        if self._restore is None:
-            return
-        try:
-            native.restore_clipboard(int(self._notch.winId()), *self._restore)
-        except (OSError, WindowsError):
-            self._restore_attempts += 1
-            if self._restore_attempts < 5:
-                self._restore_timer.start(120)
-                return
-        self._restore = None
+            self._copy_result(output, explicit=False)
 
     def copy_last(self):
-        self._copy_result(explicit=True)
+        self._copy_result(self.last_text, explicit=True)
 
-    def _copy_result(self, *, explicit):
-        if not self.last_text:
-            return
-        if not explicit and self._restore is not None:
-            self._status("Dictation ready", "Copy to use it", auto_hide=10000, offer_copy=True)
+    def _copy_result(self, text, *, explicit):
+        if not text:
             return
         try:
-            copied = native.copy_text(int(self._notch.winId()), self.last_text, history=explicit,
+            copied = native.copy_text(int(self._notch.winId()), text, history=explicit,
                                       preserve_complex=not explicit)
         except (OSError, WindowsError):
             self._status("Clipboard is busy", "Try copying again", auto_hide=10000, offer_copy=True)
@@ -859,6 +851,7 @@ class DictationController(QObject):
         self._hide_timer.stop()
         self._paste_timer.stop()
         self._pending_insert = ""
+        self._live_draft = ""
         self._text_scope = None
         self._editing = self._holding = False
         self._previewing = False
@@ -874,9 +867,6 @@ class DictationController(QObject):
     def close(self):
         self.cancel()
         self._unregister()
-        self._restore_timer.stop()
-        self._restore_clipboard()
-        self._restore_timer.stop()
         if self._indicator is not None:
             self._indicator.close()
             self._indicator.deleteLater()
