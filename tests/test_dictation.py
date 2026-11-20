@@ -669,6 +669,55 @@ def _wav_body(reply):
     return base64.b64decode(part["inlineData"]["data"])
 
 
+def test_mic_feedback_distinguishes_low_level_from_pending_captions(recovery_session):
+    manager, _, _, replies = recovery_session
+    assert manager._indicator.preview.text() == "Checking microphone…"
+    manager._started -= 3
+    manager._mic.read = lambda: bytes(6400)
+    manager._read_mic()
+    assert manager._indicator.preview.text() == "Low mic level · Check Windows input"
+    manager._mic.read = lambda: b"\x00\x10" * 3200
+    manager._read_mic()
+    assert manager._indicator.preview.text() == "Mic signal detected · Waiting for captions"
+    _caption(manager._live, "Recognized words")
+    manager._read_mic()
+    assert manager._indicator.preview.text() == "Recognized words" and not replies
+
+
+@pytest.mark.parametrize("partial_take", [False, True])
+def test_stalled_microphone_preserves_any_captured_speech(recovery_session, partial_take):
+    manager, editor, _, replies = recovery_session
+    pcm = b"\x00\x10" * 3200
+    if partial_take:
+        manager._mic.read = lambda: pcm
+        manager._read_mic()
+    manager._last_pcm_at -= 2.1
+    manager._mic.read = lambda: b""
+    manager._read_mic()
+    assert manager._live is None and manager._mic is None
+    if partial_take:
+        assert _wav_body(replies[0])[44:] == pcm
+        assert manager._indicator.detail.text().startswith("Mic stopped")
+        replies[0].complete(200, gemini_text("Captured words"))
+        assert editor.text() == "Captured words"
+    else:
+        assert manager._indicator.title.text() == "Microphone stopped" and not replies
+
+
+def test_ready_live_without_captions_does_not_add_wait_after_stop(recovery_session):
+    manager, editor, _, replies = recovery_session
+    pcm = b"\x00\x10" * 16000
+    for _ in range(4):
+        manager._add_audio(pcm)
+    live = manager._live
+    assert live.ready and not live.has_transcript
+    manager.toggle()
+    assert manager._live is None and len(replies) == 1
+    assert _wav_body(replies[0])[44:] == pcm * 4
+    replies[0].complete(200, gemini_text("Complete text"))
+    assert editor.text() == "Complete text"
+
+
 @pytest.mark.parametrize("stop_during_checkpoint", [False, True])
 def test_delayed_checkpoint_recovers_exact_audio_after_pause(recovery_session, stop_during_checkpoint):
     manager, editor, copies, replies = recovery_session

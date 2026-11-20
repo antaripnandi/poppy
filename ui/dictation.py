@@ -252,7 +252,7 @@ class DictationIndicator(QWidget):
         self._preview_text = text
         metrics = self.preview.fontMetrics()
         width = self.width() - 44
-        recent = " ".join(text.split())[-400:] or "Waiting for speech…"
+        recent = " ".join(text.split())[-400:] or "Checking microphone…"
         if metrics.horizontalAdvance(recent) <= width:
             self.preview.setText(recent)
             return
@@ -263,6 +263,10 @@ class DictationIndicator(QWidget):
         first = metrics.elidedText(" ".join(words), Qt.TextElideMode.ElideLeft, width)
         last = metrics.elidedText(last, Qt.TextElideMode.ElideLeft, width)
         self.preview.setText(f"{first}\n{last}" if first else last)
+
+    def set_capture_feedback(self, text):
+        if not self._preview_text and self.preview.text() != text:
+            self.preview.setText(text)
 
     def set_elapsed(self, seconds, *, hold=False, editing=False):
         minutes, seconds = divmod(seconds, 60)
@@ -357,6 +361,7 @@ class DictationController(QObject):
         self._cut = None
         self._started = None
         self._first_caption = False
+        self._capture_interrupted = False
         self._previewing = False
         self._phase = ""
         self._stopped_at = None
@@ -487,6 +492,8 @@ class DictationController(QObject):
             self._status("Microphone unavailable", "Check the Windows microphone and privacy settings.", auto_hide=4200)
             return
         self._started = time.monotonic()
+        self._last_pcm_at = self._started
+        self._capture_interrupted = False
         self._phase = "recording"
         self._pcm = bytearray()
         self._speech_seconds = 0.0
@@ -566,15 +573,25 @@ class DictationController(QObject):
         if self._mic is None:
             return
         try:
-            self._add_audio(self._mic.read())
+            data = self._mic.read()
         except OSError:
-            if self._speech_seconds >= 0.12:
-                self._stop_recording()
-            else:
-                self.cancel()
-                self._status("Microphone disconnected", "Reconnect it and try again.", auto_hide=4200)
+            self._stop_recording(capture_interrupted=True)
             return
-        elapsed = int(time.monotonic() - self._started)
+        now = time.monotonic()
+        if data:
+            self._last_pcm_at = now
+            self._add_audio(data)
+        elif now - self._last_pcm_at >= 2:
+            self._stop_recording(capture_interrupted=True)
+            return
+        elapsed = int(now - self._started)
+        if self._speech_seconds >= 0.12:
+            feedback = "Mic signal detected"
+            if self._config.get("streaming", True):
+                feedback += " · Waiting for captions"
+            self._indicator.set_capture_feedback(feedback)
+        elif elapsed >= 2:
+            self._indicator.set_capture_feedback("Low mic level · Check Windows input")
         if elapsed != self._elapsed:
             self._elapsed = elapsed
             self._indicator.set_elapsed(elapsed, hold=self._holding, editing=self._editing)
@@ -726,8 +743,9 @@ class DictationController(QObject):
         if self._phase == "finishing":
             self._transcribe_recording()
 
-    def _stop_recording(self):
+    def _stop_recording(self, *, capture_interrupted=False):
         self._stopped_at = time.monotonic()
+        self._capture_interrupted = capture_interrupted
         _LOG.debug("Dictation capture ms=%d", int((self._stopped_at - self._started) * 1000))
         self._sample_timer.stop()
         self._holding = False
@@ -739,6 +757,7 @@ class DictationController(QObject):
         try:
             self._add_audio(mic.close(keep_audio=True))
         except OSError:
+            self._capture_interrupted = True
             _LOG.debug("Dictation microphone closed before its final buffer was available")
         pcm, self._pcm = self._pcm, bytearray()
         if self._speech_seconds < 0.12:
@@ -746,15 +765,18 @@ class DictationController(QObject):
             self._phase = ""
             self._text_scope = None
             self._live_draft = ""
-            self._status("No speech heard", "No new text copied", auto_hide=4800)
+            title = "Microphone stopped" if self._capture_interrupted else "No mic signal" if not any(pcm) else "Mic level too low"
+            self._status(title, "Check Windows sound input", auto_hide=6000)
             return
         self._pcm = pcm
         self._retry_audio = bytes(pcm)
         self._retry_options = self._output_options()
         self._phase = "finishing"
-        if self._live is not None and (not self._live.ready or (self._reconnects and not self._live.has_transcript
-                                                                and self._cut is None)):
-            self._close_live()
+        if self._live is not None:
+            no_captions = not self._live.has_transcript and self._cut is None
+            if (self._capture_interrupted or not self._live.ready
+                    or (no_captions and (self._reconnects or self._unanswered_voice >= 4 * 32000))):
+                self._close_live()
         if self._covered and self._cut is None and not any(pcm[self._covered:]):
             self._finish_live_text(self._confirmed_text)
             return
@@ -786,7 +808,8 @@ class DictationController(QObject):
         if self._previewing:
             return
         self._phase = "processing"
-        self._status(phase, "Ctrl+Alt+Shift+D to cancel")
+        detail = "Mic stopped · Processing captured audio" if self._capture_interrupted else "Ctrl+Alt+Shift+D to cancel"
+        self._status(phase, detail)
 
     def _finished(self, text, message):
         if self._previewing:
@@ -894,6 +917,7 @@ class DictationController(QObject):
         if not self.can_retry:
             return
         self._retry_review = True
+        self._capture_interrupted = False
         self._phase = "processing"
         self._stopped_at = time.monotonic()
         self._target = self._local_target = self._text_scope = None
