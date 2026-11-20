@@ -77,6 +77,12 @@ def _tool_path(name):
         path.lineTo(10.3, 14)
     elif name == "stop":
         path.addRoundedRect(QRectF(4, 4, 8, 8), 1.5, 1.5)
+    elif name == "copy":
+        path.addRoundedRect(QRectF(5.5, 5.5, 8, 8), 1.2, 1.2)
+        path.moveTo(3, 10.5)
+        path.lineTo(3, 4.2)
+        path.quadTo(3, 3, 4.2, 3)
+        path.lineTo(10.5, 3)
     elif name == "close":
         path.moveTo(4.5, 4.5)
         path.lineTo(11.5, 11.5)

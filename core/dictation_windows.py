@@ -336,6 +336,18 @@ def _clip_formats(clipboard):
     return [clipboard.RegisterClipboardFormat(name) for name in _CLIPBOARD_FLAGS]
 
 
+def _text_clipboard_formats(clipboard, privacy):
+    allowed = {clipboard.CF_TEXT, clipboard.CF_UNICODETEXT, clipboard.CF_OEMTEXT, clipboard.CF_LOCALE, *privacy}
+    found = set()
+    fmt = clipboard.EnumClipboardFormats(0)
+    while fmt:
+        if fmt not in allowed:
+            return None
+        found.add(fmt)
+        fmt = clipboard.EnumClipboardFormats(fmt)
+    return found
+
+
 def _put_private_text(clipboard, text, formats, *, history=False):
     clipboard.EmptyClipboard()
     excluded, allow_history, allow_cloud = formats
@@ -346,12 +358,16 @@ def _put_private_text(clipboard, text, formats, *, history=False):
     clipboard.SetClipboardText(text, clipboard.CF_UNICODETEXT)
 
 
-def copy_text(hwnd, text, *, history=False):
+def copy_text(hwnd, text, *, history=False, preserve_complex=False):
     import win32clipboard as cb
 
     cb.OpenClipboard(hwnd)
     try:
-        _put_private_text(cb, text, _clip_formats(cb), history=history)
+        privacy = _clip_formats(cb)
+        if preserve_complex and _text_clipboard_formats(cb, privacy) is None:
+            return False
+        _put_private_text(cb, text, privacy, history=history)
+        return True
     finally:
         cb.CloseClipboard()
 
@@ -363,35 +379,44 @@ def paste_text(hwnd, target, text):
     current = focused_target()
     if not current or current[0] != target or modifiers_down():
         return None
-    saved = {}
     cb.OpenClipboard(hwnd)
     try:
         privacy = _clip_formats(cb)
-        allowed = {cb.CF_TEXT, cb.CF_UNICODETEXT, cb.CF_OEMTEXT, cb.CF_LOCALE, *privacy}
-        fmt = cb.EnumClipboardFormats(0)
-        while fmt:
-            if fmt not in allowed:
-                return None
-            if fmt in (cb.CF_UNICODETEXT, *privacy):
-                saved[fmt] = cb.GetClipboardData(fmt)
-            fmt = cb.EnumClipboardFormats(fmt)
-        if saved and cb.CF_UNICODETEXT not in saved:
+        formats = _text_clipboard_formats(cb, privacy)
+        if formats is None or (formats and cb.CF_UNICODETEXT not in formats):
             return None
-        _put_private_text(cb, text, privacy)
+        saved = {fmt: cb.GetClipboardData(fmt) for fmt in (cb.CF_UNICODETEXT, *privacy) if fmt in formats}
+        try:
+            _put_private_text(cb, text, privacy)
+        except (OSError, cb.error):
+            _restore_formats(cb, saved)
+            raise
         sequence = _user32().GetClipboardSequenceNumber()
     finally:
         cb.CloseClipboard()
     keys = (_Input * 4)(*(_Input(1, _InputData(key=_KeyInput(key, 0, flags, 0, 0)))
                           for key, flags in ((0x11, 0), (ord("V"), 0), (ord("V"), 2), (0x11, 2))))
-    if _focused_window() == target[:2] and not modifiers_down():
-        sent = _user32().SendInput(4, keys, ct.sizeof(_Input))
-        if sent == 4:
-            return sequence, saved
-        if sent:
-            releases = (_Input * 2)(keys[2], keys[3])
-            _user32().SendInput(2, releases, ct.sizeof(_Input))
-    restore_clipboard(hwnd, sequence, saved)
+    sent = 0
+    try:
+        current = focused_target()
+        if (current and current[0] == target and _focused_window() == target[:2] and not modifiers_down()
+                and _user32().GetClipboardSequenceNumber() == sequence):
+            sent = _user32().SendInput(4, keys, ct.sizeof(_Input))
+            if sent == 4:
+                return sequence, saved
+            if sent:
+                releases = (_Input * 2)(keys[2], keys[3])
+                _user32().SendInput(2, releases, ct.sizeof(_Input))
+    finally:
+        if sent != 4:
+            restore_clipboard(hwnd, sequence, saved)
     return None
+
+
+def _restore_formats(clipboard, saved):
+    clipboard.EmptyClipboard()
+    for fmt, data in saved.items():
+        clipboard.SetClipboardData(fmt, data)
 
 
 def restore_clipboard(hwnd, sequence, saved):
@@ -400,8 +425,6 @@ def restore_clipboard(hwnd, sequence, saved):
     cb.OpenClipboard(hwnd)
     try:
         if _user32().GetClipboardSequenceNumber() == sequence:
-            cb.EmptyClipboard()
-            for fmt, data in saved.items():
-                cb.SetClipboardData(fmt, data)
+            _restore_formats(cb, saved)
     finally:
         cb.CloseClipboard()

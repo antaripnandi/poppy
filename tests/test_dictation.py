@@ -1,5 +1,7 @@
 import base64
 import json
+import sys
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QObject, QPoint, Qt, Signal
@@ -9,7 +11,7 @@ from PySide6.QtWidgets import QWidget
 
 from poppy.core import dictation_api
 from poppy.core.dictation_live import GeminiLiveDictation
-from poppy.ui.dictation import DictationController, native
+from poppy.ui.dictation import DictationController, DictationIndicator, native
 from poppy.core.window import DynamicNotchWindow
 from poppy.ui.settings_window import SettingsWindow
 
@@ -218,7 +220,7 @@ def test_recording_lifecycle_and_cancel_without_audio_upload(audit_app, monkeypa
     monkeypatch.setattr(native, "Microphone", Mic)
     monkeypatch.setattr(native, "focused_target", lambda: None)
     monkeypatch.setattr(native, "modifiers_down", lambda: False)
-    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, *, history: copies.append((text, history)))
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **options: copies.append((text, options)) or True)
     manager.configure({"enabled": True, "protected_keys": dictation_api.protect_keys({"gemini": ["test"]})})
     assert manager._indicator is None
     manager.toggle()
@@ -240,7 +242,7 @@ def test_recording_lifecycle_and_cancel_without_audio_upload(audit_app, monkeypa
     replies[-1].complete(200, gemini_text("Hello, Poppy."))
     assert manager.last_text == "Hello, Poppy."
     assert manager._indicator.title.text() == "Copied to clipboard"
-    assert copies == [("Hello, Poppy.", True)]
+    assert copies == [("Hello, Poppy.", {"history": False, "preserve_complex": True})]
     manager.close()
 
 
@@ -292,7 +294,7 @@ def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_a
     monkeypatch.setattr(native, "Microphone", Mic)
     monkeypatch.setattr(native, "modifiers_down", lambda: False)
     copies = []
-    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text))
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text) or True)
     controller = window.dictation
     monkeypatch.setattr(controller, "_start_live", lambda: None)
     window.btn_hdr_dictation.click()
@@ -366,12 +368,16 @@ def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch):
         def abort(self):
             self.disconnected.emit()
 
+        def closeReason(self):
+            return "API key not valid. Please pass a valid API key."
+
     monkeypatch.setattr("poppy.core.dictation_live.QWebSocket", Socket)
     live = GeminiLiveDictation()
-    packets, preview, completed = [], [], []
+    packets, preview, completed, failures = [], [], [], []
     monkeypatch.setattr(live, "_send", lambda packet: packets.append(packet) or True)
     live.preview.connect(preview.append)
-    live.finalized.connect(completed.append)
+    live.finalized.connect(lambda *args: completed.append(args))
+    live.failed.connect(failures.append)
     live._active = True
     live.feed(b"\x01\x02" * 1800)
     assert not packets
@@ -385,8 +391,18 @@ def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch):
     assert "audio" in packets[-2]["realtimeInput"]
     assert packets[-1] == {"realtimeInput": {"activityEnd": {}}}
     live._message('{"serverContent":{"inputTranscription":{"text":"Second phrase."}}}')
-    live._message('{"serverContent":{"inputTranscription":{"text":"Late reply."}}}')
-    assert completed == ["First phrase. Second phrase."]
+    assert not completed
+    live._message('{"serverContent":{"inputTranscription":{"text":"Last phrase."}}}')
+    live._message('{"serverContent":{"generationComplete":true}}')
+    live._message('{"serverContent":{"turnComplete":true}}')
+    assert completed == [("First phrase. Second phrase. Last phrase.", "")] and not failures
+    live._active = True
+    live._message('{"serverContent":{"interimInputTranscription":{"text":"Full sentence."}}}')
+    live._message('{"serverContent":{"inputTranscription":{"text":"Full"},"turnComplete":true}}')
+    assert completed[-1] == ("Full", "Full sentence.")
+    live._active = True
+    live._socket.disconnected.emit()
+    assert failures == [401]
 
 
 def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, monkeypatch):
@@ -399,12 +415,13 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
 
     class Live(QObject):
         preview = Signal(str)
-        finalized = Signal(str)
-        failed = Signal()
+        finalized = Signal(str, str)
+        failed = Signal(int)
 
         def start(self, key, vocabulary, *, language_codes):
             self.audio = bytearray()
             self.language_codes = language_codes
+            self.key = key
 
         def feed(self, pcm):
             self.audio.extend(pcm)
@@ -420,19 +437,24 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     monkeypatch.setattr(native, "focused_target", lambda: None)
     monkeypatch.setattr(native, "modifiers_down", lambda: False)
     copies = []
-    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text))
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text) or True)
     parent = QWidget()
     manager = DictationController(parent)
-    manager.configure({"enabled": True, "protected_keys": dictation_api.protect_keys({"gemini": ["test"]})})
+    manager.configure({"enabled": True, "protected_keys": dictation_api.protect_keys({"gemini": ["test", "backup"]})})
     replies = mock_network(manager._pipeline(), monkeypatch)
     manager.toggle()
     live = manager._live
     manager._read_mic()
+    captured = bytes(live.audio)
+    live.failed.emit(401)
+    live = manager._live
+    assert live.key == "backup" and live.audio == captured
+    assert manager._pipeline().live_key() == "backup"
     live.preview.emit("Preview fragment")
     assert "Preview fragment" in manager._indicator.preview.text() and not copies
     manager.toggle()
     assert len(live.audio) == 8000 and not replies
-    live.finalized.emit("Final recognized words.")
+    live.finalized.emit("Final recognized words.", "")
     assert len(replies) == 1 and b"Final recognized words." in replies[-1].body
     assert b"inlineData" not in replies[-1].body
     replies[-1].complete(200, gemini_text("Final words."))
@@ -442,7 +464,20 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     live = manager._live
     manager._read_mic()
     manager.toggle()
-    live.failed.emit()
+    live.finalized.emit("Partial final.", "Partial final with an ending.")
+    assert b"inlineData" in replies[-1].body and manager._indicator.title.text() == "Checking transcript"
+    assert "Partial final with an ending." in json.loads(replies[-1].body)["contents"][0]["parts"][1]["text"]
+    for _ in range(2):
+        replies[-1].complete(200, gemini_text("Partial final."))
+    assert manager.last_text == "Partial final with an ending."
+    assert manager._indicator.title.text() == "Review transcript" and copies == ["Final words."]
+    manager.cancel()
+
+    manager.toggle()
+    live = manager._live
+    manager._read_mic()
+    manager.toggle()
+    live.failed.emit(0)
     payload = json.loads(replies[-1].body)
     audio = base64.b64decode(payload["contents"][0]["parts"][0]["inlineData"]["data"])
     assert audio[44:] == live.audio
@@ -455,7 +490,7 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     assert live.language_codes == ("hi-IN", "bn-IN", "en-IN")
     manager._read_mic()
     manager.toggle()
-    live.finalized.emit("Incomplete preview language.")
+    live.finalized.emit("Incomplete preview language.", "")
     payload = json.loads(replies[-1].body)
     audio = base64.b64decode(payload["contents"][0]["parts"][0]["inlineData"]["data"])
     assert audio[44:] == live.audio
@@ -465,3 +500,81 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
     assert copies[-1] == "Abe, what? Ami Banglay bolchi."
     manager.close()
+
+
+def test_dictation_preserves_files_until_copy_is_clicked(monkeypatch):
+    formats = {15: "copied file list"}
+    clipboard = SimpleNamespace(
+        CF_TEXT=1, CF_UNICODETEXT=13, CF_OEMTEXT=7, CF_LOCALE=16,
+        RegisterClipboardFormat=lambda name: 60000 + native._CLIPBOARD_FLAGS.index(name),
+        OpenClipboard=lambda hwnd: None, CloseClipboard=lambda: None,
+        EnumClipboardFormats=lambda previous: next((n for n in sorted(formats) if n > previous), 0),
+        EmptyClipboard=formats.clear, SetClipboardData=formats.__setitem__,
+        SetClipboardText=lambda text, fmt: formats.__setitem__(fmt, text),
+    )
+    monkeypatch.setitem(sys.modules, "win32clipboard", clipboard)
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    parent = QWidget()
+    manager = DictationController(parent)
+    manager._previewing = False
+    manager._finished("Dictated text.", "")
+    assert formats == {15: "copied file list"}
+    assert manager._indicator.title.text() == "Dictation ready"
+    assert manager._indicator.action.accessibleName() == "Copy dictation"
+    manager._indicator.action.click()
+    assert 15 not in formats and formats[13] == "Dictated text."
+    assert formats[60001] == b"\1\0\0\0"
+    manager.close()
+
+
+def test_paste_revalidates_the_field_and_keeps_previous_clipboard(monkeypatch):
+    formats = {13: "clipboard before dictation"}
+    target = (101, 102, (7,))
+    focus = [target]
+    sent = []
+
+    def change_field():
+        focus[0] = (*target[:2], (8,))
+
+    clipboard = SimpleNamespace(
+        CF_TEXT=1, CF_UNICODETEXT=13, CF_OEMTEXT=7, CF_LOCALE=16,
+        RegisterClipboardFormat=lambda name: 60000 + native._CLIPBOARD_FLAGS.index(name),
+        OpenClipboard=lambda hwnd: None, CloseClipboard=change_field,
+        EnumClipboardFormats=lambda previous: next((n for n in sorted(formats) if n > previous), 0),
+        EmptyClipboard=formats.clear, SetClipboardData=formats.__setitem__, GetClipboardData=formats.__getitem__,
+        SetClipboardText=lambda text, fmt: formats.__setitem__(fmt, text),
+    )
+    monkeypatch.setitem(sys.modules, "win32clipboard", clipboard)
+    monkeypatch.setattr(native, "focused_target", lambda: (focus[0], (0, 0)))
+    monkeypatch.setattr(native, "_focused_window", lambda: target[:2])
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    monkeypatch.setattr(native, "_user32", lambda: SimpleNamespace(
+        GetClipboardSequenceNumber=lambda: 1, SendInput=lambda count, *_: sent.append(count) or count))
+    assert native.paste_text(1, target, "Dictated text.") is None
+    assert not sent and formats == {13: "clipboard before dictation"}
+
+
+def test_pill_keeps_preview_during_language_check_and_respects_reduced_motion(monkeypatch):
+    monkeypatch.setattr("poppy.ui.dictation.system_animations_enabled", lambda: False)
+    pill = DictationIndicator()
+    pill.set_status("Listening", "")
+    pill.set_preview("Preview phrase.")
+    assert pill.height() == 94 and pill._glow.state() == pill._glow.State.Stopped
+    pill.set_status("Checking languages", "")
+    assert pill.height() == 94 and pill.preview.text() == "Preview phrase."
+    pill.set_status("Copied to clipboard", "")
+    assert pill.height() == 54 and pill._check_amount == 1.0
+    assert pill._check.state() == pill._check.State.Stopped
+    monkeypatch.setattr("poppy.ui.dictation.system_animations_enabled", lambda: True)
+    pill.set_status("Listening", "")
+    assert pill._glow.state() == pill._glow.State.Running
+    pill._glow.setCurrentTime(900)
+    assert pill._glow_amount > 0.99
+    pill.set_status("Text sent", "")
+    assert pill._glow.state() == pill._glow.State.Stopped
+    assert pill._check.state() == pill._check.State.Running
+    pill._check.setCurrentTime(100)
+    assert 0 < pill._check_amount < 1
+    pill._check.setCurrentTime(200)
+    assert pill._check_amount == 1.0
+    pill.close()

@@ -38,6 +38,7 @@ _CLEANUP = (("groq", "openai/gpt-oss-20b"), ("groq", "openai/gpt-oss-120b"), _GE
 _MAX_RESPONSE = 128 * 1024
 _MAX_TEXT = 12000
 KEY_LIMIT = 15
+REVIEW_TRANSCRIPT = "Review transcript"
 _KEY_CHECK_URLS = {
     "groq": "https://api.groq.com/openai/v1/models/whisper-large-v3-turbo",
     "gemini": f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI[1]}",
@@ -285,6 +286,12 @@ def _has_non_latin_letters(text):
                for char in text if not char.isascii())
 
 
+def transcript_has_missing_tail(final, preview):
+    final_words = re.findall(r"\w+", final.casefold())
+    preview_words = re.findall(r"\w+", preview.casefold())
+    return bool(final_words) and len(preview_words) > len(final_words) and preview_words[:len(final_words)] == final_words
+
+
 class DictationApi(QObject):
     phase_changed = Signal(str)
     finished = Signal(str, str)
@@ -302,6 +309,7 @@ class DictationApi(QObject):
         self._audio = b""
         self._text = ""
         self._live_text = ""
+        self._preview_reference = ""
         self._queue = []
 
     def set_keys(self, keys):
@@ -311,7 +319,7 @@ class DictationApi(QObject):
         self._keys = keys
 
     def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False,
-              language_mode="auto", romanize=False, live_text=""):
+              language_mode="auto", romanize=False, live_text="", preview_reference=""):
         self.cancel()
         self._audio = audio
         self._cleanup = cleanup
@@ -326,6 +334,7 @@ class DictationApi(QObject):
             self._prompt += "\nNever translate or rewrite Romanized phrases in another script. " + _ROMAN_SPELLING
         self._romanize = romanize
         self._live_text = live_text
+        self._preview_reference = preview_reference
         self._preview = preview
         short_recheck = bool(live_text) and len(audio) <= 640044  # 20 seconds of 16 kHz PCM.
         self._audio_timeout = 6800 if short_recheck else 13000
@@ -337,9 +346,14 @@ class DictationApi(QObject):
             self._queue = [first, second]
             if not live_text:
                 self._queue.extend(_TRANSCRIPTION[:2])
+        elif preview_reference:
+            self._queue = [_GEMINI, _GEMINI_MULTILINGUAL, *_TRANSCRIPTION[:2]]
         else:
             self._queue = list(_TRANSCRIPTION)
-        self.phase_changed.emit("Checking languages" if live_text else "Transcribing")
+        phase = "Transcribing"
+        if live_text:
+            phase = "Checking languages" if self._audio_prompt else "Checking transcript"
+        self.phase_changed.emit(phase)
         self._next()
 
     def finish_transcript(self, text, *, cleanup, vocabulary, snippets, style):
@@ -362,7 +376,15 @@ class DictationApi(QObject):
         if self._cooldown.get(("gemini",), 0) > now:
             return None
         return next((key for i, key in enumerate(self._keys.get("gemini", ()))
-                     if self._cooldown.get(("gemini", i), 0) <= now), None)
+                     if self._cooldown.get(("gemini", i), 0) <= now
+                     and self._cooldown.get(("gemini", "live", i), 0) <= now), None)
+
+    def reject_live_key(self, key, *, invalid):
+        for i, candidate in enumerate(self._keys.get("gemini", ())):
+            if candidate == key:
+                scope = ("gemini", i) if invalid else ("gemini", "live", i)
+                self._cooldown[scope] = time.monotonic() + 900
+                break
 
     def cancel(self):
         self._deadline.stop()
@@ -370,6 +392,7 @@ class DictationApi(QObject):
         self._audio = b""
         self._text = ""
         self._live_text = ""
+        self._preview_reference = ""
         self._queue.clear()
         if self._reply is not None:
             reply, self._reply = self._reply, None
@@ -382,6 +405,8 @@ class DictationApi(QObject):
     def _timed_out(self):
         if self._stage == "cleanup":
             self._finish(self._text, "Cleanup timed out")
+        elif self._preview_reference:
+            self._finish(self._preview_reference, REVIEW_TRANSCRIPT)
         elif self._text or self._live_text:
             self._finish(self._text or self._live_text, "Language check timed out")
         else:
@@ -402,7 +427,8 @@ class DictationApi(QObject):
             key = self._keys[provider][slot]
             url, content_type, body = _request_for(provider, model, self._stage, self._audio,
                                                    self._text, self._vocabulary, self._prompt,
-                                                   audio_prompt=self._audio_prompt, live_text=self._live_text)
+                                                   audio_prompt=self._audio_prompt,
+                                                   live_text=self._preview_reference or self._live_text)
             request = _provider_request(provider, key, url)
             request.setRawHeader(b"Content-Type", content_type)
             reply = self._network.post(request, body)
@@ -455,6 +481,9 @@ class DictationApi(QObject):
                     scope = (provider, model)
             self._cooldown[scope] = time.monotonic() + delay
             self._next()
+        elif self._stage == "audio" and self._preview_reference and (
+                not result or transcript_has_missing_tail(result, self._preview_reference)):
+            self._next()
         elif not result and self._stage == "audio" and (self._text or self._live_text):
             self._use_audio_fallback()
         elif self._stage == "audio" and needs_romanization and provider == "gemini" and any(
@@ -469,6 +498,7 @@ class DictationApi(QObject):
     def _start_cleanup(self, text):
         self._audio = b""
         self._live_text = ""
+        self._preview_reference = ""
         if self._audio_prompt:
             self._deadline.start(min(6000, max(1, self._deadline.remainingTime())))
         self._text = text
@@ -480,7 +510,9 @@ class DictationApi(QObject):
 
     def _use_audio_fallback(self):
         text = self._text or self._live_text
-        if self._cleanup:
+        if self._preview_reference:
+            self._finish(self._preview_reference, REVIEW_TRANSCRIPT)
+        elif self._cleanup:
             self._start_cleanup(text)
         else:
             self._finish(text, "Language check unavailable")
