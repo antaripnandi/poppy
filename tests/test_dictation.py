@@ -487,12 +487,12 @@ def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch, o
     live._message('{"serverContent":{"inputTranscription":{"text":"Last phrase."}}}')
     live._message('{"serverContent":{"generationComplete":true}}')
     live._message('{"serverContent":{"turnComplete":true}}')
+    assert not completed
+    QTest.qWait(240)
     assert completed == [("First phrase. Second phrase. Last phrase.", "")] and not failures
+    live = GeminiLiveDictation()
     live._active = True
-    live._message('{"serverContent":{"interimInputTranscription":{"text":"Full sentence."}}}')
-    live._message('{"serverContent":{"inputTranscription":{"text":"Full"},"turnComplete":true}}')
-    assert completed[-1] == ("Full", "Full sentence.")
-    live._active = True
+    live.failed.connect(failures.append)
     live._socket.disconnected.emit()
     assert failures == [401]
 
@@ -508,6 +508,7 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     class Live(QObject):
         ready = True
         has_transcript = True
+        unconfirmed_ending = False
         preview = Signal(str)
         finalized = Signal(str, str)
         checkpointed = Signal(str)
@@ -863,7 +864,74 @@ def test_timestamps_finish_without_turn_marker_and_ignore_duplicate_segment(reco
     assert editor.text() == "Abe what?" and not copies and not replies
 
 
-def test_untimed_checkpoint_requires_new_final_and_completion(recovery_session):
+@pytest.mark.parametrize("marker_order", ["first", "last", "absent"])
+def test_untimed_live_keeps_split_bengali_ending(recovery_session, marker_order):
+    manager, editor, copies, replies = recovery_session
+    manager._language_mode = "mixed"
+    live = manager._live
+    speech = b"\x00\x10" * 16000
+    manager._add_audio(speech)
+    live._message('{"serverContent":{"inputTranscription":{"text":"Mic testing."}}}')
+    manager._add_audio(speech)
+    manager.toggle()
+    marker = '{"serverContent":{"generationComplete":true}}'
+    if marker_order == "first":
+        live._message(marker)
+    assert not editor.text() and not replies and not live._settle.isActive()
+    live._message('{"serverContent":{"inputTranscription":{"text":"আমি বাংলায়"}}}')
+    assert live._settle.isActive() and not editor.text()
+    first_timer = live._settle.timerId()
+    live._message('{"serverContent":{"inputTranscription":{"text":"কথা বলছি।"}}}')
+    assert live._settle.timerId() != first_timer
+    if marker_order == "last":
+        last_timer = live._settle.timerId()
+        live._message(marker)
+        assert live._settle.timerId() == last_timer
+    assert not editor.text() and not replies
+    live._settle.timeout.emit()
+    assert editor.text() == "Mic testing. আমি বাংলায় কথা বলছি।" and not copies and not replies
+
+
+@pytest.mark.parametrize("late_final", [False, True])
+def test_unconfirmed_stop_recovers_once_without_live_cooldown(recovery_session, late_final):
+    manager, editor, copies, replies = recovery_session
+    live = manager._live
+    speech = b"\x00\x10" * 16000
+    manager._add_audio(speech)
+    live._message('{"serverContent":{"inputTranscription":{"text":"Mic testing."}}}')
+    manager._add_audio(speech)
+    manager.toggle()
+    live._message('{"serverContent":{"turnComplete":true}}')
+    if late_final:
+        live._message('{"serverContent":{"inputTranscription":{"text":"Ami Banglay"}}}')
+    assert live._settle.isActive() == late_final and not replies
+    live._timeout.timeout.emit()
+    assert not live._settle.isActive()
+    live._settle.timeout.emit()
+    assert len(replies) == 1 and _wav_body(replies[0])[44:] == speech * 2
+    manager._api._timed_out()
+    assert not editor.text() and not copies and manager.can_retry
+    assert manager._indicator.title.text() == dictation_api.REVIEW_TRANSCRIPT
+    manager.toggle()
+    assert manager._live is not None and manager._live is not live
+
+
+def test_cancel_during_settling_cannot_deliver_to_new_take(recovery_session):
+    manager, editor, copies, replies = recovery_session
+    old_live = manager._live
+    manager._add_audio(b"\x00\x10" * 16000)
+    manager.toggle()
+    old_live._message('{"serverContent":{"inputTranscription":{"text":"Discarded"}}}')
+    assert old_live._settle.isActive()
+    manager.cancel()
+    manager.toggle()
+    assert not old_live._settle.isActive()
+    old_live._settle.timeout.emit()
+    old_live._timeout.timeout.emit()
+    assert manager._phase == "recording" and not editor.text() and not copies and not replies
+
+
+def test_untimed_checkpoint_keeps_audio_recorded_during_settling(recovery_session):
     manager, editor, _, _ = recovery_session
     live = manager._live
     for _ in range(18):
@@ -874,11 +942,18 @@ def test_untimed_checkpoint_requires_new_final_and_completion(recovery_session):
     live._message('{"serverContent":{"generationComplete":true}}')
     assert manager._covered == 0 and manager._live is live
     live._message('{"serverContent":{"inputTranscription":{"text":"ami"}}}')
-    assert manager._covered == 0
-    live._message('{"serverContent":{"turnComplete":true}}')
+    assert manager._covered == 0 and live._settle.isActive()
+    tail = b"\x01\x10" * 16000
+    manager._add_audio(tail)
+    live._settle.timeout.emit()
     assert manager._covered == 19 * 32000 and manager._live is not live
+    assert manager._live._audio_bytes == len(tail)
+    live._settle.timeout.emit()
+    assert manager._confirmed_text == "Namaste ami"
     manager.toggle()
-    assert editor.text() == "Namaste ami"
+    replacement = manager._live
+    _caption(replacement, "back again", 1)
+    assert editor.text() == "Namaste ami back again"
 
 
 def test_failed_tail_only_offers_confirmed_prefix_for_review(recovery_session):

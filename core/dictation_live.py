@@ -4,7 +4,7 @@ import base64
 import json
 import re
 
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 
@@ -15,6 +15,7 @@ _URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.
 _MODEL = "models/gemini-3.5-transcribe-live"
 _CHUNK_BYTES = 3200  # 100 ms of 16 kHz mono PCM16.
 _MAX_BUFFER = 128000
+_SETTLE_MS = 200
 
 
 class GeminiLiveDictation(QObject):
@@ -33,7 +34,9 @@ class GeminiLiveDictation(QObject):
         self._socket.disconnected.connect(self._disconnected)
         self._socket.errorOccurred.connect(lambda _: self._disconnected())
         self._timeout = QTimer(self, singleShot=True)
-        self._timeout.timeout.connect(self._fail)
+        self._timeout.timeout.connect(self._timed_out)
+        self._settle = QTimer(self, interval=_SETTLE_MS, singleShot=True, timerType=Qt.TimerType.PreciseTimer)
+        self._settle.timeout.connect(self._settled)
         self._drain = QTimer(self, interval=20, singleShot=True)
         self._drain.timeout.connect(self._flush)
         self._active = False
@@ -46,7 +49,7 @@ class GeminiLiveDictation(QObject):
         self._sent_bytes = 0
         self._last_voice = 0
         self._final_offset = 0
-        self._final_after_end = False
+        self.unconfirmed_ending = False
         self._buffer = bytearray()
         self._parts = []
         self._last_preview = ""
@@ -148,19 +151,22 @@ class GeminiLiveDictation(QObject):
     def _covers_voice(self):
         return self._last_voice > 0 and self._final_offset >= self._last_voice
 
-    def _complete(self, *, acknowledged=False):
+    def _settled(self):
+        if self._active and self._timeout.remainingTime() > 0:
+            self._complete()
+
+    def _timed_out(self):
+        self._fail(unconfirmed_ending=self._turn_closed)
+
+    def _complete(self):
         result = " ".join(self._parts).strip()
         if not result or (self.has_offsets and not self._covers_voice()):
             self._fail()
             return
         reference = self._last_preview if transcript_needs_recovery(result, self._last_preview) else ""
         if self._checkpointing:
-            # A timestamp-less stream needs both a final delivered after activityEnd
-            # and the provider's completion marker for this isolated audio turn.
-            if not self._covers_voice() and not (self._final_after_end and acknowledged):
-                return
             if reference:
-                self._fail()
+                self._fail(unconfirmed_ending=True)
                 return
             self.cancel()
             self.checkpointed.emit(result)
@@ -201,6 +207,7 @@ class GeminiLiveDictation(QObject):
             return
         final = content.get("inputTranscription")
         interim = content.get("interimInputTranscription")
+        new_final = False
         if isinstance(final, dict):
             text = final.get("text")
             if isinstance(text, str) and text.strip():
@@ -219,20 +226,19 @@ class GeminiLiveDictation(QObject):
                     self._final_offset = position
                 if text:
                     self._parts.append(text)
-                    if self._turn_closed:
-                        self._final_after_end = True
+                    new_final = self._turn_closed
         live = interim.get("text", "") if isinstance(interim, dict) else ""
         if isinstance(live, str) and live.strip():
             self._last_preview = " ".join([*self._parts, live]).strip()
             self.preview.emit(self._last_preview)
-        acknowledged = bool(content.get("turnComplete") or content.get("generationComplete"))
-        complete = self._covers_voice() or acknowledged
-        if self._turn_closed and complete:
-            if self.has_offsets and not self._covers_voice():
-                return  # Input transcription may arrive after a turn marker.
-            if self._parts or content.get("turnComplete"):
-                self._complete(acknowledged=acknowledged)
+        if self._turn_closed and self._covers_voice():
+            self._complete()
             return
+        if self.has_offsets:
+            self._settle.stop()
+        elif new_final:
+            # Input captions arrive independently of turn and generation markers.
+            self._settle.start()
         if isinstance(final, dict) and not live:
             confirmed = " ".join(self._parts).strip()
             if self._turn_closed and transcript_needs_recovery(confirmed, self._last_preview):
@@ -244,6 +250,7 @@ class GeminiLiveDictation(QObject):
         if self._active:
             self._active = False
             self._timeout.stop()
+            self._settle.stop()
             self._drain.stop()
             self._buffer.clear()
             self._parts.clear()
@@ -261,7 +268,8 @@ class GeminiLiveDictation(QObject):
         else:
             self._fail()
 
-    def _fail(self, status=0):
+    def _fail(self, status=0, *, unconfirmed_ending=False):
         if self._active:
+            self.unconfirmed_ending = unconfirmed_ending
             self.cancel()
             self.failed.emit(status)

@@ -731,7 +731,9 @@ class DictationController(QObject):
         if isinstance(self.sender(), GeminiLiveDictation) and self.sender() is not self._live:
             return
         connected = self._live is not None and self._live.ready
-        _LOG.debug("Dictation Live failed status=%s ready=%s reconnects=%d", status, connected, self._reconnects)
+        unconfirmed_ending = self._live is not None and self._live.unconfirmed_ending
+        _LOG.debug("Dictation Live failed status=%s ready=%s reconnects=%d unconfirmed_ending=%s",
+                   status, connected, self._reconnects, unconfirmed_ending)
         key = self._live_credential
         self._close_live()
         self._cut = None
@@ -745,7 +747,8 @@ class DictationController(QObject):
             if self._live is not None:
                 self._live.replay(self._pcm[self._covered:])
                 return
-        self._live_retry_at = time.monotonic() + 60
+        if not unconfirmed_ending:
+            self._live_retry_at = time.monotonic() + 60
         if self._phase == "finishing":
             self._transcribe_recording()
 
