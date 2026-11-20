@@ -588,7 +588,10 @@ class DictationController(QObject):
         if self._speech_seconds >= 0.12:
             feedback = "Mic signal detected"
             if self._config.get("streaming", True):
-                feedback += " · Waiting for captions"
+                if self._live is not None:
+                    feedback += " · Waiting for captions"
+                elif self._previewing:
+                    feedback = "Getting captions from recorded audio…"
             self._indicator.set_capture_feedback(feedback)
         elif elapsed >= 2:
             self._indicator.set_capture_feedback("Low mic level · Check Windows input")
@@ -617,7 +620,7 @@ class DictationController(QObject):
                 live.feed(data, voiced=rms >= 80)
                 if live is not self._live or self._mic is None:
                     return
-                if self._unanswered_voice >= 6 * 32000:
+                if self._unanswered_voice >= (6 if self._first_caption else 5) * 32000:
                     self._live_failed(0)
                 elif (len(self._pcm) - self._covered >= 18 * 32000 and self._quiet_bytes >= 32000
                       and self._live_draft):
@@ -729,9 +732,7 @@ class DictationController(QObject):
         self._cut = None
         if status in (401, 403) and key:
             self._pipeline().reject_live_key(key, invalid=status == 401)
-        if status == 429:
-            self._pipeline().cool_down_gemini()
-        retryable = status in (401, 403) or (status == 0 and connected)
+        retryable = status in (401, 403) or (status == 0 and connected and self._first_caption)
         if self._mic is not None and retryable and self._reconnects < 2:
             self._reconnects += 1
             self._unanswered_voice = self._quiet_bytes = 0
@@ -923,7 +924,7 @@ class DictationController(QObject):
         self._target = self._local_target = self._text_scope = None
         self._pipeline().start(native.wav_data(self._retry_audio),
                                **dict(self._retry_options, stopped_at=self._stopped_at),
-                               recovery_draft=self.last_text)
+                               recovery_draft=self.last_text, manual_retry=True)
 
     def _copy_result(self, text, *, explicit):
         if not text:

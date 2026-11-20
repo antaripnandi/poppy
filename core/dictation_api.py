@@ -276,7 +276,8 @@ def _request_for(provider, model, stage, audio, text, vocabulary, prompt, *, aud
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         body = {"systemInstruction": {"parts": [{"text": instructions}]}, "contents": [{"parts": parts}],
                 "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1,
-                                     "thinkingConfig": {"thinkingLevel": "MINIMAL" if model == _GEMINI[1] else "LOW"}}}
+                                     "thinkingConfig": {"thinkingLevel": "MINIMAL" if model in (
+                                         _GEMINI[1], _GEMINI_MULTILINGUAL[1]) else "LOW"}}}
     else:
         url = ("https://api.groq.com/openai/v1/chat/completions" if provider == "groq"
                else "https://openrouter.ai/api/v1/chat/completions")
@@ -328,9 +329,11 @@ def transcript_needs_recovery(final, preview):
     alignment = SequenceMatcher(None, final_words, preview_words)
     if not final_words or not preview_words:
         return bool(preview_words)
-    # A partial or unrelated guess by the interim model is weak evidence.
     if not any(block.size for block in alignment.get_matching_blocks()):
-        return False
+        # A small interim guess is weak evidence. A drastic reduction in both
+        # words and characters can still signal a dropped phrase across scripts.
+        return (len(preview_words) >= 6 and len(final_words) * 2 <= len(preview_words)
+                and sum(map(len, final_words)) * 2 <= sum(map(len, preview_words)))
     for tag, start, end, first, last in alignment.get_opcodes():
         if tag == "insert" or (tag == "replace" and last - first > end - start):
             if any(word not in _FILLERS for word in preview_words[first:last]):
@@ -408,7 +411,7 @@ class DictationApi(QObject):
 
     def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False,
               language_mode="auto", romanize=False, live_text="", preview_reference="", selection="", context="",
-              recovery_draft="", confirmed_prefix="", stopped_at=None):
+              recovery_draft="", confirmed_prefix="", stopped_at=None, manual_retry=False):
         self.cancel()
         self._audio = audio
         self._confirmed_prefix = confirmed_prefix
@@ -426,15 +429,16 @@ class DictationApi(QObject):
         self._preview_reference = preview_reference
         self._recovery_draft = recovery_draft if not selection else ""
         self._preview = preview
+        self._manual_retry = manual_retry
         short_take = stopped_at is not None and len(audio) <= 640044  # WAV header + 20 s.
         self._audio_timeout = 4500 if short_take or preview_reference else (8000 if self._recovery_draft else 13000)
-        if short_take and not preview and not (self._keys.get("groq") and self._keys.get("gemini")):
-            # A second upload to the same service would share the same short deadline.
-            self._audio_timeout = 8000
         self._cleanup_timeout = 2500 if short_take and not selection else 7000
         self._cleanup_attempts = 1 if short_take and not selection else 5
         self._attempt_limit = 1 if preview or preview_reference else (2 if stopped_at is not None else 5)
-        if preview or short_take or preview_reference:
+        if manual_retry and short_take:
+            self._audio_timeout = 8000
+            budget = 18000
+        elif preview or short_take or preview_reference:
             budget = 8000
         elif self._recovery_draft:
             budget = 14000
@@ -447,9 +451,7 @@ class DictationApi(QObject):
             self._queue = [_GEMINI_MULTILINGUAL, _GEMINI, *_TRANSCRIPTION[:2]]
         elif self._audio_prompt:
             first, second = (_GEMINI, _GEMINI_MULTILINGUAL) if romanize else (_GEMINI_MULTILINGUAL, _GEMINI)
-            self._queue = [first, second]
-            if not live_text:
-                self._queue.extend(_TRANSCRIPTION[:2])
+            self._queue = [first, second] if live_text else [first, _TRANSCRIPTION[0], second, _TRANSCRIPTION[1]]
         else:
             self._queue = list(_TRANSCRIPTION)
         phase = "Transcribing"
@@ -486,8 +488,6 @@ class DictationApi(QObject):
 
     def live_key(self):
         now = time.monotonic()
-        if self._cooldown.get(("gemini",), 0) > now:
-            return None
         return next((key for i, key in enumerate(self._keys.get("gemini", ()))
                      if self._cooldown.get(("gemini", i), 0) <= now
                      and self._cooldown.get(("gemini", "live", i), 0) <= now), None)
@@ -498,10 +498,6 @@ class DictationApi(QObject):
                 scope = ("gemini", i) if invalid else ("gemini", "live", i)
                 self._cooldown[scope] = time.monotonic() + 900
                 break
-
-    def cool_down_gemini(self):
-        scope = ("gemini",)
-        self._cooldown[scope] = max(self._cooldown.get(scope, 0), time.monotonic() + 60)
 
     def cancel(self):
         self._deadline.stop()
@@ -515,6 +511,8 @@ class DictationApi(QObject):
         self._selection = ""
         self._context = ""
         self._prompt = ""
+        self._manual_retry = False
+        self._last_problem = ""
         self._queue.clear()
         if self._reply is not None:
             reply, self._reply = self._reply, None
@@ -540,10 +538,14 @@ class DictationApi(QObject):
         now = time.monotonic()
         while self._queue and self._attempts < self._attempt_limit and self._deadline.remainingTime() > 1:
             provider, model = self._queue.pop(0)
+            stage = "preview" if self._preview else self._stage
             if (self._cooldown.get((provider,), 0) > now
                     or self._cooldown.get((provider, model), 0) > now
                     or self._cooldown.get((provider, self._stage, model), 0) > now
+                    or (not self._manual_retry and self._cooldown.get((provider, stage, model, "transient"), 0) > now)
                     or (self._preview and self._cooldown.get((provider, "preview"), 0) > now)):
+                if self._cooldown.get((provider,), 0) > now and self._keys.get(provider):
+                    self._last_problem = self._last_problem or "Transcription rate limited"
                 continue
             slot = next((i for i, _ in enumerate(self._keys.get(provider, []))
                          if self._cooldown.get((provider, i), 0) <= now), None)
@@ -570,12 +572,16 @@ class DictationApi(QObject):
             reply.setReadBufferSize(_MAX_RESPONSE + 1)
             reply.readyRead.connect(lambda: reply.abort() if reply.bytesAvailable() > _MAX_RESPONSE else None)
             reply.finished.connect(lambda: self._received(reply, provider, model, slot))
-            self._request_timeout.start(self._audio_timeout if self._stage == "audio" else self._cleanup_timeout)
+            timeout = self._audio_timeout if self._stage == "audio" else self._cleanup_timeout
+            if (self._stage == "audio" and not self._preview and self._attempt_limit > 1
+                    and self._attempts == self._attempt_limit):
+                timeout = max(1, self._deadline.remainingTime())
+            self._request_timeout.start(timeout)
             return
         if self._stage == "audio" and (self._preview_reference or self._recovery_draft or self._text or self._live_text):
             self._use_audio_fallback()
         else:
-            self._finish(self._text, "Cleanup unavailable" if self._text else "Transcription unavailable. Check your keys or try again later.")
+            self._finish(self._text, "Cleanup unavailable" if self._text else self._last_problem or "Transcription unavailable")
 
     def _received(self, reply, provider, model, slot):
         reply.deleteLater()
@@ -602,23 +608,29 @@ class DictationApi(QObject):
                                                           romanize=self._romanize, context=self._context)):
             self._finish(self._text, "Kept the original words")
         elif result is None or (self._stage == "cleanup" and not result):
-            scope, delay = (provider, self._stage, model), 20
+            stage = "preview" if self._preview else self._stage
+            scope, delay = (provider, stage, model, "transient"), 20
+            self._last_problem = "Transcription service busy" if status and status >= 500 else "Transcription unavailable"
+            if status is None:
+                self._last_problem = "Transcription timed out" if self._request_expired else "Connection failed"
             if status == 429:
+                self._last_problem = "Transcription rate limited"
                 header = bytes(reply.rawHeader("Retry-After"))
                 delay = min(86400, max(1, int(header))) if header.isdigit() and len(header) <= 10 else 60
                 scope = (provider, "preview") if self._preview and not header else (provider,)
             elif status in (401, 402, 403) or (
                     status == 400 and isinstance(data, dict)
                     and "API_KEY_INVALID" in json.dumps(data.get("error", {}))):
+                self._last_problem = "API key rejected" if status in (400, 401) else "Provider access denied"
                 scope, delay = (provider, slot), 900
                 # Prefer trying a backup provider before trying another key here.
                 if any(i != slot and self._cooldown.get((provider, i), 0) <= time.monotonic()
                        for i in range(len(self._keys.get(provider, [])))):
                     self._queue.append((provider, model))
             elif status in (400, 404, 410):
+                self._last_problem = "Provider rejected audio" if status == 400 else "Transcription model unavailable"
                 delay = 600
-                if status in (404, 410):
-                    scope = (provider, model)
+                scope = (provider, model) if status in (404, 410) else (provider, self._stage, model)
             self._cooldown[scope] = time.monotonic() + delay
             self._next()
         elif self._stage == "audio" and (self._preview_reference or self._live_text) and (

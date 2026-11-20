@@ -237,6 +237,7 @@ def test_recovery_checks_middle_and_ending_and_accepts_only_covering_batch(monke
     reference = "Start here. আমি বাংলায় বলছি। Keep the ending."
     assert dictation_api.transcript_needs_recovery(final, reference)
     assert not dictation_api.transcript_needs_recovery("First phrase. Second phrase.", "First phrase. Sec")
+    assert dictation_api.transcript_needs_recovery("Two words", "This preview has most of the original sentence")
     api = dictation_api.DictationApi()
     api.set_keys({"gemini": ["fixture"]})
     replies = mock_network(api, monkeypatch)
@@ -266,7 +267,7 @@ def test_preview_rate_limit_without_retry_after_preserves_final_attempt(monkeypa
     api.start(b"RIFFsample-data", **options)
     assert len(replies) == 2
     replies[-1].complete(429)
-    assert api.live_key() is None
+    assert api.live_key() == "fixture"
 
 
 def test_settings_save_keys_encrypted_and_reopen_with_voice_options(audit_app, tmp_path):
@@ -787,7 +788,7 @@ def test_cold_socket_never_delays_batch_at_stop(recovery_session, failed_before_
         assert manager._live is None and not manager._reconnects
     manager.toggle()
     assert len(replies) == 1 and manager._phase == "processing"
-    assert manager._api._request_timeout.interval() == 8000
+    assert manager._api._request_timeout.interval() == 4500
     replies[0].complete(200, gemini_text("Quick note"))
     assert editor.text() == "Quick note"
 
@@ -862,6 +863,7 @@ def test_discard_or_new_recording_rejects_late_recovery(recovery_session, discar
 
 def test_stall_reconnect_budget_and_quota_are_bounded(recovery_session):
     manager, _, _, replies = recovery_session
+    _caption(manager._live, "Earlier words")
     for i in range(3):
         live = manager._live
         for _ in range(6):
@@ -874,7 +876,66 @@ def test_stall_reconnect_budget_and_quota_are_bounded(recovery_session):
     manager._live_retry_at = 0
     manager.toggle()
     manager._live._fail(429)
-    assert manager._live is None and manager._pipeline().live_key() is None and not manager._reconnects
+    assert manager._live is None and not manager._reconnects
+    assert manager._live_retry_at > dictation_api.time.monotonic()
+    pcm = b"\x00\x10" * 16000
+    manager._add_audio(pcm)
+    manager.toggle()
+    assert _wav_body(replies[-1])[44:] == pcm
+
+
+def test_captionless_live_switches_to_batch_preview_instead_of_reconnecting(recovery_session):
+    manager, _, _, replies = recovery_session
+    for _ in range(5):
+        manager._add_audio(b"\x00\x10" * 16000)
+    assert manager._live is None and manager._reconnects == 0
+    manager._maybe_preview()
+    assert manager._previewing and replies
+    replies[-1].complete(200, gemini_text("Batch caption"))
+    assert manager._indicator.preview.text() == "Batch caption"
+
+
+def test_failed_preview_still_allows_two_distinct_final_models(recovery_session):
+    manager, editor, _, replies = recovery_session
+    manager._live._fail(429)
+    manager._add_audio(b"\x00\x10" * 48000)
+    manager._maybe_preview()
+    first_url = replies[-1].request.url().toString()
+    replies[-1].complete(503)
+    manager.toggle()
+    assert replies[-1].request.url().toString() == first_url
+    manager._api._abort_reply()
+    assert replies[-1].request.url().toString() != first_url
+    replies[-1].complete(200, gemini_text("Full batch result"))
+    assert editor.text() == "Full batch result"
+
+
+def test_batch_quota_has_a_specific_retry_message(recovery_session):
+    manager, _, copies, replies = recovery_session
+    manager._live._fail(429)
+    manager._add_audio(b"\x00\x10" * 16000)
+    manager.toggle()
+    replies[-1].complete(429)
+    assert manager._indicator.title.text() == "Transcription rate limited"
+    assert manager.can_retry and not copies
+    manager.retry()
+    assert manager._indicator.title.text() == "Transcription rate limited"
+    assert len(replies) == 1
+
+
+def test_manual_retry_gets_fresh_attempt_after_a_transient_failure(recovery_session):
+    manager, editor, copies, replies = recovery_session
+    manager._live._fail(429)
+    manager._add_audio(b"\x00\x10" * 16000)
+    manager.toggle()
+    replies[0].complete(503)
+    replies[1].complete(503)
+    assert manager._indicator.title.text() == "Transcription service busy"
+    manager.retry()
+    assert len(replies) == 3
+    assert manager._api._deadline.interval() >= 17900
+    replies[-1].complete(200, gemini_text("Retry worked"))
+    assert not editor.text() and not copies
 
 
 def test_empty_result_clears_old_dictation_and_never_copies_it(monkeypatch):
