@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QP
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 
 from poppy.core import dictation_windows as native
-from poppy.core.dictation_api import DictationApi, REVIEW_TRANSCRIPT, SPEECH_LANGUAGES, read_keys
+from poppy.core.dictation_api import DictationApi, REVIEW_TRANSCRIPT, SPEECH_LANGUAGES, needs_language_check, read_keys
 from poppy.core.dictation_live import GeminiLiveDictation
 from poppy.core.storage import data_path, write_json
 from poppy.core.system_controls import system_animations_enabled
@@ -356,6 +356,7 @@ class DictationController(QObject):
         self._retry_audio = b""
         self._retry_options = {}
         self._retry_review = False
+        self._retry_language_reference = ""
         self._confirmed_text = ""
         self._covered = 0
         self._cut = None
@@ -647,7 +648,8 @@ class DictationController(QObject):
         self._preview_offset = len(self._pcm)
         self._preview_speech_seconds = self._speech_seconds
         self._pipeline().start(native.wav_data(self._pcm[offset:]), cleanup=False,
-                               vocabulary=self._config.get("vocabulary", []), snippets={}, style="natural", preview=True)
+                               vocabulary=self._config.get("vocabulary", []), snippets={}, style="natural", preview=True,
+                               language_mode=self._language_mode)
 
     def _start_live(self):
         if not self._config.get("streaming", True) or time.monotonic() < self._live_retry_at:
@@ -717,6 +719,9 @@ class DictationController(QObject):
 
     def _finish_live_text(self, text):
         self._close_live()
+        if self._needs_language_check(text):
+            self._transcribe_recording(language_reference=text)
+            return
         short_take = len(self._pcm) <= 640000
         self._pcm.clear()
         self._indicator.set_preview(text)
@@ -798,8 +803,23 @@ class DictationController(QObject):
                     language_mode=self._language_mode, stopped_at=self._stopped_at,
                     romanize=not self._editing and self._config.get("output_script") == "roman")
 
-    def _transcribe_recording(self, *, live_text="", preview_reference=""):
+    def _needs_language_check(self, text):
+        return (not self._editing and self._language_mode != "auto" and len(self._pcm) >= 8 * 32000
+                and needs_language_check(text))
+
+    def _transcribe_recording(self, *, live_text="", preview_reference="", language_reference=""):
+        if not language_reference:
+            draft = " ".join([self._confirmed_text, preview_reference or live_text or self._live_draft]).strip()
+            if self._needs_language_check(draft):
+                language_reference = draft
         pcm, self._pcm = self._pcm, bytearray()
+        if language_reference:
+            # A locked segment may already be checkpointed. Recheck the whole
+            # recording and keep the suspect words out of the provider prompt.
+            self._retry_language_reference = language_reference
+            self._pipeline().start(native.wav_data(pcm), **self._output_options(),
+                                   language_reference=language_reference)
+            return
         self._pipeline().start(native.wav_data(pcm[self._covered:]), **self._output_options(), live_text=live_text,
                                confirmed_prefix=self._confirmed_text,
                                preview_reference=preview_reference,
@@ -905,6 +925,7 @@ class DictationController(QObject):
         self._retry_audio = b""
         self._retry_options = {}
         self._retry_review = False
+        self._retry_language_reference = ""
 
     def _show_recovery(self):
         if self.last_text:
@@ -924,7 +945,8 @@ class DictationController(QObject):
         self._target = self._local_target = self._text_scope = None
         self._pipeline().start(native.wav_data(self._retry_audio),
                                **dict(self._retry_options, stopped_at=self._stopped_at),
-                               recovery_draft=self.last_text, manual_retry=True)
+                               recovery_draft=self.last_text, manual_retry=True,
+                               language_reference=self._retry_language_reference)
 
     def _copy_result(self, text, *, explicit):
         if not text:

@@ -670,6 +670,63 @@ def _wav_body(reply):
     return base64.b64decode(part["inlineData"]["data"])
 
 
+def test_mixed_take_rechecks_locked_language_from_original_audio(recovery_session):
+    manager, editor, _, replies = recovery_session
+    manager._language_mode = "mixed"
+    live = manager._live
+    pcm = b"\x00\x10" * 16000
+    first = "আমি বাংলায় কথা বলছি এবং এই পরীক্ষা চালাচ্ছি।"
+    last = "আমরা আবার এখানে কথা বলছি এবং অন্য ভাষা শুনছি।"
+    for _ in range(60):
+        manager._add_audio(pcm)
+        _caption(live, last)
+    manager._covered = 32000
+    manager._confirmed_text = first
+    manager.toggle()
+    live.finalized.emit(last, "")
+    assert manager._indicator.title.text() == "Checking languages"
+    payload = json.loads(replies[0].body)
+    parts = payload["contents"][0]["parts"]
+    assert len(parts) == 1
+    assert _wav_body(replies[0])[44:] == pcm * 60
+    assert first.encode("utf-8") not in replies[0].body
+    assert "Devanagari for Hindi" in payload["systemInstruction"]["parts"][0]["text"]
+    restored = "This is the audio test. मैं हिंदी में बोल रहा हूँ। আমি বাংলায় কথা বলছি। Back to English now."
+    replies[0].complete(200, gemini_text(restored))
+    assert editor.text() == restored
+
+
+def test_mixed_take_can_confirm_single_language_or_require_review(monkeypatch):
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["fixture"]})
+    replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *args: results.append(args))
+    draft = "আমি বাংলায় কথা বলছি এবং এই পরীক্ষা করছি।"
+    options = dict(cleanup=False, vocabulary=[], snippets={}, style="natural", language_mode="mixed",
+                   language_reference=draft, stopped_at=dictation_api.time.monotonic())
+    api.start(b"RIFFsample", **options)
+    replies[-1].complete(200, gemini_text(draft))
+    assert results[-1] == (draft, "")
+    api.start(b"RIFFsample", **options)
+    replies[-1].complete(200, gemini_text("Yes."))
+    replies[-1].complete(200, gemini_text("হ্যাঁ।"))
+    assert results[-1] == (draft, dictation_api.REVIEW_TRANSCRIPT)
+
+
+def test_balanced_mixed_live_text_does_not_upload_audio(recovery_session):
+    manager, editor, _, replies = recovery_session
+    manager._language_mode = "mixed"
+    live = manager._live
+    text = "Testing language switches. আমি বাংলায় বলছি। फिर हिंदी में बात करते हैं। Now English again."
+    for _ in range(9):
+        manager._add_audio(b"\x00\x10" * 16000)
+        _caption(live, text)
+    manager.toggle()
+    live.finalized.emit(text, "")
+    assert editor.text() == text and not replies
+
+
 def test_mic_feedback_distinguishes_low_level_from_pending_captions(recovery_session):
     manager, _, _, replies = recovery_session
     assert manager._indicator.preview.text() == "Checking microphone…"

@@ -237,10 +237,14 @@ def _mixed_audio_prompt(language_mode, romanize):
     if language_mode == "auto" and not romanize:
         return ""
     language, hints = SPEECH_LANGUAGES[language_mode]
-    hint = f", including {language}" if hints else ""
-    script = _ROMAN_SPELLING if romanize else "Use each language's own script."
+    hint = f", including {language}" if hints else ", such as Hindi, Bengali, or English" if language_mode == "mixed" else ""
+    script = (_ROMAN_SPELLING if romanize else
+              "Use each language's own script: Devanagari for Hindi or Marathi, Bengali script for Bengali, "
+              "and Latin letters for English.")
     return (f"Identify the spoken language independently for each phrase{hint}. "
-            f"Preserve every phrase and language switch. Never translate. {script}")
+            "Preserve every phrase and language switch, including switches within a sentence. "
+            "Keep English words as English even between phrases in another language. "
+            "Include only languages actually spoken. Never translate. " + script)
 
 
 def _request_for(provider, model, stage, audio, text, vocabulary, prompt, *, audio_prompt="", live_text=""):
@@ -320,6 +324,37 @@ def _words(text):
     # Combining marks can change the word in Bengali or Devanagari.
     return "".join(char if char.isalnum() or unicodedata.category(char).startswith("M") else " "
                    for char in unicodedata.normalize("NFC", text).casefold()).split()
+
+
+def _script_letters(text):
+    counts = {}
+    for char in text:
+        if char.isalpha():
+            script = unicodedata.name(char, "").partition(" ")[0]
+            counts[script] = counts.get(script, 0) + 1
+    return counts
+
+
+def needs_language_check(text):
+    counts = _script_letters(text)
+    total = sum(counts.values())
+    return any(counts.get(script, 0) >= max(12, total * 0.72) for script in ("BENGALI", "DEVANAGARI"))
+
+
+def _confirms_languages(reference, candidate):
+    before, after = _words(reference), _words(candidate)
+    if not after or len(after) * 2 < len(before):
+        return False
+    # The independent transcription can confirm a genuinely single-language take
+    # or restore switches that were missing from the Live output.
+    if SequenceMatcher(None, before, after, autojunk=False).ratio() >= 0.72:
+        return True
+    reference_scripts = _script_letters(reference)
+    scripts = _script_letters(candidate)
+    if sum(count >= 9 for count in scripts.values()) < 2:
+        return False
+    return not needs_language_check(candidate) or any(
+        count >= 12 and reference_scripts.get(script, 0) < 9 for script, count in scripts.items())
 
 
 def transcript_needs_recovery(final, preview):
@@ -411,7 +446,7 @@ class DictationApi(QObject):
 
     def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False,
               language_mode="auto", romanize=False, live_text="", preview_reference="", selection="", context="",
-              recovery_draft="", confirmed_prefix="", stopped_at=None, manual_retry=False):
+              recovery_draft="", confirmed_prefix="", stopped_at=None, manual_retry=False, language_reference=""):
         self.cancel()
         self._audio = audio
         self._confirmed_prefix = confirmed_prefix
@@ -421,13 +456,15 @@ class DictationApi(QObject):
         self._vocabulary = vocabulary
         self._snippets = snippets
         audio_mode = "mixed" if preview_reference and language_mode == "auto" else language_mode
-        self._audio_prompt = _mixed_audio_prompt(audio_mode, romanize and not preview_reference)
+        native_first = bool(preview_reference or language_reference or (audio_mode != "auto" and not live_text))
+        self._audio_prompt = _mixed_audio_prompt(audio_mode, romanize and not native_first)
         self._prompt = _output_prompt(style, vocabulary, snippets, cleanup=cleanup, romanize=romanize,
                                       mixed=bool(self._audio_prompt), context=self._context, selection=selection)
         self._romanize = romanize
         self._live_text = live_text
         self._preview_reference = preview_reference
-        self._recovery_draft = recovery_draft if not selection else ""
+        self._language_reference = language_reference
+        self._recovery_draft = (language_reference or recovery_draft) if not selection else ""
         self._preview = preview
         self._manual_retry = manual_retry
         short_take = stopped_at is not None and len(audio) <= 640044  # WAV header + 20 s.
@@ -435,7 +472,10 @@ class DictationApi(QObject):
         self._cleanup_timeout = 2500 if short_take and not selection else 7000
         self._cleanup_attempts = 1 if short_take and not selection else 5
         self._attempt_limit = 1 if preview or preview_reference else (2 if stopped_at is not None else 5)
-        if manual_retry and short_take:
+        if language_reference:
+            self._audio_timeout = 6500 if short_take and not manual_retry else 10000
+            budget = (18000 if manual_retry else 14000) if short_take else 20000
+        elif manual_retry and short_take:
             self._audio_timeout = 8000
             budget = 18000
         elif preview or short_take or preview_reference:
@@ -455,7 +495,9 @@ class DictationApi(QObject):
         else:
             self._queue = list(_TRANSCRIPTION)
         phase = "Transcribing"
-        if live_text:
+        if language_reference:
+            phase = "Checking languages"
+        elif live_text:
             phase = "Checking transcript" if preview_reference or not self._audio_prompt else "Checking languages"
         self.phase_changed.emit(phase)
         self._next()
@@ -507,6 +549,7 @@ class DictationApi(QObject):
         self._text = ""
         self._live_text = ""
         self._preview_reference = ""
+        self._language_reference = ""
         self._recovery_draft = ""
         self._selection = ""
         self._context = ""
@@ -632,6 +675,8 @@ class DictationApi(QObject):
                 delay = 600
                 scope = (provider, model) if status in (404, 410) else (provider, self._stage, model)
             self._cooldown[scope] = time.monotonic() + delay
+            self._next()
+        elif self._stage == "audio" and self._language_reference and not _confirms_languages(self._language_reference, result):
             self._next()
         elif self._stage == "audio" and (self._preview_reference or self._live_text) and (
                 not result or any(not _preserves_words(reference, result, allow_insertions=True,

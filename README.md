@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.20-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.21-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -40,7 +40,8 @@ If transcription fails, click **Retry transcription** in the pill or **Retry las
 The pill shows recovered text for you to copy. **Discard recording**, starting another take, and quitting Poppy
 release the saved audio. Recovery keeps one recording of up to 90 seconds in memory.
 Choose **Mixed languages** under **Speech languages** if you switch languages in a recording. Poppy reuses
-a completed live transcript and sends text for any formatting. The Hindi, Bengali and English
+a completed live transcript and sends text for formatting. When a longer mixed-language transcript is dominated
+by Bengali or Devanagari script, Poppy can check the original audio again before formatting. The Hindi, Bengali and English
 and Hindi, Marathi and English options also give Gemini language hints. **Writing system > Roman letters** uses
 phonetic spelling in the final text, including Hinglish and Banglish, while keeping the spoken language.
 If the transcription comes back in a different script, Poppy can use Windows’ built-in transliteration.
