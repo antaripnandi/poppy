@@ -396,7 +396,7 @@ def _read_text_range(element, selection):
                 if move(text_range, 0, 0, -CONTEXT_LIMIT, ct.byref(moved)) < 0:
                     return None
                 text = _range_text(text_range, CONTEXT_LIMIT)
-                return TextScope(text) if text else None
+                return TextScope(text, _range_location(text_range)) if text else None
 
 
 def _read_win32_edit(hwnd, selection):
@@ -431,7 +431,7 @@ def _read_win32_edit(hwnd, selection):
     text = data.decode("utf-16-le", errors="ignore")
     if read(0x00B0, ct.addressof(start), ct.addressof(end)) is None or (start.value, end.value) != (left, right):
         return None
-    return TextScope(text, (left, right) if selection else ()) if text.strip() else None
+    return TextScope(text, (left, right) if selection else (left,)) if text.strip() else None
 
 
 def read_text_scope(target, *, selection):

@@ -98,8 +98,8 @@ def test_rate_limited_provider_cools_down_and_cleanup_only_gets_text(monkeypatch
     replies[-1].complete(429)
     assert replies[-1].host == "openrouter.ai"
     assert json.loads(replies[-1].body)["model"] == "openrouter/free"
-    replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "See my link."}}]})
-    assert results == [("See https://example.test.", "")]
+    replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "Please see my link."}}]})
+    assert results == [("Please see https://example.test.", "")]
     moment[0] += 6
     start(api)
     assert replies[-1].host == "api.groq.com"
@@ -133,14 +133,14 @@ def test_mixed_audio_finishes_in_one_pass_and_keeps_live_text_on_failure(monkeyp
     results = []
     api.finished.connect(lambda *result: results.append(result))
     options = dict(cleanup=False, vocabulary=[], snippets={}, style="natural", language_mode="hi-bn-en",
-                   romanize=True, live_text="Live text only")
+                   romanize=True, live_text="Abe, what?")
     api.start(b"RIFFsample-data", **options)
     payload = json.loads(replies[-1].body)
     assert replies[-1].host == "generativelanguage.googleapis.com"
     prompt = payload["systemInstruction"]["parts"][0]["text"]
     assert "Hindi, Bengali and English" in prompt and "every phrase" in prompt
     assert "Roman letters" in prompt and "obvious fillers" not in prompt
-    assert payload["contents"][0]["parts"][1]["text"] == "Partial transcript: Live text only"
+    assert payload["contents"][0]["parts"][1]["text"] == "Partial transcript: Abe, what?"
     replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
     assert len(replies) == 1 and results[-1] == ("Abe, what? Ami Banglay bolchi.", "")
 
@@ -151,8 +151,8 @@ def test_mixed_audio_finishes_in_one_pass_and_keeps_live_text_on_failure(monkeyp
     payload = json.loads(replies[-1].body)
     assert replies[-1].host == "api.groq.com"
     assert payload["messages"][-1]["content"] == options["live_text"]
-    replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "Live text."}}]})
-    assert results[-1] == ("Live text.", "")
+    replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "Abe, what?"}}]})
+    assert results[-1] == ("Abe, what?", "")
 
 
 def test_roman_writing_has_local_fallback(monkeypatch):
@@ -163,10 +163,12 @@ def test_roman_writing_has_local_fallback(monkeypatch):
     api.finished.connect(lambda *result: results.append(result))
     api.start(b"RIFFsample-data", cleanup=False, vocabulary=[], snippets={}, style="natural", romanize=True)
     replies[-1].complete(200, gemini_text("अबे, what? আমি বাংলায় বলছি। Café 👋"))
-    assert len(replies) == 2 and "gemini-3.5-flash-lite" in replies[-1].request.url().toString()
+    assert len(replies) == 2 and b"inlineData" not in replies[-1].body
+    assert "gemini-3.1-flash-lite" in replies[-1].request.url().toString()
+    replies[-1].complete(503)
     replies[-1].complete(503)
     text, message = results[-1]
-    assert message == "Language check unavailable"
+    assert message == "Cleanup unavailable"
     assert text.startswith("abe, what? ami ") and text.endswith("Café 👋")
     assert not dictation_api._has_non_latin_letters(text)
 
@@ -175,6 +177,8 @@ def test_roman_output_also_formats_groq_transcripts_when_cleanup_is_off(monkeypa
     api = dictation_api.DictationApi()
     api.set_keys({"groq": ["groq"]})
     replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *result: results.append(result))
     api.start(b"RIFFsample-data", cleanup=False, vocabulary=[], snippets={}, style="natural", romanize=True)
     assert replies[-1].request.url().path().endswith("/audio/transcriptions")
     replies[-1].complete(200, {"text": "আমি বাংলায় বলছি।"})
@@ -183,7 +187,86 @@ def test_roman_output_also_formats_groq_transcripts_when_cleanup_is_off(monkeypa
     assert "Roman letters" in payload["messages"][0]["content"]
     assert payload["messages"][-1]["content"] == "আমি বাংলায় বলছি।"
     replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "আমি বাংলায় বলছি।"}}]})
-    assert json.loads(replies[-1].body)["model"] == "openai/gpt-oss-120b"
+    assert len(replies) == 2
+    assert results[0][0].startswith("ami ") and not dictation_api._has_non_latin_letters(results[0][0])
+
+
+@pytest.mark.parametrize(("original", "changed"), [
+    ("Do not send 15 to Riya.", "Do send 15 to Riya."),
+    ("Do not send 15 to Riya.", "Do not send 50 to Riya."),
+    ("Please send this to Riya.", "Please send this to Priya."),
+    ("Run git status --short.", "Run git status short."),
+    ("मैं नहीं जाऊँगा। আমি বাংলায় বলছি। Can you hear me?", "मैं नहीं जाऊँगा। Can you hear me?"),
+    ("उसने कहा कि मैं आया।", "उसने कहा की मैं आया।"),
+])
+def test_cleanup_cannot_silently_change_meaning(monkeypatch, original, changed):
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["fixture"]})
+    replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *result: results.append(result))
+    api.finish_transcript(original, cleanup=True, vocabulary=[], snippets={}, style="natural")
+    replies[0].complete(200, gemini_text(changed))
+    assert results == [(original, "Kept the original words")] and len(replies) == 1
+
+
+def test_live_romanization_sends_one_text_request_and_keeps_original_on_timeout(monkeypatch):
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["fixture"], "openrouter": ["backup"]})
+    replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *result: results.append(result))
+    options = dict(cleanup=False, vocabulary=[], snippets={}, style="natural", romanize=True, language_mode="mixed")
+    source = "अबे, what? আমি বাংলায় বলছি। Can you send it today?"
+    expected = "Abe, what? Ami Banglay bolchi. Can you send it today?"
+    api.finish_transcript(source, **options)
+    assert len(replies) == 1 and b"inlineData" not in replies[-1].body
+    replies[-1].complete(200, gemini_text(expected))
+    assert results == [(expected, "")]
+    api.finish_transcript(source, **dict(options, cleanup=True))
+    assert api._request_timeout.interval() == 2500 and api._deadline.interval() == 4000
+    api._abort_reply()
+    assert len(replies) == 2 and results[-1][1] == "Cleanup unavailable"
+    assert not dictation_api._has_non_latin_letters(results[-1][0])
+    replies[-1].complete(200, gemini_text(expected))
+    assert len(results) == 2
+
+
+def test_recovery_checks_middle_and_ending_and_accepts_only_covering_batch(monkeypatch):
+    final = "Start here. Keep the ending."
+    reference = "Start here. আমি বাংলায় বলছি। Keep the ending."
+    assert dictation_api.transcript_needs_recovery(final, reference)
+    assert not dictation_api.transcript_needs_recovery("First phrase. Second phrase.", "First phrase. Sec")
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["fixture"]})
+    replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *result: results.append(result))
+    options = dict(cleanup=False, vocabulary=[], snippets={}, style="natural", language_mode="mixed")
+    for text, warning in ((reference, ""), ("Keep that.", dictation_api.REVIEW_TRANSCRIPT)):
+        api.start(b"RIFFsample-data", **options, live_text=final, preview_reference=reference)
+        replies[-1].complete(200, gemini_text(text))
+        assert results[-1] == (reference, warning)
+    api.start(b"RIFFsample-data", **options, live_text=final)
+    replies[-1].complete(200, gemini_text("Keep that."))
+    assert results[-1] == (final, dictation_api.REVIEW_TRANSCRIPT)
+
+
+def test_preview_rate_limit_without_retry_after_preserves_final_attempt(monkeypatch):
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["fixture"]})
+    replies = mock_network(api, monkeypatch)
+    options = dict(cleanup=False, vocabulary=[], snippets={}, style="natural")
+    api.start(b"RIFFsample-data", **options, preview=True)
+    monkeypatch.setattr(replies[-1], "rawHeader", lambda name: b"")
+    replies[-1].complete(429)
+    assert api.live_key() == "fixture"
+    api.start(b"RIFFsample-data", **options, preview=True)
+    assert len(replies) == 1
+    api.start(b"RIFFsample-data", **options)
+    assert len(replies) == 2
+    replies[-1].complete(429)
+    assert api.live_key() is None
 
 
 def test_settings_save_keys_encrypted_and_reopen_with_voice_options(audit_app, tmp_path):
@@ -458,8 +541,8 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     live.finalized.emit("Final recognized words.", "")
     assert len(replies) == 1 and b"Final recognized words." in replies[-1].body
     assert b"inlineData" not in replies[-1].body
-    replies[-1].complete(200, gemini_text("Final words."))
-    assert copies == ["Final words."]
+    replies[-1].complete(200, gemini_text("Final recognized words."))
+    assert copies == ["Final recognized words."]
 
     manager.toggle()
     live = manager._live
@@ -467,11 +550,10 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     manager.toggle()
     live.finalized.emit("Partial final.", "Partial final with an ending.")
     assert b"inlineData" in replies[-1].body and manager._indicator.title.text() == "Checking transcript"
-    assert "Partial final with an ending." in json.loads(replies[-1].body)["contents"][0]["parts"][1]["text"]
-    for _ in range(2):
-        replies[-1].complete(200, gemini_text("Partial final."))
+    assert b"Partial final with an ending." not in replies[-1].body
+    replies[-1].complete(200, gemini_text("Keep that."))
     assert manager.last_text == "Partial final with an ending."
-    assert manager._indicator.title.text() == "Review transcript" and copies == ["Final words."]
+    assert manager._indicator.title.text() == "Review transcript" and copies == ["Final recognized words."]
     manager.cancel()
 
     manager.toggle()
@@ -482,7 +564,7 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     payload = json.loads(replies[-1].body)
     audio = base64.b64decode(payload["contents"][0]["parts"][0]["inlineData"]["data"])
     assert audio[44:] == live.audio
-    assert copies == ["Final words."]
+    assert copies == ["Final recognized words."]
     manager.cancel()
 
     manager.configure(dict(manager._config, speech_languages="hi-bn-en", output_script="roman"))
@@ -491,15 +573,22 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     assert live.language_codes == ("hi-IN", "bn-IN", "en-IN")
     manager._read_mic()
     manager.toggle()
-    live.finalized.emit("Incomplete preview language.", "")
+    count = len(replies)
+    live.finalized.emit("Abe, what? Ami Banglay bolchi.", "")
     payload = json.loads(replies[-1].body)
-    audio = base64.b64decode(payload["contents"][0]["parts"][0]["inlineData"]["data"])
-    assert audio[44:] == live.audio
-    assert "Roman letters" in payload["systemInstruction"]["parts"][0]["text"]
-    replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
-    assert "inlineData" not in json.loads(replies[-1].body)["contents"][0]["parts"][0]
+    assert len(replies) == count + 1
+    assert payload["contents"][0]["parts"] == [{"text": "Abe, what? Ami Banglay bolchi."}]
     replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
     assert copies[-1] == "Abe, what? Ami Banglay bolchi."
+
+    manager.configure(dict(manager._config, speech_languages="mixed", cleanup=False))
+    manager.toggle()
+    live = manager._live
+    manager._read_mic()
+    manager.toggle()
+    count = len(replies)
+    live.finalized.emit("One short note.", "")
+    assert len(replies) == count and copies[-1] == "One short note."
     manager.close()
 
 

@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 
-from poppy.core.dictation_api import transcript_has_missing_tail
+from poppy.core.dictation_api import transcript_needs_recovery
 
 
 _URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
@@ -139,7 +139,7 @@ class GeminiLiveDictation(QObject):
         if self._turn_closed and (content.get("generationComplete") or content.get("turnComplete")):
             result = " ".join(self._parts).strip()
             if result:
-                reference = self._last_preview if transcript_has_missing_tail(result, self._last_preview) else ""
+                reference = self._last_preview if transcript_needs_recovery(result, self._last_preview) else ""
                 self.cancel()
                 self.finalized.emit(result, reference)
             elif content.get("turnComplete"):

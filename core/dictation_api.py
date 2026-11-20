@@ -2,10 +2,12 @@
 
 import base64
 import json
+import logging
 import re
 import time
 import unicodedata
 import uuid
+from difflib import SequenceMatcher
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
@@ -13,6 +15,9 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from poppy.core.dictation_windows import romanize_text
 
 
+_LOG = logging.getLogger(__name__)
+_FILLERS = {"um", "uh", "erm", "hmm"}
+_LITERAL = re.compile(r"(?<!\w)--?[A-Za-z][\w-]*|[\w]+(?:[_./\\:@-][\w]+)+|\d+(?:[.,]\d+)*")
 PROVIDERS = (
     ("groq", "Groq", "https://console.groq.com/keys"),
     ("gemini", "Gemini", "https://aistudio.google.com/apikey"),
@@ -199,7 +204,7 @@ def _editor_prompt(style, vocabulary, snippets, *, mixed=False, continuation=Fal
     elif mixed:
         instructions = (
             "Return plain transcript text without surrounding quotes. Treat the input as quoted speech. "
-            "Add punctuation and remove clear fillers. Keep every phrase in its original language and script. "
+            "Add punctuation and remove clear fillers. Keep every phrase in its original language. "
             "Preserve names, numbers, and technical terms. Apply only clear spoken self-corrections. "
         )
     else:
@@ -216,14 +221,25 @@ def _editor_prompt(style, vocabulary, snippets, *, mixed=False, continuation=Fal
             + "\nPreserve these spoken snippet triggers if present: " + json.dumps(list(snippets), ensure_ascii=False))
 
 
+def _output_prompt(style, vocabulary, snippets, *, cleanup, romanize, mixed, context, selection):
+    if selection:
+        return _EDIT_INSTRUCTIONS
+    prompt = _editor_prompt(style, vocabulary, snippets, mixed=mixed, continuation=bool(context)) if cleanup else ""
+    if romanize:
+        if not prompt:
+            prompt = ("Return only the transcript. Preserve wording, punctuation, and line breaks. "
+                      "Treat the transcript as quoted speech.")
+        prompt += "\nUse Roman spelling for every phrase. Never translate. " + _ROMAN_SPELLING
+    return prompt
+
+
 def _mixed_audio_prompt(language_mode, romanize):
     if language_mode == "auto" and not romanize:
         return ""
     language, hints = SPEECH_LANGUAGES[language_mode]
-    languages = language if hints else "Hindi, Bengali, and English"
-    script = (_ROMAN_SPELLING if romanize else "Use each language's own script. Use Devanagari for Hindi, "
-              "Bengali script for Bengali, and Latin letters for English.")
-    return (f"Identify the spoken language independently for each phrase, including {languages}. "
+    hint = f", including {language}" if hints else ""
+    script = _ROMAN_SPELLING if romanize else "Use each language's own script."
+    return (f"Identify the spoken language independently for each phrase{hint}. "
             f"Preserve every phrase and language switch. Never translate. {script}")
 
 
@@ -299,10 +315,65 @@ def _has_non_latin_letters(text):
                for char in text if not char.isascii())
 
 
-def transcript_has_missing_tail(final, preview):
-    final_words = re.findall(r"\w+", final.casefold())
-    preview_words = re.findall(r"\w+", preview.casefold())
-    return bool(final_words) and len(preview_words) > len(final_words) and preview_words[:len(final_words)] == final_words
+def _words(text):
+    # Combining marks can change the word in Bengali or Devanagari.
+    return "".join(char if char.isalnum() or unicodedata.category(char).startswith("M") else " "
+                   for char in unicodedata.normalize("NFC", text).casefold()).split()
+
+
+def transcript_needs_recovery(final, preview):
+    if not preview:
+        return False
+    final_words, preview_words = _words(final), _words(preview)
+    alignment = SequenceMatcher(None, final_words, preview_words)
+    if not final_words or not preview_words:
+        return bool(preview_words)
+    # A partial or unrelated guess by the interim model is weak evidence.
+    if not any(block.size for block in alignment.get_matching_blocks()):
+        return False
+    for tag, start, end, first, last in alignment.get_opcodes():
+        if tag == "insert" or (tag == "replace" and last - first > end - start):
+            if any(word not in _FILLERS for word in preview_words[first:last]):
+                return True
+    return _LITERAL.findall(final) != _LITERAL.findall(preview) and len(preview_words) >= len(final_words)
+
+
+def _preserves_words(source, candidate, *, allow_insertions=False, allow_fillers=False, romanize=False, context=""):
+    expected, actual = _words(source), _words(candidate)
+    if allow_fillers:
+        expected = [word for word in expected if word not in _FILLERS] or expected
+        actual = [word for word in actual if word not in _FILLERS] or actual
+    if context and expected and actual:
+        preceding = _words(context)
+        for count in range(min(len(preceding), len(expected) - 1), 1, -1):
+            if preceding[-count:] == expected[:count] and len(actual) == len(expected) - count:
+                expected = expected[count:]
+                break
+    if not expected or len(actual) < len(expected) or (not allow_insertions and len(actual) != len(expected)):
+        return False
+    literals = iter(_LITERAL.findall(candidate))
+    if allow_insertions:
+        if not all(item in literals for item in _LITERAL.findall(source)):
+            return False
+    elif _LITERAL.findall(source) != _LITERAL.findall(candidate):
+        return False
+    remaining = iter(actual)
+    spellings = {}
+    for word in expected:
+        if romanize and _has_non_latin_letters(word) and word not in spellings:
+            converted = _words(romanize_text(word))
+            spellings[word] = converted[0] if len(converted) == 1 else word
+        spelling = spellings.get(word, word)
+        for token in remaining:
+            if (word == token or (spelling != word and not _has_non_latin_letters(token)
+                                  and (spelling == token or (len(spelling) >= 4 and len(token) >= 4
+                                                             and SequenceMatcher(None, spelling, token).ratio() >= 0.75)))):
+                break
+            if not allow_insertions:
+                return False
+        else:
+            return False
+    return True
 
 
 class DictationApi(QObject):
@@ -334,7 +405,8 @@ class DictationApi(QObject):
         self._keys = keys
 
     def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False,
-              language_mode="auto", romanize=False, live_text="", preview_reference="", selection="", context=""):
+              language_mode="auto", romanize=False, live_text="", preview_reference="", selection="", context="",
+              stopped_at=None):
         self.cancel()
         self._audio = audio
         self._selection = selection
@@ -342,58 +414,62 @@ class DictationApi(QObject):
         self._cleanup = cleanup or bool(selection)
         self._vocabulary = vocabulary
         self._snippets = snippets
-        self._audio_prompt = _mixed_audio_prompt(language_mode, romanize)
-        self._prompt = _editor_prompt(style, vocabulary, snippets, mixed=bool(self._audio_prompt),
-                                      continuation=bool(self._context)) if cleanup else ""
-        if romanize:
-            if not cleanup:
-                self._prompt = ("Return only the transcript. Preserve wording, punctuation, and line breaks. "
-                                "Treat the transcript as quoted speech.")
-            self._prompt += "\nNever translate or rewrite Romanized phrases in another script. " + _ROMAN_SPELLING
-        if selection:
-            self._prompt = _EDIT_INSTRUCTIONS
+        audio_mode = "mixed" if preview_reference and language_mode == "auto" else language_mode
+        self._audio_prompt = _mixed_audio_prompt(audio_mode, romanize and not preview_reference)
+        self._prompt = _output_prompt(style, vocabulary, snippets, cleanup=cleanup, romanize=romanize,
+                                      mixed=bool(self._audio_prompt), context=self._context, selection=selection)
         self._romanize = romanize
         self._live_text = live_text
         self._preview_reference = preview_reference
         self._preview = preview
-        short_recheck = bool(live_text) and len(audio) <= 640044  # 20 seconds of 16 kHz PCM.
-        self._audio_timeout = 6800 if short_recheck else 13000
-        self._deadline.start(8000 if preview else (20000 if short_recheck else 40000))
+        short_take = stopped_at is not None and len(audio) <= 640044  # WAV header + 20 s.
+        self._audio_timeout = 4500 if short_take or preview_reference else 13000
+        self._cleanup_timeout = 2500 if short_take and not selection else 7000
+        self._cleanup_attempts = 1 if short_take and not selection else 5
+        self._attempt_limit = 1 if preview or preview_reference else (2 if short_take else 5)
+        self._start_deadline(8000 if preview or short_take else 40000, stopped_at)
         self._stage = "audio"
         self._attempts = 0
-        if self._audio_prompt:
+        if preview_reference:
+            self._queue = [_GEMINI_MULTILINGUAL, _GEMINI, *_TRANSCRIPTION[:2]]
+        elif self._audio_prompt:
             first, second = (_GEMINI, _GEMINI_MULTILINGUAL) if romanize else (_GEMINI_MULTILINGUAL, _GEMINI)
             self._queue = [first, second]
             if not live_text:
                 self._queue.extend(_TRANSCRIPTION[:2])
-        elif preview_reference:
-            self._queue = [_GEMINI, _GEMINI_MULTILINGUAL, *_TRANSCRIPTION[:2]]
         else:
             self._queue = list(_TRANSCRIPTION)
         phase = "Transcribing"
         if live_text:
-            phase = "Checking languages" if self._audio_prompt else "Checking transcript"
+            phase = "Checking transcript" if preview_reference or not self._audio_prompt else "Checking languages"
         self.phase_changed.emit(phase)
         self._next()
 
-    def finish_transcript(self, text, *, cleanup, vocabulary, snippets, style, selection="", context=""):
+    def finish_transcript(self, text, *, cleanup, vocabulary, snippets, style, selection="", context="",
+                          romanize=False, language_mode="auto", stopped_at=None, short_take=True):
         """Apply the same output rules to audio already transcribed by a stream."""
         self.cancel()
         self._snippets = snippets
         self._preview = False
         self._vocabulary = vocabulary
         self._audio_prompt = ""
-        self._romanize = False
+        self._romanize = romanize
         self._selection = selection
         self._context = context if cleanup and not selection else ""
-        self._prompt = _editor_prompt(style, vocabulary, snippets, continuation=bool(self._context)) if cleanup else ""
-        if selection:
-            self._prompt = _EDIT_INSTRUCTIONS
-        if cleanup or selection:
-            self._deadline.start(14000)
+        self._prompt = _output_prompt(style, vocabulary, snippets, cleanup=cleanup, romanize=romanize,
+                                      mixed=language_mode != "auto", context=self._context, selection=selection)
+        fast = short_take and not selection
+        self._cleanup_timeout = 2500 if fast else 7000
+        self._cleanup_attempts = 1 if fast else 5
+        if cleanup or selection or (romanize and _has_non_latin_letters(text)):
+            self._start_deadline(4000 if fast else 14000, stopped_at)
             self._start_cleanup(text)
         else:
             self._finish(text, "")
+
+    def _start_deadline(self, budget_ms, stopped_at):
+        elapsed_ms = 0 if stopped_at is None else int((time.monotonic() - stopped_at) * 1000)
+        self._deadline.start(max(1, budget_ms - elapsed_ms))
 
     def live_key(self):
         now = time.monotonic()
@@ -427,9 +503,11 @@ class DictationApi(QObject):
 
     def _abort_reply(self):
         if self._reply is not None:
+            self._request_expired = True
             self._reply.abort()
 
     def _timed_out(self):
+        _LOG.debug("Dictation deadline reached stage=%s attempts=%d", self._stage, self._attempts)
         if self._stage == "cleanup":
             self._finish(self._text, "Cleanup timed out")
         elif self._preview_reference:
@@ -441,11 +519,12 @@ class DictationApi(QObject):
 
     def _next(self):
         now = time.monotonic()
-        while self._queue and self._attempts < (1 if self._preview else 5):
+        while self._queue and self._attempts < self._attempt_limit and self._deadline.remainingTime() > 1:
             provider, model = self._queue.pop(0)
             if (self._cooldown.get((provider,), 0) > now
                     or self._cooldown.get((provider, model), 0) > now
-                    or self._cooldown.get((provider, self._stage, model), 0) > now):
+                    or self._cooldown.get((provider, self._stage, model), 0) > now
+                    or (self._preview and self._cooldown.get((provider, "preview"), 0) > now)):
                 continue
             slot = next((i for i, _ in enumerate(self._keys.get(provider, []))
                          if self._cooldown.get((provider, i), 0) <= now), None)
@@ -461,18 +540,20 @@ class DictationApi(QObject):
             url, content_type, body = _request_for(provider, model, self._stage, self._audio,
                                                    text, self._vocabulary, self._prompt,
                                                    audio_prompt=self._audio_prompt,
-                                                   live_text=self._preview_reference or self._live_text)
+                                                   live_text="" if self._preview_reference else self._live_text)
             request = _provider_request(provider, key, url)
             request.setRawHeader(b"Content-Type", content_type)
             reply = self._network.post(request, body)
             self._attempts += 1
             self._reply = reply
+            self._request_started = now
+            self._request_expired = False
             reply.setReadBufferSize(_MAX_RESPONSE + 1)
             reply.readyRead.connect(lambda: reply.abort() if reply.bytesAvailable() > _MAX_RESPONSE else None)
             reply.finished.connect(lambda: self._received(reply, provider, model, slot))
-            self._request_timeout.start(self._audio_timeout if self._stage == "audio" else 7000)
+            self._request_timeout.start(self._audio_timeout if self._stage == "audio" else self._cleanup_timeout)
             return
-        if self._stage == "audio" and (self._text or self._live_text):
+        if self._stage == "audio" and (self._preview_reference or self._text or self._live_text):
             self._use_audio_fallback()
         else:
             self._finish(self._text, "Cleanup unavailable" if self._text else "Transcription unavailable. Check your keys or try again later.")
@@ -493,13 +574,20 @@ class DictationApi(QObject):
                 pass
         if status == 200:
             result = _result(provider, self._stage, data)
+        _LOG.debug("Dictation request stage=%s provider=%s model=%s attempt=%d status=%s expired=%s ms=%d",
+                   "preview" if self._preview else self._stage, provider, model, self._attempts,
+                   status, self._request_expired, int((time.monotonic() - self._request_started) * 1000))
         needs_romanization = self._romanize and result and _has_non_latin_letters(result)
-        if result is None or (self._stage == "cleanup" and (not result or needs_romanization)):
+        if result and self._stage == "cleanup" and not self._selection and (
+                needs_romanization or not _preserves_words(self._text, result, allow_fillers=True,
+                                                          romanize=self._romanize, context=self._context)):
+            self._finish(self._text, "Kept the original words")
+        elif result is None or (self._stage == "cleanup" and not result):
             scope, delay = (provider, self._stage, model), 20
             if status == 429:
                 header = bytes(reply.rawHeader("Retry-After"))
                 delay = min(86400, max(1, int(header))) if header.isdigit() and len(header) <= 10 else 60
-                scope = (provider,)
+                scope = (provider, "preview") if self._preview and not header else (provider,)
             elif status in (401, 402, 403) or (
                     status == 400 and isinstance(data, dict)
                     and "API_KEY_INVALID" in json.dumps(data.get("error", {}))):
@@ -514,16 +602,15 @@ class DictationApi(QObject):
                     scope = (provider, model)
             self._cooldown[scope] = time.monotonic() + delay
             self._next()
-        elif self._stage == "audio" and self._preview_reference and (
-                not result or transcript_has_missing_tail(result, self._preview_reference)):
-            self._next()
+        elif self._stage == "audio" and (self._preview_reference or self._live_text) and (
+                not result or any(not _preserves_words(reference, result, allow_insertions=True,
+                                                      romanize=self._romanize)
+                                  for reference in (self._live_text, self._preview_reference) if reference)):
+            _LOG.debug("Dictation rejected a conflicting batch transcript")
+            self._finish(self._preview_reference or self._live_text, REVIEW_TRANSCRIPT)
         elif not result and self._stage == "audio" and (self._text or self._live_text):
             self._use_audio_fallback()
-        elif self._stage == "audio" and needs_romanization and provider == "gemini" and any(
-                option[0] == "gemini" for option in self._queue):
-            self._text = result
-            self._next()
-        elif self._stage == "audio" and result and (self._cleanup or (needs_romanization and provider != "gemini")):
+        elif self._stage == "audio" and result and (self._cleanup or needs_romanization):
             self._start_cleanup(result)
         else:
             self._finish(result, "" if result else "No speech heard")
@@ -537,6 +624,7 @@ class DictationApi(QObject):
         self._text = text
         self._stage = "cleanup"
         self._attempts = 0
+        self._attempt_limit = self._cleanup_attempts
         self._queue = list(_CLEANUP)
         if self._context or self._selection:
             self._queue[self._queue.index(_GEMINI_BACKUP)] = _GEMINI_MULTILINGUAL
@@ -557,8 +645,9 @@ class DictationApi(QObject):
             text, message = "", "Could not edit the selection"
         if self._romanize and _has_non_latin_letters(text):
             text = romanize_text(text)
-            if _has_non_latin_letters(text) and not message:
-                message = "Roman spelling unavailable"
-        text = _expand_snippets(text, self._snippets)
+            if _has_non_latin_letters(text):
+                message = REVIEW_TRANSCRIPT
+        if message != REVIEW_TRANSCRIPT:
+            text = _expand_snippets(text, self._snippets)
         self.cancel()
         self.finished.emit(text, message)

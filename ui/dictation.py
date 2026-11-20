@@ -1,6 +1,7 @@
 """On-demand dictation indicator and the Windows recording lifecycle."""
 
 import json
+import logging
 import math
 import time
 from pywintypes import error as WindowsError
@@ -16,6 +17,9 @@ from poppy.core.storage import data_path, write_json
 from poppy.core.system_controls import system_animations_enabled
 from poppy.ui.drawer_tools import DrawerToolButton
 from poppy.ui.theme import is_light_theme, surface_colors
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class DictationIndicator(QWidget):
@@ -337,6 +341,7 @@ class DictationController(QObject):
         self._pending_insert = ""
         self._restore = None
         self._phase = ""
+        self._stopped_at = None
         self._position_file = data_path("dictation-position.json")
         self._position = None
         try:
@@ -502,7 +507,8 @@ class DictationController(QObject):
                 return native.TextScope(text, (start, end)) if text and len(text) <= native.SELECTION_LIMIT else None
             if start >= 0:
                 return None
-            end = editor.cursorPosition() * 2
+            position = editor.cursorPosition()
+            end = position * 2
             text = editor.text().encode("utf-16-le")[max(0, end - native.CONTEXT_LIMIT * 2):end]
             text = text.decode("utf-16-le", errors="ignore")
         else:
@@ -513,9 +519,10 @@ class DictationController(QObject):
                 return native.TextScope(text, where) if text and len(text) <= native.SELECTION_LIMIT else None
             if cursor.hasSelection():
                 return None
-            cursor.setPosition(max(0, cursor.position() - native.CONTEXT_LIMIT), QTextCursor.MoveMode.KeepAnchor)
+            position = cursor.position()
+            cursor.setPosition(max(0, position - native.CONTEXT_LIMIT), QTextCursor.MoveMode.KeepAnchor)
             text = cursor.selectedText().replace("\u2029", "\n")
-        return native.TextScope(text) if text.strip() else None
+        return native.TextScope(text, (position,)) if text.strip() else None
 
     def open_panel(self):
         if not self.available:
@@ -604,13 +611,18 @@ class DictationController(QObject):
     def _live_result(self, text, preview_reference):
         self._close_live()
         if self._phase == "finishing":
-            if preview_reference or self._language_mode != "auto" or (not self._editing and self._config.get("output_script") == "roman"):
+            _LOG.debug("Dictation Live finished recovery=%s stop_ms=%d", bool(preview_reference or not text.strip()),
+                       int((time.monotonic() - self._stopped_at) * 1000))
+            if preview_reference or not text.strip():
                 self._transcribe_recording(live_text=text, preview_reference=preview_reference)
             else:
+                short_take = len(self._pcm) <= 640000  # 20 seconds of PCM.
                 self._pcm.clear()
-                self._pipeline().finish_transcript(text, **self._output_options())
+                self._indicator.set_preview(text)
+                self._pipeline().finish_transcript(text, short_take=short_take, **self._output_options())
 
     def _live_failed(self, status):
+        _LOG.debug("Dictation Live failed status=%s", status)
         key = self._live_credential
         self._close_live()
         if status in (401, 403) and key:
@@ -627,6 +639,7 @@ class DictationController(QObject):
             self._transcribe_recording()
 
     def _stop_recording(self):
+        self._stopped_at = time.monotonic()
         self._sample_timer.stop()
         self._holding = False
         mic, self._mic = self._mic, None
@@ -657,12 +670,13 @@ class DictationController(QObject):
         text = self._text_scope.text if self._text_scope else ""
         return dict(cleanup=self._config.get("cleanup", True), vocabulary=self._config.get("vocabulary", []),
                     snippets={} if self._editing else self._config.get("snippets", {}), style=style,
-                    selection=text if self._editing else "", context="" if self._editing else text)
+                    selection=text if self._editing else "", context="" if self._editing else text,
+                    language_mode=self._language_mode, stopped_at=self._stopped_at,
+                    romanize=not self._editing and self._config.get("output_script") == "roman")
 
     def _transcribe_recording(self, *, live_text="", preview_reference=""):
         pcm, self._pcm = self._pcm, bytearray()
-        self._pipeline().start(native.wav_data(pcm), **self._output_options(), language_mode=self._language_mode,
-                               romanize=not self._editing and self._config.get("output_script") == "roman", live_text=live_text,
+        self._pipeline().start(native.wav_data(pcm), **self._output_options(), live_text=live_text,
                                preview_reference=preview_reference)
 
     def _processing(self, phase):
@@ -687,7 +701,7 @@ class DictationController(QObject):
         if message == REVIEW_TRANSCRIPT:
             self._text_scope = None
             self._indicator.set_preview(text)
-            self._status(REVIEW_TRANSCRIPT, "Ending needs a check · Copy to review", auto_hide=12000, offer_copy=True)
+            self._status(REVIEW_TRANSCRIPT, "Copy to review before using", auto_hide=12000, offer_copy=True)
             return
         self._pending_insert = text
         self._insertion_deadline = time.monotonic() + 0.8
