@@ -4,6 +4,8 @@
     "cleanup": true,
     "auto_paste": true,
     "streaming": true,
+    "speech_languages": "auto",
+    "output_script": "original",
     "style": "auto",
     "vocabulary": [],
     "snippets": {}

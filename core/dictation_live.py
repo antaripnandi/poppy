@@ -37,9 +37,10 @@ class GeminiLiveDictation(QObject):
         self._buffer = bytearray()
         self._parts = []
 
-    def start(self, key, vocabulary):
+    def start(self, key, vocabulary, *, language_codes=()):
         self._active = True
         self._vocabulary = vocabulary[:100]
+        self._language_codes = language_codes
         request = QNetworkRequest(QUrl(_URL))
         request.setRawHeader(b"x-goog-api-key", key.encode("ascii"))
         request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
@@ -60,7 +61,8 @@ class GeminiLiveDictation(QObject):
                 "model": _MODEL,
                 "generationConfig": {"responseModalities": ["TEXT"]},
                 "realtimeInputConfig": {"automaticActivityDetection": {"disabled": True}},
-                "inputAudioTranscription": {"mode": "VERBATIM", "customVocabulary": self._vocabulary},
+                "inputAudioTranscription": {"mode": "VERBATIM", "customVocabulary": self._vocabulary,
+                                            "languageCodes": self._language_codes},
             }})
 
     def feed(self, pcm):

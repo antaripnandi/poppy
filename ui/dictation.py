@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QP
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 
 from poppy.core import dictation_windows as native
-from poppy.core.dictation_api import DictationApi, read_keys
+from poppy.core.dictation_api import DictationApi, SPEECH_LANGUAGES, read_keys
 from poppy.core.dictation_live import GeminiLiveDictation
 from poppy.core.storage import data_path, write_json
 from poppy.core.system_controls import system_animations_enabled
@@ -257,6 +257,7 @@ class DictationController(QObject):
         self._api = None
         self._live = None
         self._live_retry_at = 0
+        self._language_mode = "auto"
         self._indicator = None
         self._mic = None
         self._keys = {}
@@ -294,6 +295,8 @@ class DictationController(QObject):
             self.cancel()
             self._live_retry_at = 0
             self._config = config
+            mode = config.get("speech_languages")
+            self._language_mode = mode if isinstance(mode, str) and mode in SPEECH_LANGUAGES else "auto"
             self._keys = read_keys(config) if config.get("enabled") else {}
             if self._api is not None:
                 self._api.set_keys(self._keys)
@@ -451,7 +454,8 @@ class DictationController(QObject):
             self._live.preview.connect(self._indicator.set_preview)
             self._live.finalized.connect(self._live_result)
             self._live.failed.connect(self._live_failed)
-            self._live.start(key, self._config.get("vocabulary", []))
+            self._live.start(key, self._config.get("vocabulary", []),
+                             language_codes=SPEECH_LANGUAGES[self._language_mode][1])
 
     def _close_live(self):
         if self._live is not None:
@@ -462,8 +466,11 @@ class DictationController(QObject):
     def _live_result(self, text):
         self._close_live()
         if self._phase == "finishing":
-            self._pcm.clear()
-            self._pipeline().finish_transcript(text, **self._output_options())
+            if self._language_mode != "auto" or self._config.get("output_script") == "roman":
+                self._transcribe_recording(live_text=text)
+            else:
+                self._pcm.clear()
+                self._pipeline().finish_transcript(text, **self._output_options())
 
     def _live_failed(self):
         self._close_live()
@@ -500,9 +507,10 @@ class DictationController(QObject):
         return dict(cleanup=self._config.get("cleanup", True), vocabulary=self._config.get("vocabulary", []),
                     snippets=self._config.get("snippets", {}), style=style)
 
-    def _transcribe_recording(self):
+    def _transcribe_recording(self, *, live_text=""):
         pcm, self._pcm = self._pcm, bytearray()
-        self._pipeline().start(native.wav_data(pcm), **self._output_options())
+        self._pipeline().start(native.wav_data(pcm), **self._output_options(), language_mode=self._language_mode,
+                               romanize=self._config.get("output_script") == "roman", live_text=live_text)
 
     def _processing(self, phase):
         if self._previewing:

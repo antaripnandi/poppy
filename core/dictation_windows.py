@@ -103,6 +103,47 @@ def wav_data(pcm):
         return output.getvalue()
 
 
+@lru_cache(maxsize=1)
+def _transliteration_api():
+    for name in ("icu.dll", "icuin.dll"):
+        try:
+            api = ct.CDLL(name, winmode=0x00000800)  # LOAD_LIBRARY_SEARCH_SYSTEM32
+            status_ptr = ct.POINTER(ct.c_int32)
+            api.utrans_openU.argtypes = (ct.c_wchar_p, ct.c_int32, ct.c_int32, ct.c_wchar_p,
+                                         ct.c_int32, ct.c_void_p, status_ptr)
+            api.utrans_openU.restype = ct.c_void_p
+            api.utrans_transUChars.argtypes = (ct.c_void_p, ct.c_wchar_p, status_ptr, ct.c_int32,
+                                              ct.c_int32, status_ptr, status_ptr)
+            api.utrans_transUChars.restype = None
+            api.utrans_close.argtypes = (ct.c_void_p,)
+            api.utrans_close.restype = None
+            return api
+        except (AttributeError, OSError):
+            continue
+    return None
+
+
+def romanize_text(text):
+    """Use Windows' transliterator when the provider returns native script."""
+    api = _transliteration_api()
+    if api is None:
+        return text
+    status = ct.c_int32()
+    rules = "[:^Latin:]; Any-Latin; Latin-ASCII"
+    handle = api.utrans_openU(rules, -1, 0, None, 0, None, ct.byref(status))
+    if not handle:
+        return text
+    try:
+        code_units = len(text.encode("utf-16-le", errors="surrogatepass")) // 2
+        length = ct.c_int32(code_units)
+        limit = ct.c_int32(code_units)
+        buffer = ct.create_unicode_buffer(text, code_units * 8 + 1)
+        api.utrans_transUChars(handle, buffer, ct.byref(length), len(buffer), 0, ct.byref(limit), ct.byref(status))
+        return buffer.value if status.value <= 0 else text
+    finally:
+        api.utrans_close(handle)
+
+
 class _GuiThreadInfo(ct.Structure):
     _fields_ = [("size", wt.DWORD), ("flags", wt.DWORD), ("active", wt.HWND), ("focus", wt.HWND),
                 ("capture", wt.HWND), ("menu", wt.HWND), ("move_size", wt.HWND), ("caret", wt.HWND),

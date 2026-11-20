@@ -8,7 +8,8 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPlainTextEdit, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
-from poppy.core.dictation_api import DictationKeyCheck, PROVIDERS, normalize_keys, protect_keys, read_keys, snippets_from_text
+from poppy.core.dictation_api import (DictationKeyCheck, PROVIDERS, SPEECH_LANGUAGES, normalize_keys,
+                                     protect_keys, read_keys, snippets_from_text)
 from poppy.ui.components import SettingRow, ToggleSwitch
 from poppy.ui.theme import set_widget_style
 
@@ -87,7 +88,8 @@ class DictationSettings(QWidget):
         self.status.hide()
         layout.addWidget(self.status)
         privacy = QLabel("Windows encrypts saved keys. Groq or Gemini receives audio, and Gemini’s free tier may use it "
-                         "to improve its services. Cleanup can also send text to OpenRouter.")
+                         "to improve its services. Cleanup and Roman spelling can also send text to OpenRouter.")
+        privacy.setWordWrap(True)
         set_widget_style(privacy, "font-size: 11px; color: #a7afaf;")
         layout.addWidget(privacy)
 
@@ -95,6 +97,16 @@ class DictationSettings(QWidget):
         heading = QLabel("Text output")
         set_widget_style(heading, "font-size: 14px; font-weight: 600;")
         layout.addWidget(heading)
+        self.languages = QComboBox()
+        for value, (label, _) in SPEECH_LANGUAGES.items():
+            self.languages.addItem(label, value)
+        layout.addWidget(SettingRow("Speech languages", "Choose Mixed languages if you switch languages mid-recording.",
+                                    self.languages))
+        self.output_script = QComboBox()
+        self.output_script.addItem("Original scripts", "original")
+        self.output_script.addItem("Roman letters", "roman")
+        layout.addWidget(SettingRow("Writing system", "Use Roman letters in the final text, like ‘abe’ or ‘ami’.",
+                                    self.output_script))
         self.cleanup = ToggleSwitch()
         self.cleanup.setAccessibleName("Clean up dictation")
         self.auto_paste = ToggleSwitch()
@@ -248,6 +260,8 @@ class DictationSettings(QWidget):
         self.cleanup.setChecked(config.get("cleanup", True))
         self.auto_paste.setChecked(config.get("auto_paste", True))
         self.streaming.setChecked(config.get("streaming", True))
+        self.languages.setCurrentIndex(max(0, self.languages.findData(config.get("speech_languages"))))
+        self.output_script.setCurrentIndex(max(0, self.output_script.findData(config.get("output_script"))))
         self._show_keys(read_keys(config))
         self.style.setCurrentIndex(max(0, self.style.findData(config.get("style", "auto"))))
         self.vocabulary.setText(", ".join(config.get("vocabulary", [])))
@@ -275,6 +289,8 @@ class DictationSettings(QWidget):
             "cleanup": self.cleanup.isChecked(),
             "auto_paste": self.auto_paste.isChecked(),
             "streaming": self.streaming.isChecked(),
+            "speech_languages": self.languages.currentData(),
+            "output_script": self.output_script.currentData(),
             "style": self.style.currentData(),
             "vocabulary": [word.strip() for word in self.vocabulary.text().split(",") if word.strip()],
             "snippets": snippets_from_text(text),

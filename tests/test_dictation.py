@@ -123,6 +123,66 @@ def test_failed_key_uses_backup_and_failed_cleanup_keeps_transcript(monkeypatch)
     assert replies[-1].aborted and len(results) == 1
 
 
+def test_mixed_audio_finishes_in_one_pass_and_keeps_live_text_on_failure(monkeypatch):
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["google"], "groq": ["groq"]})
+    replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *result: results.append(result))
+    options = dict(cleanup=False, vocabulary=[], snippets={}, style="natural", language_mode="hi-bn-en",
+                   romanize=True, live_text="Live text only")
+    api.start(b"RIFFsample-data", **options)
+    payload = json.loads(replies[-1].body)
+    assert replies[-1].host == "generativelanguage.googleapis.com"
+    prompt = payload["systemInstruction"]["parts"][0]["text"]
+    assert "Hindi, Bengali and English" in prompt and "every phrase" in prompt
+    assert "Roman letters" in prompt and "obvious fillers" not in prompt
+    assert payload["contents"][0]["parts"][1]["text"] == "Partial transcript: Live text only"
+    replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
+    assert len(replies) == 1 and results[-1] == ("Abe, what? Ami Banglay bolchi.", "")
+
+    api.start(b"RIFFsample-data", **dict(options, cleanup=True))
+    replies[-1].complete(503)
+    assert "gemini-3.5-flash-lite" in replies[-1].request.url().toString()
+    replies[-1].complete(503)
+    payload = json.loads(replies[-1].body)
+    assert replies[-1].host == "api.groq.com"
+    assert payload["messages"][-1]["content"] == options["live_text"]
+    replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "Live text."}}]})
+    assert results[-1] == ("Live text.", "")
+
+
+def test_roman_writing_has_local_fallback(monkeypatch):
+    api = dictation_api.DictationApi()
+    api.set_keys({"gemini": ["google"]})
+    replies = mock_network(api, monkeypatch)
+    results = []
+    api.finished.connect(lambda *result: results.append(result))
+    api.start(b"RIFFsample-data", cleanup=False, vocabulary=[], snippets={}, style="natural", romanize=True)
+    replies[-1].complete(200, gemini_text("अबे, what? আমি বাংলায় বলছি। Café 👋"))
+    assert len(replies) == 2 and "gemini-3.5-flash-lite" in replies[-1].request.url().toString()
+    replies[-1].complete(503)
+    text, message = results[-1]
+    assert message == "Language check unavailable"
+    assert text.startswith("abe, what? ami ") and text.endswith("Café 👋")
+    assert not dictation_api._has_non_latin_letters(text)
+
+
+def test_roman_output_also_formats_groq_transcripts_when_cleanup_is_off(monkeypatch):
+    api = dictation_api.DictationApi()
+    api.set_keys({"groq": ["groq"]})
+    replies = mock_network(api, monkeypatch)
+    api.start(b"RIFFsample-data", cleanup=False, vocabulary=[], snippets={}, style="natural", romanize=True)
+    assert replies[-1].request.url().path().endswith("/audio/transcriptions")
+    replies[-1].complete(200, {"text": "আমি বাংলায় বলছি।"})
+    payload = json.loads(replies[-1].body)
+    assert "Preserve wording" in payload["messages"][0]["content"]
+    assert "Roman letters" in payload["messages"][0]["content"]
+    assert payload["messages"][-1]["content"] == "আমি বাংলায় বলছি।"
+    replies[-1].complete(200, {"choices": [{"finish_reason": "stop", "message": {"content": "আমি বাংলায় বলছি।"}}]})
+    assert json.loads(replies[-1].body)["model"] == "openai/gpt-oss-120b"
+
+
 def test_settings_save_keys_encrypted_and_reopen_with_voice_options(audit_app, tmp_path):
     window = SettingsWindow()
     window.select_page("Voice typing")
@@ -131,12 +191,15 @@ def test_settings_save_keys_encrypted_and_reopen_with_voice_options(audit_app, t
     voice.keys["groq"].setText("demo-groq-key, demo-groq-key")
     voice.keys["gemini"].setText("demo-gemini-key")
     voice.enabled.setChecked(True)
+    voice.languages.setCurrentIndex(voice.languages.findData("hi-bn-en"))
+    voice.output_script.setCurrentIndex(voice.output_script.findData("roman"))
     voice.snippets.setPlainText("my link = https://example.test/?a=b")
     assert window._save_settings()
     saved = (tmp_path / "data" / "config.json").read_text()
     assert "demo-groq-key" not in saved and "demo-gemini-key" not in saved
     config = json.loads(saved)["dictation"]
     assert dictation_api.read_keys(config) == {"groq": ["demo-groq-key"], "gemini": ["demo-gemini-key"]}
+    assert config["speech_languages"] == "hi-bn-en" and config["output_script"] == "roman"
     assert config["enabled"] and config["snippets"] == {"my link": "https://example.test/?a=b"}
 
 
@@ -339,8 +402,9 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
         finalized = Signal(str)
         failed = Signal()
 
-        def start(self, key, vocabulary):
+        def start(self, key, vocabulary, *, language_codes):
             self.audio = bytearray()
+            self.language_codes = language_codes
 
         def feed(self, pcm):
             self.audio.extend(pcm)
@@ -384,4 +448,20 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     assert audio[44:] == live.audio
     assert copies == ["Final words."]
     manager.cancel()
+
+    manager.configure(dict(manager._config, speech_languages="hi-bn-en", output_script="roman"))
+    manager.toggle()
+    live = manager._live
+    assert live.language_codes == ("hi-IN", "bn-IN", "en-IN")
+    manager._read_mic()
+    manager.toggle()
+    live.finalized.emit("Incomplete preview language.")
+    payload = json.loads(replies[-1].body)
+    audio = base64.b64decode(payload["contents"][0]["parts"][0]["inlineData"]["data"])
+    assert audio[44:] == live.audio
+    assert "Roman letters" in payload["systemInstruction"]["parts"][0]["text"]
+    replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
+    assert "inlineData" not in json.loads(replies[-1].body)["contents"][0]["parts"][0]
+    replies[-1].complete(200, gemini_text("Abe, what? Ami Banglay bolchi."))
+    assert copies[-1] == "Abe, what? Ami Banglay bolchi."
     manager.close()

@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.13-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.14-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -28,6 +28,11 @@ and you can reset it from the ready pill’s right-click menu.
 With **Live transcript** on and a Gemini key, Poppy streams to Gemini Transcribe Live while you speak and uses
 that session’s final transcript. When live streaming is unavailable, the existing providers can show a preview
 in chunks and transcribe the saved recording at Stop. Optional cleanup runs after recognition.
+Choose **Mixed languages** under **Speech languages** if you switch languages in a recording. Poppy still shows
+the live preview and checks the full recording at Stop with Gemini when available. The Hindi, Bengali and English
+and Hindi, Marathi and English options also give Gemini language hints. **Writing system > Roman letters** uses
+phonetic spelling in the final text, including Hinglish and Banglish, while keeping the spoken language.
+If the transcription comes back in a different script, Poppy can use Windows’ built-in transliteration.
 Without a verified editable field, the result goes to the clipboard. The pill confirms the copy.
 
 One Groq key covers transcription and optional cleanup. [Gemini](https://aistudio.google.com/apikey)
