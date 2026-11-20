@@ -67,15 +67,28 @@ def _tool_path(name):
         path.cubicTo(15.4, 5.5, 15, 9.6, 11, 9.6)
         path.moveTo(1.6, 14)
         path.lineTo(12, 14)
+    elif name == "mic":
+        path.addRoundedRect(QRectF(6, 1.5, 4, 8), 2, 2)
+        path.moveTo(3.7, 7)
+        path.cubicTo(3.7, 12.4, 12.3, 12.4, 12.3, 7)
+        path.moveTo(8, 11)
+        path.lineTo(8, 14)
+        path.moveTo(5.7, 14)
+        path.lineTo(10.3, 14)
+    elif name == "stop":
+        path.addRoundedRect(QRectF(4, 4, 8, 8), 1.5, 1.5)
+    elif name == "close":
+        path.moveTo(4.5, 4.5)
+        path.lineTo(11.5, 11.5)
+        path.moveTo(11.5, 4.5)
+        path.lineTo(4.5, 11.5)
     return path
 
 
 class DrawerToolButton(QPushButton):
     def __init__(self, icon, label, *, toggle=False, parent=None):
         super().__init__(parent)
-        path = _tool_path(icon)
-        center = path.boundingRect().center()
-        self._path = path.translated(-center.x(), -center.y())
+        self.set_glyph(icon)
         self.setFixedSize(28, 28)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -86,6 +99,12 @@ class DrawerToolButton(QPushButton):
     def nextCheckState(self):
         # The checked state reflects the operation's result.
         pass
+
+    def set_glyph(self, icon):
+        path = _tool_path(icon)
+        center = path.boundingRect().center()
+        self._path = path.translated(-center.x(), -center.y())
+        self.update()
 
     def paintEvent(self, event):
         option = QStyleOptionButton()

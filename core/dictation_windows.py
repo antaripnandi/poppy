@@ -5,6 +5,7 @@ from collections import deque
 from ctypes import wintypes as wt
 from functools import lru_cache
 import io
+import os
 import wave
 
 
@@ -155,20 +156,117 @@ def unregister_shortcuts(hwnd):
         _user32().UnregisterHotKey(hwnd, shortcut)
 
 
-def focused_target():
+def _focused_window():
     info = _GuiThreadInfo()
     info.size = ct.sizeof(info)
     if not _user32().GetGUIThreadInfo(0, ct.byref(info)) or not info.active or not info.focus:
         return None
-    import win32gui
+    return info.active, info.focus
 
+
+class _Variant(ct.Structure):
+    _fields_ = [("type", wt.WORD), ("reserved", wt.WORD * 3), ("data", ct.c_void_p * 2)]
+
+
+@lru_cache(maxsize=1)
+def _oleaut():
+    api = ct.WinDLL("oleaut32")
+    api.VariantClear.argtypes = (ct.POINTER(_Variant),)
+    api.SafeArrayDestroy.argtypes = (ct.c_void_p,)
+    api.SafeArrayGetDim.argtypes = (ct.c_void_p,)
+    for name in ("SafeArrayGetLBound", "SafeArrayGetUBound"):
+        getattr(api, name).argtypes = (ct.c_void_p, wt.UINT, ct.POINTER(wt.LONG))
+    api.SafeArrayGetElement.argtypes = (ct.c_void_p, ct.POINTER(wt.LONG), ct.POINTER(wt.LONG))
+    return api
+
+
+def _automation_edit_id():
+    from poppy.core.system_features import _windows_com_interface
+
+    # IUIAutomation2 and IUIAutomationElement vtables follow the Windows SDK.
+    def method(table, slot, *args):
+        return ct.WINFUNCTYPE(ct.HRESULT, ct.c_void_p, *args)(table[slot])
+
+    element = ct.c_void_p()
+    with _windows_com_interface("e22ad333-b25f-460c-83d0-0581107395c9",
+                                "34723aff-0c9d-49d0-9896-7ab52df8cd8a") as (client, table):
+        method(table, 61, wt.DWORD)(client, 300)  # ConnectionTimeout
+        method(table, 63, wt.DWORD)(client, 300)  # TransactionTimeout
+        if method(table, 8, ct.POINTER(ct.c_void_p))(client, ct.byref(element)) < 0 or not element:
+            return None
+        vtable = ct.cast(element, ct.POINTER(ct.POINTER(ct.c_void_p))).contents
+        try:
+            control = ct.c_int()
+            password = wt.BOOL()
+            if (method(vtable, 21, ct.POINTER(ct.c_int))(element, ct.byref(control)) < 0
+                    or control.value not in (50004, 50030)  # Edit, Document
+                    or method(vtable, 35, ct.POINTER(wt.BOOL))(element, ct.byref(password)) < 0 or password.value):
+                return None
+
+            def bool_property(identifier):
+                value = _Variant()
+                try:
+                    get = method(vtable, 11, ct.c_int, wt.BOOL, ct.POINTER(_Variant))
+                    if get(element, identifier, True, ct.byref(value)) >= 0 and value.type == 11:  # VT_BOOL
+                        return bool(ct.c_short.from_address(ct.addressof(value) + _Variant.data.offset).value)
+                    return None
+                finally:
+                    _oleaut().VariantClear(ct.byref(value))
+
+            read_only = bool_property(30046)  # Value.IsReadOnly
+            if read_only is True or (control.value == 50030 and read_only is None and not bool_property(30149)):
+                return None
+            array = ct.c_void_p()
+            if method(vtable, 4, ct.POINTER(ct.c_void_p))(element, ct.byref(array)) < 0 or not array:
+                return None
+            api = _oleaut()
+            try:
+                lower, upper = wt.LONG(), wt.LONG()
+                if (api.SafeArrayGetDim(array) != 1 or api.SafeArrayGetLBound(array, 1, ct.byref(lower)) < 0
+                        or api.SafeArrayGetUBound(array, 1, ct.byref(upper)) < 0
+                        or not 0 <= upper.value - lower.value < 64):
+                    return None
+                identity = []
+                for index in range(lower.value, upper.value + 1):
+                    item = wt.LONG()
+                    if api.SafeArrayGetElement(array, ct.byref(wt.LONG(index)), ct.byref(item)) < 0:
+                        return None
+                    identity.append(item.value)
+                return tuple(identity)
+            finally:
+                api.SafeArrayDestroy(array)
+        finally:
+            ct.WINFUNCTYPE(wt.ULONG, ct.c_void_p)(vtable[2])(element)
+
+
+def focused_target():
+    """Identify an editable control without reading the field's contents."""
+    window = _focused_window()
+    if window is None:
+        return None
+    import win32gui
+    import win32process
+
+    active, focus = window
     try:
-        if win32gui.GetClassName(info.focus).lower().endswith("edit") and win32gui.GetWindowLong(info.focus, -16) & 0x20:
-            return None  # Native Windows password edit.
-        rect = win32gui.GetWindowRect(info.active)
+        klass = win32gui.GetClassName(focus).lower()
+        if klass == "edit" or klass.startswith("richedit"):
+            if win32gui.GetWindowLong(focus, -16) & 0x820:  # ES_PASSWORD or ES_READONLY
+                return None
+            identity = ()
+        else:
+            _, pid = win32process.GetWindowThreadProcessId(active)
+            if pid == os.getpid():  # Avoid synchronous UIA calls into Poppy's own GUI thread.
+                return None
+            identity = _automation_edit_id()
+            if not identity:
+                return None
+        rect = win32gui.GetWindowRect(active)
     except (OSError, win32gui.error):
         return None
-    return (info.active, info.focus), (rect[0], rect[1])
+    if _focused_window() != window:
+        return None
+    return (active, focus, identity), (rect[0], rect[1])
 
 
 def target_style(hwnd):
@@ -197,19 +295,22 @@ def _clip_formats(clipboard):
     return [clipboard.RegisterClipboardFormat(name) for name in _CLIPBOARD_FLAGS]
 
 
-def _put_private_text(clipboard, text, formats):
+def _put_private_text(clipboard, text, formats, *, history=False):
     clipboard.EmptyClipboard()
-    for fmt in formats:
-        clipboard.SetClipboardData(fmt, b"\0" * 4)
+    excluded, allow_history, allow_cloud = formats
+    if not history:
+        clipboard.SetClipboardData(excluded, b"\0" * 4)
+    clipboard.SetClipboardData(allow_history, int(history).to_bytes(4, "little"))
+    clipboard.SetClipboardData(allow_cloud, b"\0" * 4)
     clipboard.SetClipboardText(text, clipboard.CF_UNICODETEXT)
 
 
-def copy_text(hwnd, text):
+def copy_text(hwnd, text, *, history=False):
     import win32clipboard as cb
 
     cb.OpenClipboard(hwnd)
     try:
-        _put_private_text(cb, text, _clip_formats(cb))
+        _put_private_text(cb, text, _clip_formats(cb), history=history)
     finally:
         cb.CloseClipboard()
 
@@ -241,8 +342,7 @@ def paste_text(hwnd, target, text):
         cb.CloseClipboard()
     keys = (_Input * 4)(*(_Input(1, _InputData(key=_KeyInput(key, 0, flags, 0, 0)))
                           for key, flags in ((0x11, 0), (ord("V"), 0), (ord("V"), 2), (0x11, 2))))
-    current = focused_target()
-    if current and current[0] == target and not modifiers_down():
+    if _focused_window() == target[:2] and not modifiers_down():
         sent = _user32().SendInput(4, keys, ct.sizeof(_Input))
         if sent == 4:
             return sequence, saved

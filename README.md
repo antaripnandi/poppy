@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.11-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.12-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -20,15 +20,18 @@ permission to read playback state and control playback. Windows encrypts the sav
 The control names the active Spotify device and targets that device when you adjust it. Poppy reads its
 volume while the mixer is open. Disconnect from Settings to remove Poppy's saved tokens.
 
-In **Settings > Voice typing**, add a [Groq](https://console.groq.com/keys) key and enable the feature.
-Click a text field, press **Ctrl+Alt+D** to record, then press it again to finish. Press
-**Ctrl+Alt+Shift+D** to cancel. The indicator only appears during a dictation or briefly afterward.
-Poppy keeps the last result in memory and offers **Copy last dictation** in the pill's right-click menu.
-Use it if you switched fields, have rich clipboard contents, or the destination blocked paste.
+In **Settings > Voice typing**, add a [Groq](https://console.groq.com/keys) or Gemini key and enable the feature.
+The microphone next to the drawer’s other tools opens the recording pill. Click it to start, then use its
+stop button to finish. For direct dictation into a field, focus the field and press **Ctrl+Alt+D** to start
+or finish. Press **Ctrl+Alt+Shift+D** to cancel. The pill shows a live mic meter and updates its transcript
+preview as short audio chunks are processed. Poppy transcribes the full recording for the final result.
+Without a verified editable field, the result goes to the clipboard. The pill confirms the copy.
 
 One Groq key covers transcription and optional cleanup. [Gemini](https://aistudio.google.com/apikey)
 can back up both steps, and [OpenRouter](https://openrouter.ai/keys) can back up cleanup with its free router.
 Settings accepts up to 15 keys or imports a JSON file using [this blank template](examples/dictation-keys.example.json).
+**Check keys** checks all entered credentials against provider metadata endpoints. This checks access without
+sending a recording or running inference, and shows individual results by key number.
 Keep any populated file private. Poppy encrypts saved keys with Windows. Audio goes to the selected
 transcription provider and cleanup sends the transcript to the chosen editor. Free limits apply to your
 provider account or project. Poppy respects rate-limit cooldowns and uses another configured provider.

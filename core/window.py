@@ -741,6 +741,10 @@ class DynamicNotchWindow(QWidget):
             button.clicked.connect(callback)
             tools.addWidget(button)
             setattr(self, name, button)
+        self.btn_hdr_dictation = DrawerToolButton("mic", "Voice typing", toggle=True, parent=self.view_expanded)
+        self.btn_hdr_dictation.clicked.connect(self.dictation.open_panel)
+        self.dictation.panel_visible.connect(self.btn_hdr_dictation.setChecked)
+        tools.addWidget(self.btn_hdr_dictation)
         v_exp_layout.addLayout(tools)
         self.view_expanded.setVisible(False)
 

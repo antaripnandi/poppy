@@ -23,6 +23,73 @@ _CLEANUP = (("groq", "openai/gpt-oss-20b"), ("groq", "openai/gpt-oss-120b"), _GE
 _MAX_RESPONSE = 128 * 1024
 _MAX_TEXT = 12000
 KEY_LIMIT = 15
+_KEY_CHECK_URLS = {
+    "groq": "https://api.groq.com/openai/v1/models/whisper-large-v3-turbo",
+    "gemini": f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI[1]}",
+    "openrouter": "https://openrouter.ai/api/v1/key",
+}
+
+
+def _provider_request(provider, key, url):
+    request = QNetworkRequest(QUrl(url))
+    request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                         QNetworkRequest.RedirectPolicy.ManualRedirectPolicy)
+    if provider == "gemini":
+        request.setRawHeader(b"x-goog-api-key", key.encode())
+    else:
+        request.setRawHeader(b"Authorization", f"Bearer {key}".encode())
+    return request
+
+
+class DictationKeyCheck(QObject):
+    """Check credentials against provider metadata endpoints, without inference."""
+
+    updated = Signal(str, int, str)
+    finished = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._network = QNetworkAccessManager(self)
+        self._pending = []
+        self._active = {}
+
+    def start(self, keys):
+        self.cancel()
+        self._pending = [(provider, slot, key) for provider, pool in keys.items()
+                         for slot, key in enumerate(pool, 1)]
+        self._send()
+
+    def cancel(self):
+        self._pending.clear()
+        active, self._active = self._active, {}
+        for reply in active:
+            reply.abort()
+
+    def _send(self):
+        while self._pending and len(self._active) < 4:
+            provider, slot, key = self._pending.pop(0)
+            request = _provider_request(provider, key, _KEY_CHECK_URLS[provider])
+            request.setTransferTimeout(6500)
+            reply = self._network.get(request)
+            self._active[reply] = provider, slot
+            reply.setReadBufferSize(32768)
+            reply.readyRead.connect(reply.readAll)
+            reply.finished.connect(lambda rep=reply: self._received(rep))
+        if not self._active:
+            self.finished.emit()
+
+    def _received(self, reply):
+        entry = self._active.pop(reply, None)
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        reply.deleteLater()
+        if entry is None:
+            return
+        result = {
+            200: "Accepted", 400: "Rejected", 401: "Rejected", 402: "Account limit",
+            403: "Access denied", 404: "Model unavailable", 429: "Rate limited",
+        }.get(status, "Provider unavailable" if status else "Connection failed")
+        self.updated.emit(*entry, result)
+        self._send()
 
 
 def normalize_keys(keys):
@@ -113,7 +180,7 @@ def _editor_prompt(style, vocabulary, snippets):
     )
 
 
-def _request_for(provider, model, key, stage, audio, text, vocabulary, prompt):
+def _request_for(provider, model, stage, audio, text, vocabulary, prompt):
     if provider == "groq" and stage == "audio":
         boundary = uuid.uuid4().hex
         fields = {"model": model, "response_format": "json", "temperature": "0"}
@@ -124,9 +191,7 @@ def _request_for(provider, model, key, stage, audio, text, vocabulary, prompt):
         body += (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="dictation.wav"\r\n'
                  'Content-Type: audio/wav\r\n\r\n').encode() + audio + f'\r\n--{boundary}--\r\n'.encode()
         url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        headers = {b"Authorization": f"Bearer {key}".encode(), b"Content-Type":
-                   f"multipart/form-data; boundary={boundary}".encode()}
-        return url, headers, body
+        return url, f"multipart/form-data; boundary={boundary}".encode(), body
 
     if provider == "gemini":
         if stage == "audio":
@@ -139,20 +204,18 @@ def _request_for(provider, model, key, stage, audio, text, vocabulary, prompt):
             instructions = prompt
             parts = [{"text": text}]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        headers = {b"x-goog-api-key": key.encode(), b"Content-Type": b"application/json"}
         body = {"systemInstruction": {"parts": [{"text": instructions}]}, "contents": [{"parts": parts}],
                 "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1,
                                      "thinkingConfig": {"thinkingLevel": "MINIMAL" if model == _GEMINI[1] else "LOW"}}}
     else:
         url = ("https://api.groq.com/openai/v1/chat/completions" if provider == "groq"
                else "https://openrouter.ai/api/v1/chat/completions")
-        headers = {b"Authorization": f"Bearer {key}".encode(), b"Content-Type": b"application/json"}
         body = {"model": model, "messages": [{"role": "system", "content": prompt},
                                             {"role": "user", "content": text}],
                 "temperature": 0.1, "max_completion_tokens" if provider == "groq" else "max_tokens": 4096}
         if provider == "groq":
             body["reasoning_effort"] = "low"
-    return url, headers, json.dumps(body, ensure_ascii=False).encode()
+    return url, b"application/json", json.dumps(body, ensure_ascii=False).encode()
 
 
 def _result(provider, stage, data):
@@ -201,14 +264,15 @@ class DictationApi(QObject):
                 self._cooldown = {scope: until for scope, until in self._cooldown.items() if scope[0] != provider}
         self._keys = keys
 
-    def start(self, audio, *, cleanup, vocabulary, snippets, style):
+    def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False):
         self.cancel()
         self._audio = audio
         self._cleanup = cleanup
         self._vocabulary = vocabulary
         self._snippets = snippets
         self._prompt = _editor_prompt(style, vocabulary, snippets) if cleanup else ""
-        self._deadline.start(40000)
+        self._preview = preview
+        self._deadline.start(8000 if preview else 40000)
         self._stage = "audio"
         self._attempts = 0
         self._queue = list(_TRANSCRIPTION)
@@ -234,7 +298,7 @@ class DictationApi(QObject):
 
     def _next(self):
         now = time.monotonic()
-        while self._queue and self._attempts < 5:
+        while self._queue and self._attempts < (1 if self._preview else 5):
             provider, model = self._queue.pop(0)
             if (self._cooldown.get((provider,), 0) > now
                     or self._cooldown.get((provider, model), 0) > now
@@ -245,13 +309,10 @@ class DictationApi(QObject):
             if slot is None:
                 continue
             key = self._keys[provider][slot]
-            url, headers, body = _request_for(provider, model, key, self._stage, self._audio,
-                                              self._text, self._vocabulary, self._prompt)
-            request = QNetworkRequest(QUrl(url))
-            request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
-                                 QNetworkRequest.RedirectPolicy.ManualRedirectPolicy)
-            for name, value in headers.items():
-                request.setRawHeader(name, value)
+            url, content_type, body = _request_for(provider, model, self._stage, self._audio,
+                                                   self._text, self._vocabulary, self._prompt)
+            request = _provider_request(provider, key, url)
+            request.setRawHeader(b"Content-Type", content_type)
             reply = self._network.post(request, body)
             self._attempts += 1
             self._reply = reply

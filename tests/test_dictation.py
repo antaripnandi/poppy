@@ -2,10 +2,12 @@ import json
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtWidgets import QWidget
 
 from poppy.core import dictation_api
 from poppy.ui.dictation import DictationController, native
+from poppy.core.window import DynamicNotchWindow
 from poppy.ui.settings_window import SettingsWindow
 
 
@@ -145,9 +147,11 @@ def test_recording_lifecycle_and_cancel_without_audio_upload(audit_app, monkeypa
 
     parent = QWidget()
     manager = DictationController(parent)
+    copies = []
     monkeypatch.setattr(native, "Microphone", Mic)
     monkeypatch.setattr(native, "focused_target", lambda: None)
     monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, *, history: copies.append((text, history)))
     manager.configure({"enabled": True, "protected_keys": dictation_api.protect_keys({"gemini": ["test"]})})
     assert manager._indicator is None
     manager.toggle()
@@ -168,5 +172,77 @@ def test_recording_lifecycle_and_cancel_without_audio_upload(audit_app, monkeypa
     replies[-1].complete(200, gemini_text("Hello, Poppy."))
     replies[-1].complete(200, gemini_text("Hello, Poppy."))
     assert manager.last_text == "Hello, Poppy."
-    assert manager._indicator.title.text() == "Dictation ready"
+    assert manager._indicator.title.text() == "Copied to clipboard"
+    assert copies == [("Hello, Poppy.", True)]
     manager.close()
+
+
+def test_check_keys_batches_requests_and_reports_each_slot(monkeypatch):
+    page = SettingsWindow().voice_typing
+    replies = []
+
+    def get(request):
+        reply = Reply(request, None)
+        reply.readAll = lambda: b""
+        replies.append(reply)
+        return reply
+
+    monkeypatch.setattr(page._checker._network, "get", get)
+    page.keys["gemini"].setText("one, two, three, four, five")
+    page.keys["openrouter"].setText("router")
+    page.check_button.click()
+    assert len(replies) == 4
+    assert not page.check_button.isEnabled()
+    assert all(reply.body is None and reply.request.attribute(QNetworkRequest.Attribute.RedirectPolicyAttribute)
+               == QNetworkRequest.RedirectPolicy.ManualRedirectPolicy for reply in replies)
+    replies[1].complete(401)
+    assert len(replies) == 5 and replies[4].host == "generativelanguage.googleapis.com"
+    replies[0].complete(200)
+    assert len(replies) == 6 and replies[5].host == "openrouter.ai"
+    for index in (2, 3, 4, 5):
+        replies[index].complete(200)
+    assert page.check_button.isEnabled()
+    label = page._key_rows["gemini"][0]
+    assert label.text().startswith("4/5 accepted")
+    assert "Key 2 · Rejected" in label.toolTip()
+    assert page.status.text().startswith("5 of 6 keys accepted")
+    page.check_button.click()
+    page.keys["openrouter"].setText("replacement")
+    assert all(reply.aborted for reply in replies[6:])
+
+
+def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_app, monkeypatch):
+    class Mic:
+        def read(self):
+            return b"\x00\x0a" * 1600
+
+        def close(self, *, keep_audio=False):
+            return b""
+
+    keys = dictation_api.protect_keys({"gemini": ["fixture"]})
+    window = DynamicNotchWindow({"dictation": {"enabled": True, "protected_keys": keys, "cleanup": False}})
+    monkeypatch.setattr(native, "focused_target", lambda: None)
+    monkeypatch.setattr(native, "Microphone", Mic)
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    copies = []
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text))
+    controller = window.dictation
+    window.btn_hdr_dictation.click()
+    assert controller._indicator.isVisible() and window.btn_hdr_dictation.isChecked()
+    assert controller._mic is None
+    controller._indicator.action.click()
+    assert controller._indicator.listening
+    replies = mock_network(controller._pipeline(), monkeypatch)
+    for _ in range(36):
+        controller._read_mic()
+    assert any(controller._indicator.levels)
+    assert len(replies) == 1
+    replies[-1].complete(200, gemini_text("The first few words."))
+    assert "first few words" in controller._indicator.preview.text()
+    assert controller._indicator.listening and not copies
+    controller._indicator.action.click()
+    assert len(replies) == 2
+    replies[-1].complete(200, gemini_text("The full recording."))
+    assert copies == ["The full recording."]
+    controller.cancel()
+    assert not window.btn_hdr_dictation.isChecked()

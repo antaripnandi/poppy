@@ -1665,7 +1665,7 @@ class SettingsWindow(QWidget):
             dictation = self.voice_typing.values(previous_voice if isinstance(previous_voice, dict) else {})
         except (ValueError, OSError) as error:
             self.select_page("Voice typing")
-            self.voice_typing.status.setText(str(error))
+            self.voice_typing.show_error(str(error))
             return False
         # Always retain one usable tab.
         enabled_tabs = [name for name, chk in self._tab_checkboxes.items() if chk.isChecked()]
