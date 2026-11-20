@@ -190,6 +190,10 @@ def main():
     act_settings = QAction("Settings", tray_menu)
     act_settings.triggered.connect(notch.open_settings)
     tray_menu.addAction(act_settings)
+    tray_menu.addAction("Voice typing settings", lambda: notch.open_settings("Voice typing"))
+    copy_dictation = tray_menu.addAction("Copy last dictation", notch.dictation.copy_last)
+    copy_dictation.setVisible(False)
+    tray_menu.aboutToShow.connect(lambda: copy_dictation.setVisible(bool(notch.dictation.last_text)))
 
     checker = UpdateChecker(app)
     update_state = data_path("update_state.json")

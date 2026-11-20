@@ -29,6 +29,7 @@ from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableS
 from poppy.ui.weather_location import WeatherLocationEdit
 from poppy.core.spotify_playback import SpotifyPlayback
 from poppy.ui.spotify_controls import SpotifyAccountControls
+from poppy.ui.dictation_settings import DictationSettings
 from poppy.ui.pill_fonts import (
     DEFAULT_PILL_FONT, SYSTEM_PILL_FONT, export_pill_font, import_pill_font, pill_font_family, pill_font_path,
 )
@@ -296,9 +297,10 @@ class SettingsWindow(QWidget):
     screentime_reset_requested = Signal()
     update_check_requested = Signal()
 
-    def __init__(self, config: dict = None, parent=None, *, spotify=None):
+    def __init__(self, config: dict = None, parent=None, *, spotify=None, dictation_status=None):
         super().__init__(parent)
         self._spotify_playback = spotify if spotify is not None else SpotifyPlayback(self)
+        self.voice_typing = DictationSettings(dictation_status)
         self.config = config or {}
         self.setWindowTitle("Poppy Settings")
         self.resize(860, 640)
@@ -451,6 +453,7 @@ class SettingsWindow(QWidget):
         self.nav_list.addItem("Discord")
         self.nav_list.addItem("System")
         self.nav_list.addItem("About")
+        self.nav_list.addItem("Voice typing")
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
         sidebar_layout.addWidget(self.nav_list, 1)
         main_layout.addWidget(sidebar)
@@ -1203,6 +1206,7 @@ class SettingsWindow(QWidget):
         l_abt.addStretch()
 
         self.stack.addWidget(_make_scroll_area(page_abt))
+        self.stack.addWidget(_make_scroll_area(self.voice_typing))
 
         right_layout.addWidget(self.stack, stretch=1)
         right_layout.addWidget(self.no_search_results, stretch=1)
@@ -1510,6 +1514,7 @@ class SettingsWindow(QWidget):
         self._update_layout_preview()
 
     def _load_control_values(self):
+        self.voice_typing.load(self.config.get("dictation", {}))
         self.chk_update_notifications.setChecked(self.config.get("updates", {}).get("automatic", True), animate=False)
         self.chk_clipboard_history.setChecked(self.config.get("clipboard", {}).get("enabled", False), animate=False)
         self.chk_app_mixer.setChecked(self.config.get("mixer", {}).get("enabled", True), animate=False)
@@ -1655,6 +1660,13 @@ class SettingsWindow(QWidget):
         except OSError as error:
             QMessageBox.warning(self, "Settings were not saved", str(error))
             return False
+        previous_voice = self.config.get("dictation", {})
+        try:
+            dictation = self.voice_typing.values(previous_voice if isinstance(previous_voice, dict) else {})
+        except (ValueError, OSError) as error:
+            self.select_page("Voice typing")
+            self.voice_typing.status.setText(str(error))
+            return False
         # Always retain one usable tab.
         enabled_tabs = [name for name, chk in self._tab_checkboxes.items() if chk.isChecked()]
         if not enabled_tabs:
@@ -1669,6 +1681,7 @@ class SettingsWindow(QWidget):
         unit_str = "fahrenheit" if self.combo_weather_unit.currentIndex() == 1 else "celsius"
 
         new_config = {
+            "dictation": dictation,
             "clipboard": {"enabled": self.chk_clipboard_history.isChecked()},
             "capture": {"enabled": self.chk_capture_images.isChecked()},
             "mixer": {"enabled": self.chk_app_mixer.isChecked()},

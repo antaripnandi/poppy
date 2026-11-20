@@ -102,9 +102,13 @@ def main():
         parser.error("Build with 64-bit Python 3.11 on Windows x64.")
     compiler = args.iscc.resolve(strict=True)
     version = runpy.run_path(str(ROOT / "core" / "__init__.py"))["APP_VERSION"]
-    media = json.loads((ROOT / "config.json").read_text(encoding="utf-8")).get("media", {})
+    defaults = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    media = defaults.get("media", {})
     if media.get("spotify_sp_dc") or media.get("spotify_sp_dc_protected"):
         raise ValueError("The bundled defaults contain a Spotify credential.")
+    dictation = defaults.get("dictation", {})
+    if set(dictation) - {"enabled", "cleanup", "auto_paste", "style", "vocabulary", "snippets"} or dictation.get("enabled"):
+        raise ValueError("The bundled defaults must keep voice typing disabled and omit credentials.")
 
     build_dir = ROOT / "build"
     dist = ROOT / "dist"

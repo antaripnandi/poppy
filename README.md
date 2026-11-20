@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.10-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.11-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -19,6 +19,19 @@ choose **Connect Spotify**. Spotify requires Premium for playback-volume access.
 permission to read playback state and control playback. Windows encrypts the saved account tokens.
 The control names the active Spotify device and targets that device when you adjust it. Poppy reads its
 volume while the mixer is open. Disconnect from Settings to remove Poppy's saved tokens.
+
+In **Settings > Voice typing**, add a [Groq](https://console.groq.com/keys) key and enable the feature.
+Click a text field, press **Ctrl+Alt+D** to record, then press it again to finish. Press
+**Ctrl+Alt+Shift+D** to cancel. The indicator only appears during a dictation or briefly afterward.
+Poppy keeps the last result in memory and offers **Copy last dictation** in the pill's right-click menu.
+Use it if you switched fields, have rich clipboard contents, or the destination blocked paste.
+
+One Groq key covers transcription and optional cleanup. [Gemini](https://aistudio.google.com/apikey)
+can back up both steps, and [OpenRouter](https://openrouter.ai/keys) can back up cleanup with its free router.
+Settings accepts up to 15 keys or imports a JSON file using [this blank template](examples/dictation-keys.example.json).
+Keep any populated file private. Poppy encrypts saved keys with Windows. Audio goes to the selected
+transcription provider and cleanup sends the transcript to the chosen editor. Free limits apply to your
+provider account or project. Poppy respects rate-limit cooldowns and uses another configured provider.
 
 ### Run from source
 

@@ -1,4 +1,12 @@
 {
+  "dictation": {
+    "enabled": false,
+    "cleanup": true,
+    "auto_paste": true,
+    "style": "auto",
+    "vocabulary": [],
+    "snippets": {}
+  },
   "appearance": {
     "theme": "Pure black",
     "style": "Notch",

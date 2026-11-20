@@ -47,6 +47,7 @@ from poppy.ui.extended_views import (
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
 from poppy.ui.app_mixer import AppMixerMenu
+from poppy.ui.dictation import DictationController
 from poppy.ui.download_activity import DownloadActivityMenu
 from poppy.ui.drawer_tools import DrawerToolButton
 from poppy.ui.notch_shadow import NotchShadow
@@ -165,6 +166,7 @@ class DynamicNotchWindow(QWidget):
         self._download_activity = None
         self._app_mixer = None
         self.spotify_playback = SpotifyPlayback(self)
+        self.dictation = DictationController(self)
         rpc_cfg = self.config.get("discord_rpc", {})
         self.discord_rpc = DiscordRPCManager(config=rpc_cfg, parent=self)
         self.audio_ctrl = SystemAudioController()
@@ -1081,6 +1083,8 @@ class DynamicNotchWindow(QWidget):
     def nativeEvent(self, event_type, message):
         if event_type == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0312 and hasattr(self, "dictation") and self.dictation.handle_shortcut(msg.wParam):  # WM_HOTKEY
+                return True, 0
             if msg.message == WM_INPUT:
                 if self._outside_click_registered and is_mouse_press(msg.lParam):
                     position = QCursor.pos()
@@ -1331,6 +1335,7 @@ class DynamicNotchWindow(QWidget):
         dialog.resize(480, 360)
         actions = [
             ("Settings", self.open_settings), ("Start or pause focus timer", self.pomodoro.toggle),
+            ("Voice typing settings", lambda: self.open_settings("Voice typing")),
             ("New floating note", lambda: self._tear_off_sticky_note("")),
             ("Open calculator", self._trigger_quick_search),
             ("Take a screen snip", self._trigger_screen_snip),
@@ -1362,6 +1367,9 @@ class DynamicNotchWindow(QWidget):
             outputs.aboutToShow.connect(lambda: self._add_audio_endpoint_actions(outputs))
             menu.addSeparator()
         menu.addAction("Open commands", self.open_commands)
+        menu.addAction("Voice typing settings", lambda: self.open_settings("Voice typing"))
+        if self.dictation.last_text:
+            menu.addAction("Copy last dictation", self.dictation.copy_last)
         if self.download_watcher.folder is not None:
             menu.addAction("Download activity", lambda: self._show_download_activity(position))
             menu.addAction("Open download folder", self._open_download_folder)
@@ -2117,7 +2125,8 @@ class DynamicNotchWindow(QWidget):
         self.clearFocus()
 
         if self._settings_window is None:
-            self._settings_window = SettingsWindow(config=self.config, spotify=self.spotify_playback)
+            self._settings_window = SettingsWindow(config=self.config, spotify=self.spotify_playback,
+                                                   dictation_status=lambda: self.dictation.shortcut_status)
             self._settings_window.settings_saved.connect(self._on_settings_saved)
             self._settings_window.appearance_live_updated.connect(self._apply_live_appearance)
             self._settings_window.screentime_reset_requested.connect(self.screentime.reset_today)
@@ -2303,6 +2312,7 @@ class DynamicNotchWindow(QWidget):
         self.settings_applied.emit()
 
     def _apply_optional_features(self):
+        self.dictation.configure(self.config.get("dictation", {}))
         mixer_enabled = self.config.get("mixer", {}).get("enabled", True)
         self.tab_home.btn_app_mixer.setVisible(mixer_enabled)
         self.btn_peek_app_mixer.setVisible(mixer_enabled)
@@ -3055,6 +3065,7 @@ class DynamicNotchWindow(QWidget):
         self.screentime.close()
         self.lyrics_manager.close()
         self.spotify_playback.close()
+        self.dictation.close()
         self.media_manager.stop()
         self.bright_ctrl.close()
         self.discord_rpc.close()
