@@ -6,7 +6,7 @@ import time
 from pywintypes import error as WindowsError
 
 from PySide6.QtCore import QEasingCurve, QLineF, QObject, QPoint, QPointF, QPropertyAnimation, QRectF, Qt, QTimer, Signal, QVariantAnimation
-from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient, QTextCursor
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 
 from poppy.core import dictation_windows as native
@@ -251,9 +251,10 @@ class DictationIndicator(QWidget):
         last = metrics.elidedText(last, Qt.TextElideMode.ElideLeft, width)
         self.preview.setText(f"{first}\n{last}" if first else last)
 
-    def set_elapsed(self, seconds):
+    def set_elapsed(self, seconds, *, hold=False, editing=False):
         minutes, seconds = divmod(seconds, 60)
-        self.detail.setText(f"{minutes}:{seconds:02d}  ·  Click stop to finish")
+        hint = "Release the keys to finish" if hold else "Speak an edit, then click Stop" if editing else "Click stop to finish"
+        self.detail.setText(f"{minutes}:{seconds:02d}  ·  {hint}")
 
     def set_level(self, level):
         previous = self.levels
@@ -327,8 +328,12 @@ class DictationController(QObject):
         self._keys = {}
         self._config = {}
         self._registered_hwnd = None
+        self._extra_shortcuts = set()
         self._target = None
         self._local_target = None
+        self._text_scope = None
+        self._editing = False
+        self._holding = False
         self._pending_insert = ""
         self._restore = None
         self._phase = ""
@@ -371,15 +376,33 @@ class DictationController(QObject):
             hwnd = int(self._notch.winId())
             if native.register_shortcuts(hwnd):
                 self._registered_hwnd = hwnd
+        unavailable = []
+        if self._registered_hwnd is not None:
+            for setting, shortcut, label in (("hold_to_talk", native.HOLD_HOTKEY, "Ctrl+Alt+Space"),
+                                             ("voice_editing", native.EDIT_HOTKEY, "Ctrl+Alt+Shift+E")):
+                if config.get(setting, True):
+                    if shortcut not in self._extra_shortcuts:
+                        if native.register_extra_shortcut(self._registered_hwnd, shortcut):
+                            self._extra_shortcuts.add(shortcut)
+                        else:
+                            unavailable.append(label)
+                elif shortcut in self._extra_shortcuts:
+                    native.unregister_extra_shortcut(self._registered_hwnd, shortcut)
+                    self._extra_shortcuts.remove(shortcut)
         self.shortcut_status = (
             "Ctrl+Alt+D is active." if self._registered_hwnd else
             "The shortcut is unavailable. It may be in use by another app." if enabled else
             "Add a Groq or Gemini key to enable voice typing." if config.get("enabled") else
             "Voice typing is off."
         )
+        if unavailable:
+            self.shortcut_status = f"Shortcut unavailable: {', '.join(unavailable)}."
 
     def _unregister(self):
         if self._registered_hwnd is not None:
+            for shortcut in self._extra_shortcuts:
+                native.unregister_extra_shortcut(self._registered_hwnd, shortcut)
+            self._extra_shortcuts.clear()
             native.unregister_shortcuts(self._registered_hwnd)
             self._registered_hwnd = None
 
@@ -390,6 +413,14 @@ class DictationController(QObject):
             self.toggle()
         elif shortcut == native.CANCEL_HOTKEY:
             self.cancel()
+        elif shortcut == native.HOLD_HOTKEY and shortcut in self._extra_shortcuts:
+            if native.hold_shortcut_down():
+                self._start_capture(hold=True)
+        elif shortcut == native.EDIT_HOTKEY and shortcut in self._extra_shortcuts:
+            if self._mic is not None and self._editing:
+                self._stop_recording()
+            else:
+                self._start_capture(editing=True)
         else:
             return False
         return True
@@ -398,11 +429,22 @@ class DictationController(QObject):
         if self._mic is not None:
             self._stop_recording()
             return
+        self._start_capture()
+
+    def _start_capture(self, *, hold=False, editing=False):
         if self._phase or not self.available:
             return
         focus = native.focused_target()
         self._target = focus[0] if focus else None
         self._local_target = self._local_editor() if not self._target else None
+        self._editing = editing
+        self._holding = hold
+        self._text_scope = None
+        if editing or (self._config.get("continuation_context", False) and self._config.get("cleanup", True)):
+            self._text_scope = self._read_text_scope(selection=editing)
+        if editing and self._text_scope is None:
+            self._status("Select text to edit", "Select up to 4,000 characters in an editable field", auto_hide=4800)
+            return
         self._screen = None
         if self._target:
             import win32api
@@ -431,6 +473,7 @@ class DictationController(QObject):
         self._meter_peak = 600.0
         self._elapsed = 0
         self._status("Listening", "0:00  ·  Click stop to finish")
+        self._indicator.set_elapsed(0, hold=hold, editing=editing)
         self._sample_timer.start()
         self._start_live()
 
@@ -445,6 +488,34 @@ class DictationController(QObject):
             if not isinstance(focus, QLineEdit) or focus.echoMode() == QLineEdit.EchoMode.Normal:
                 return focus
         return None
+
+    def _read_text_scope(self, *, selection):
+        if self._target:
+            return native.read_text_scope(self._target, selection=selection)
+        editor = self._local_editor()
+        if editor is None or editor is not self._local_target:
+            return None
+        if isinstance(editor, QLineEdit):
+            start, end = editor.selectionStart(), editor.selectionEnd()
+            if selection:
+                text = editor.selectedText()
+                return native.TextScope(text, (start, end)) if text and len(text) <= native.SELECTION_LIMIT else None
+            if start >= 0:
+                return None
+            end = editor.cursorPosition() * 2
+            text = editor.text().encode("utf-16-le")[max(0, end - native.CONTEXT_LIMIT * 2):end]
+            text = text.decode("utf-16-le", errors="ignore")
+        else:
+            cursor = editor.textCursor()
+            if selection:
+                text = cursor.selectedText().replace("\u2029", "\n")
+                where = (cursor.selectionStart(), cursor.selectionEnd())
+                return native.TextScope(text, where) if text and len(text) <= native.SELECTION_LIMIT else None
+            if cursor.hasSelection():
+                return None
+            cursor.setPosition(max(0, cursor.position() - native.CONTEXT_LIMIT), QTextCursor.MoveMode.KeepAnchor)
+            text = cursor.selectedText().replace("\u2029", "\n")
+        return native.TextScope(text) if text.strip() else None
 
     def open_panel(self):
         if not self.available:
@@ -468,8 +539,8 @@ class DictationController(QObject):
         elapsed = int(time.monotonic() - self._started)
         if elapsed != self._elapsed:
             self._elapsed = elapsed
-            self._indicator.set_elapsed(elapsed)
-        if elapsed >= 90:
+            self._indicator.set_elapsed(elapsed, hold=self._holding, editing=self._editing)
+        if elapsed >= 90 or (self._holding and not native.hold_shortcut_down()):
             self._stop_recording()
         elif self._live is None:
             self._maybe_preview()
@@ -533,7 +604,7 @@ class DictationController(QObject):
     def _live_result(self, text, preview_reference):
         self._close_live()
         if self._phase == "finishing":
-            if preview_reference or self._language_mode != "auto" or self._config.get("output_script") == "roman":
+            if preview_reference or self._language_mode != "auto" or (not self._editing and self._config.get("output_script") == "roman"):
                 self._transcribe_recording(live_text=text, preview_reference=preview_reference)
             else:
                 self._pcm.clear()
@@ -557,6 +628,7 @@ class DictationController(QObject):
 
     def _stop_recording(self):
         self._sample_timer.stop()
+        self._holding = False
         mic, self._mic = self._mic, None
         # A socket failure during the last read must not start a second finalization.
         self._previewing = False
@@ -567,6 +639,7 @@ class DictationController(QObject):
         if self._speech_seconds < 0.12:
             self._close_live()
             self._phase = ""
+            self._text_scope = None
             self._status("No speech heard", "Ctrl+Alt+D to try again", auto_hide=2100)
             return
         self._pcm = pcm
@@ -581,13 +654,15 @@ class DictationController(QObject):
         style = self._config.get("style", "auto")
         if style == "auto":
             style = native.target_style(self._target[0]) if self._target else "natural"
+        text = self._text_scope.text if self._text_scope else ""
         return dict(cleanup=self._config.get("cleanup", True), vocabulary=self._config.get("vocabulary", []),
-                    snippets=self._config.get("snippets", {}), style=style)
+                    snippets={} if self._editing else self._config.get("snippets", {}), style=style,
+                    selection=text if self._editing else "", context="" if self._editing else text)
 
     def _transcribe_recording(self, *, live_text="", preview_reference=""):
         pcm, self._pcm = self._pcm, bytearray()
         self._pipeline().start(native.wav_data(pcm), **self._output_options(), language_mode=self._language_mode,
-                               romanize=self._config.get("output_script") == "roman", live_text=live_text,
+                               romanize=not self._editing and self._config.get("output_script") == "roman", live_text=live_text,
                                preview_reference=preview_reference)
 
     def _processing(self, phase):
@@ -605,10 +680,12 @@ class DictationController(QObject):
             return
         self._phase = ""
         if not text:
+            self._text_scope = None
             self._status("Dictation", message, auto_hide=4800)
             return
         self.last_text = text
         if message == REVIEW_TRANSCRIPT:
+            self._text_scope = None
             self._indicator.set_preview(text)
             self._status(REVIEW_TRANSCRIPT, "Ending needs a check · Copy to review", auto_hide=12000, offer_copy=True)
             return
@@ -625,9 +702,18 @@ class DictationController(QObject):
         text, self._pending_insert = self._pending_insert, ""
         self._phase = ""
         pasted = False
+        scope = self._text_scope
+        editing = self._editing
+
+        def same_text_scope():
+            return self._read_text_scope(selection=editing) == scope
+
         if self._config.get("auto_paste", True):
             editor = self._local_editor()
-            if editor is not None and editor is self._local_target:
+            if scope and not editing and text and text[0].isalnum() and not scope.text[-1].isspace():
+                if scope.text[-1] not in "([{\u201c\u2018":
+                    text = " " + text
+            if editor is not None and editor is self._local_target and (scope is None or same_text_scope()):
                 if isinstance(editor, QLineEdit):
                     editor.insert(text)
                 else:
@@ -635,7 +721,8 @@ class DictationController(QObject):
                 pasted = True
             elif self._target and self._restore is None:
                 try:
-                    restored = native.paste_text(int(self._notch.winId()), self._target, text)
+                    restored = native.paste_text(int(self._notch.winId()), self._target, text,
+                                                 validate=same_text_scope if scope else None)
                 except (OSError, WindowsError):
                     restored = None
                 if restored:
@@ -643,8 +730,12 @@ class DictationController(QObject):
                     self._restore = restored
                     self._restore_attempts = 0
                     self._restore_timer.start(2500)
+        self._text_scope = None
         if pasted:
-            self._status("Text sent", self._cleanup_message or "Copy it again from Poppy’s menu", auto_hide=1700)
+            self._status("Text sent", "Selection replaced" if editing else self._cleanup_message or "Copy it again from Poppy’s menu",
+                         auto_hide=1700)
+        elif editing:
+            self._status("Edit ready", "Copy the revised text", auto_hide=10000, offer_copy=True)
         else:
             self._copy_result(explicit=False)
 
@@ -754,6 +845,8 @@ class DictationController(QObject):
         self._hide_timer.stop()
         self._paste_timer.stop()
         self._pending_insert = ""
+        self._text_scope = None
+        self._editing = self._holding = False
         self._previewing = False
         self._close_live()
         if self._mic is not None:

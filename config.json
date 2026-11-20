@@ -1,6 +1,9 @@
 {
   "dictation": {
     "enabled": false,
+    "hold_to_talk": true,
+    "voice_editing": true,
+    "continuation_context": false,
     "cleanup": true,
     "auto_paste": true,
     "streaming": true,

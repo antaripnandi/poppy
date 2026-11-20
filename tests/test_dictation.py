@@ -4,10 +4,11 @@ import sys
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
+import pytest
 from PySide6.QtCore import QObject, QPoint, Qt, Signal
 from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLineEdit, QWidget
 
 from poppy.core import dictation_api
 from poppy.core.dictation_live import GeminiLiveDictation
@@ -578,3 +579,109 @@ def test_pill_keeps_preview_during_language_check_and_respects_reduced_motion(mo
     pill._check.setCurrentTime(200)
     assert pill._check_amount == 1.0
     pill.close()
+
+
+def test_hold_shortcut_stops_once_on_release(monkeypatch):
+    class Mic:
+        def read(self):
+            return b"\0\x10" * 3200
+
+        def close(self, *, keep_audio=False):
+            return b""
+
+    parent = QWidget()
+    manager = DictationController(parent)
+    monkeypatch.setattr(native, "Microphone", Mic)
+    monkeypatch.setattr(native, "focused_target", lambda: None)
+    monkeypatch.setattr(native, "unregister_shortcuts", lambda hwnd: None)
+    monkeypatch.setattr(native, "unregister_extra_shortcut", lambda hwnd, shortcut: None)
+    held = [True]
+    monkeypatch.setattr(native, "hold_shortcut_down", lambda: held[0])
+    manager.configure({"enabled": True, "streaming": False,
+                       "protected_keys": dictation_api.protect_keys({"gemini": ["fixture"]})})
+    manager._registered_hwnd = 1
+    manager._extra_shortcuts.add(native.HOLD_HOTKEY)
+    replies = mock_network(manager._pipeline(), monkeypatch)
+    assert manager.handle_shortcut(native.HOLD_HOTKEY) and manager._mic is not None
+    assert "Release" in manager._indicator.detail.text()
+    manager._read_mic()
+    assert not replies
+    held[0] = False
+    manager._read_mic()
+    assert manager._mic is None and len(replies) == 1
+    assert manager.handle_shortcut(native.HOLD_HOTKEY) and len(replies) == 1
+    manager.close()
+
+
+def test_edit_replaces_only_the_original_selection_and_never_inserts_the_command(monkeypatch):
+    class Mic:
+        def read(self):
+            return b"\0\x10" * 3200
+
+        def close(self, *, keep_audio=False):
+            return b""
+
+    parent = QWidget()
+    editor = QLineEdit("first middle last", parent)
+    manager = DictationController(parent)
+    monkeypatch.setattr(manager, "_local_editor", lambda: editor)
+    monkeypatch.setattr(native, "Microphone", Mic)
+    monkeypatch.setattr(native, "focused_target", lambda: None)
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    monkeypatch.setattr(native, "copy_text", lambda *args, **kwargs: pytest.fail("Edit must not copy automatically"))
+    manager.configure({"enabled": True, "streaming": False, "cleanup": False, "output_script": "roman",
+                       "protected_keys": dictation_api.protect_keys({"gemini": ["fixture"]})})
+    replies = mock_network(manager._pipeline(), monkeypatch)
+
+    def say_edit():
+        editor.setSelection(6, 6)
+        manager._start_capture(editing=True)
+        manager._read_mic()
+        manager.toggle()
+        assert b"middle" not in replies[-1].body
+        replies[-1].complete(200, gemini_text("Translate this to Spanish."))
+        body = json.loads(replies[-1].body)
+        payload = body["contents"][0]["parts"][0]["text"]
+        assert json.loads(payload) == {"selection": "middle", "spoken_instruction": "Translate this to Spanish."}
+
+    say_edit()
+    replies[-1].complete(200, gemini_text("medio"))
+    assert editor.text() == "first medio last"
+    editor.setText("first middle last")
+    say_edit()
+    editor.setSelection(0, 5)
+    replies[-1].complete(200, gemini_text("medio"))
+    assert editor.text() == "first middle last" and manager.last_text == "medio"
+    assert manager._indicator.title.text() == "Edit ready"
+    say_edit()
+    replies[-1].complete(200, gemini_text("[EDIT_UNAVAILABLE]"))
+    assert editor.text() == "first middle last" and "Could not edit" in manager._indicator.detail.text()
+    manager.close()
+
+
+def test_continuation_sends_bounded_context_only_to_cleanup_and_inserts_at_caret(monkeypatch):
+    prefix = "x" * 225 + "I'm looking forward to"
+    suffix = " | Already written after the cursor."
+    parent = QWidget()
+    editor = QLineEdit(prefix + suffix, parent)
+    editor.setCursorPosition(len(prefix))
+    manager = DictationController(parent)
+    manager._local_target = editor
+    monkeypatch.setattr(manager, "_local_editor", lambda: editor)
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    scope = manager._read_text_scope(selection=False)
+    assert scope.text == prefix[-200:]
+    manager._text_scope = scope
+    api = manager._pipeline()
+    api.set_keys({"gemini": ["fixture"]})
+    replies = mock_network(api, monkeypatch)
+    manager._status("Listening", "")
+    manager._previewing = False
+    api.start(b"RIFFsample-data", cleanup=True, vocabulary=[], snippets={}, style="natural", context=scope.text)
+    assert b"looking forward" not in replies[-1].body
+    replies[-1].complete(200, gemini_text("Discussing the timeline."))
+    payload = json.loads(replies[-1].body)["contents"][0]["parts"][0]["text"]
+    assert json.loads(payload) == {"before_caret": prefix[-200:], "dictation": "Discussing the timeline."}
+    replies[-1].complete(200, gemini_text("discussing the timeline."))
+    assert editor.text() == prefix + " discussing the timeline." + suffix
+    manager.close()

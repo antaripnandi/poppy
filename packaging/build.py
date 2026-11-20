@@ -108,7 +108,8 @@ def main():
         raise ValueError("The bundled defaults contain a Spotify credential.")
     dictation = defaults.get("dictation", {})
     if set(dictation) - {"enabled", "cleanup", "auto_paste", "streaming", "speech_languages", "output_script",
-                         "style", "vocabulary", "snippets"} or dictation.get("enabled"):
+                         "style", "vocabulary", "snippets", "hold_to_talk", "voice_editing",
+                         "continuation_context"} or dictation.get("enabled"):
         raise ValueError("The bundled defaults must keep voice typing disabled and omit credentials.")
 
     build_dir = ROOT / "build"

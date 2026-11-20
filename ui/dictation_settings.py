@@ -32,6 +32,10 @@ class DictationSettings(QWidget):
         self.enabled = ToggleSwitch()
         self.enabled.setAccessibleName("Enable voice typing")
         layout.addWidget(SettingRow("Use voice typing", "Use the mic in the drawer or press Ctrl+Alt+D.", self.enabled))
+        self.hold_to_talk = ToggleSwitch()
+        layout.addWidget(SettingRow("Hold to talk", "Hold Ctrl+Alt+Space to record. Release to finish.", self.hold_to_talk))
+        self.voice_editing = ToggleSwitch()
+        layout.addWidget(SettingRow("Edit Mode", "Select text and press Ctrl+Alt+Shift+E. Repeat to finish.", self.voice_editing))
         self.shortcut = QLabel()
         self.shortcut.setTextFormat(Qt.TextFormat.PlainText)
         set_widget_style(self.shortcut, "color: #9ca3a5; font-size: 11px;")
@@ -88,7 +92,8 @@ class DictationSettings(QWidget):
         self.status.hide()
         layout.addWidget(self.status)
         privacy = QLabel("Windows encrypts saved keys. Groq or Gemini receives audio, and Gemini’s free tier may use it "
-                         "to improve its services. Cleanup and Roman spelling can also send text to OpenRouter.")
+                         "to improve its services. Cleanup and Roman spelling can also send text to OpenRouter. "
+                         "Edit Mode sends the selection and spoken instruction to the editing provider.")
         privacy.setWordWrap(True)
         set_widget_style(privacy, "font-size: 11px; color: #a7afaf;")
         layout.addWidget(privacy)
@@ -113,8 +118,11 @@ class DictationSettings(QWidget):
         self.auto_paste.setAccessibleName("Paste into the original field")
         self.streaming = ToggleSwitch()
         self.streaming.setAccessibleName("Show live transcription")
+        self.continuation_context = ToggleSwitch()
         layout.addWidget(SettingRow("Live transcript", "Show words while you speak. Gemini streams audio during recording.", self.streaming))
         layout.addWidget(SettingRow("Clean up dictation", "Fix punctuation, fillers, and spoken corrections.", self.cleanup))
+        layout.addWidget(SettingRow("Continuation context", "Send up to 200 characters before the cursor to the cleanup provider.",
+                                    self.continuation_context))
         layout.addWidget(SettingRow("Paste into the original field", "Copy to the clipboard when there’s no editable target.", self.auto_paste))
 
         form = QFormLayout()
@@ -257,6 +265,9 @@ class DictationSettings(QWidget):
     def load(self, config):
         config = config if isinstance(config, dict) else {}
         self.enabled.setChecked(config.get("enabled", False))
+        self.hold_to_talk.setChecked(config.get("hold_to_talk", True))
+        self.voice_editing.setChecked(config.get("voice_editing", True))
+        self.continuation_context.setChecked(config.get("continuation_context", False))
         self.cleanup.setChecked(config.get("cleanup", True))
         self.auto_paste.setChecked(config.get("auto_paste", True))
         self.streaming.setChecked(config.get("streaming", True))
@@ -286,6 +297,9 @@ class DictationSettings(QWidget):
                      else protect_keys(keys))
         return {
             "enabled": self.enabled.isChecked(),
+            "hold_to_talk": self.hold_to_talk.isChecked(),
+            "voice_editing": self.voice_editing.isChecked(),
+            "continuation_context": self.continuation_context.isChecked(),
             "cleanup": self.cleanup.isChecked(),
             "auto_paste": self.auto_paste.isChecked(),
             "streaming": self.streaming.isChecked(),
