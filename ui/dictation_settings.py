@@ -99,6 +99,9 @@ class DictationSettings(QWidget):
         self.cleanup.setAccessibleName("Clean up dictation")
         self.auto_paste = ToggleSwitch()
         self.auto_paste.setAccessibleName("Paste into the original field")
+        self.streaming = ToggleSwitch()
+        self.streaming.setAccessibleName("Show live transcription")
+        layout.addWidget(SettingRow("Live transcript", "Show words while you speak. Gemini streams audio during recording.", self.streaming))
         layout.addWidget(SettingRow("Clean up dictation", "Fix punctuation, fillers, and spoken corrections.", self.cleanup))
         layout.addWidget(SettingRow("Paste into the original field", "Copy to the clipboard when there’s no editable target.", self.auto_paste))
 
@@ -244,6 +247,7 @@ class DictationSettings(QWidget):
         self.enabled.setChecked(config.get("enabled", False))
         self.cleanup.setChecked(config.get("cleanup", True))
         self.auto_paste.setChecked(config.get("auto_paste", True))
+        self.streaming.setChecked(config.get("streaming", True))
         self._show_keys(read_keys(config))
         self.style.setCurrentIndex(max(0, self.style.findData(config.get("style", "auto"))))
         self.vocabulary.setText(", ".join(config.get("vocabulary", [])))
@@ -270,6 +274,7 @@ class DictationSettings(QWidget):
             "enabled": self.enabled.isChecked(),
             "cleanup": self.cleanup.isChecked(),
             "auto_paste": self.auto_paste.isChecked(),
+            "streaming": self.streaming.isChecked(),
             "style": self.style.currentData(),
             "vocabulary": [word.strip() for word in self.vocabulary.text().split(",") if word.strip()],
             "snippets": snippets_from_text(text),

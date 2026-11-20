@@ -28,7 +28,7 @@ RESOURCES = (
     "assets/fonts/RubikSprayPaint-Regular.ttf", "assets/fonts/RubikSprayPaint-OFL.txt",
 )
 RUNTIME_PACKAGES = (
-    "PySide6-Essentials", "PySide6-Pdf", "shiboken6", "winsdk",
+    "PySide6-Essentials", "PySide6-Addons", "PySide6-Pdf", "shiboken6", "winsdk",
     "pypresence", "psutil", "pywin32", "nvidia-ml-py", "PyInstaller",
 )
 
@@ -107,7 +107,7 @@ def main():
     if media.get("spotify_sp_dc") or media.get("spotify_sp_dc_protected"):
         raise ValueError("The bundled defaults contain a Spotify credential.")
     dictation = defaults.get("dictation", {})
-    if set(dictation) - {"enabled", "cleanup", "auto_paste", "style", "vocabulary", "snippets"} or dictation.get("enabled"):
+    if set(dictation) - {"enabled", "cleanup", "auto_paste", "streaming", "style", "vocabulary", "snippets"} or dictation.get("enabled"):
         raise ValueError("The bundled defaults must keep voice typing disabled and omit credentials.")
 
     build_dir = ROOT / "build"

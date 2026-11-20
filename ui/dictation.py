@@ -1,15 +1,18 @@
 """On-demand dictation indicator and the Windows recording lifecycle."""
 
+import json
 import math
 import time
 from pywintypes import error as WindowsError
 
-from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, Signal, QVariantAnimation
+from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 
 from poppy.core import dictation_windows as native
 from poppy.core.dictation_api import DictationApi, read_keys
+from poppy.core.dictation_live import GeminiLiveDictation
+from poppy.core.storage import data_path, write_json
 from poppy.core.system_controls import system_animations_enabled
 from poppy.ui.drawer_tools import DrawerToolButton
 from poppy.ui.theme import is_light_theme, surface_colors
@@ -18,6 +21,9 @@ from poppy.ui.theme import is_light_theme, surface_colors
 class DictationIndicator(QWidget):
     clicked = Signal()
     dismissed = Signal()
+    drag_started = Signal()
+    moved = Signal()
+    reset_position = Signal()
 
     def __init__(self):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
@@ -26,9 +32,14 @@ class DictationIndicator(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedSize(324, 54)
         self.setAccessibleName("Voice typing")
+        self.setToolTip("Drag the pill to move it. Right-click while idle to reset its position.")
+        header = QWidget(self)
+        header.setGeometry(1, 7, self.width() - 9, 40)
         self.title = QLabel()
         self.detail = QLabel()
-        self.preview = QLabel()
+        self.preview = QLabel(self)
+        self.preview.setGeometry(0, 51, self.width(), 36)
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.preview.setAccessibleName("Live transcript preview")
         for label in (self.title, self.detail, self.preview):
             label.setTextFormat(Qt.TextFormat.PlainText)
@@ -43,24 +54,28 @@ class DictationIndicator(QWidget):
         close = DrawerToolButton("close", "Dismiss voice typing")
         close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         close.clicked.connect(self.dismissed)
-        row = QHBoxLayout()
+        row = QHBoxLayout(header)
         row.setContentsMargins(51, 0, 0, 0)
         row.setSpacing(3)
         row.addLayout(labels, 1)
         row.addWidget(self.action)
         row.addWidget(close)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 7, 9, 7)
-        layout.setSpacing(4)
-        layout.addLayout(row, 1)
-        layout.addWidget(self.preview)
         self.preview.hide()
         self.levels = [0.0] * 5
+        self._press = None
+        self._dragging = False
+        self._bottom_anchor = None
+        self._show_preview = False
+        self._preview_text = ""
         self.listening = False
         self._ready = False
+        self._done = False
         self._arrival = QPropertyAnimation(self, b"windowOpacity", self)
         self._arrival.setDuration(165)
         self._arrival.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._height_motion = QVariantAnimation(self, duration=180)
+        self._height_motion.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._height_motion.valueChanged.connect(self._set_height)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -69,12 +84,82 @@ class DictationIndicator(QWidget):
             self._arrival.setEndValue(1.0)
             self._arrival.start()
 
-    def mouseReleaseEvent(self, event):
-        if self._ready and event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = event.globalPosition().toPoint(), self.pos()
+            self._dragging = False
             event.accept()
-        else:
-            super().mouseReleaseEvent(event)
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._press is None or not event.buttons() & Qt.MouseButton.LeftButton:
+            return super().mouseMoveEvent(event)
+        origin, position = self._press
+        delta = event.globalPosition().toPoint() - origin
+        if self._dragging or delta.manhattanLength() >= QApplication.startDragDistance():
+            if not self._dragging:
+                self._height_motion.stop()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                self.drag_started.emit()
+            self._dragging = True
+            screen = QGuiApplication.screenAt(event.globalPosition().toPoint()) or self.screen()
+            self.place(position + delta, screen)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton or self._press is None:
+            return super().mouseReleaseEvent(event)
+        self._press = None
+        if self._dragging:
+            self._dragging = False
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.moved.emit()
+            self._resize_for_state()
+        elif self._ready and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        event.accept()
+
+    def contextMenuEvent(self, event):
+        if not self._ready:
+            return
+        menu = QMenu(self)
+        menu.addAction("Reset pill position", self.reset_position)
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(event.globalPos())
+
+    def hideEvent(self, event):
+        self._height_motion.stop()
+        self._press = None
+        self._dragging = False
+        super().hideEvent(event)
+
+    def place(self, point, screen, *, set_anchor=True):
+        bounds = screen.availableGeometry()
+        x = max(bounds.left(), min(point.x(), bounds.right() - self.width() + 1))
+        y = max(bounds.top(), min(point.y(), bounds.bottom() - self.height() + 1))
+        self.move(x, y)
+        if set_anchor:
+            self._bottom_anchor = y + self.height()
+
+    def _set_height(self, height):
+        bottom = self._bottom_anchor if self._bottom_anchor is not None else self.y() + self.height()
+        self.setFixedHeight(height)
+        if self.isVisible() and not self._dragging:
+            self._bottom_anchor = bottom
+            self.place(QPoint(self.x(), bottom - height), self.screen(), set_anchor=False)
+        self.preview.setVisible(self._show_preview and height >= 87)
+        self.update()
+
+    def _resize_for_state(self):
+        target = 94 if self._show_preview else 54
+        self._height_motion.stop()
+        if not self.isVisible() or not system_animations_enabled() or self.height() == target:
+            self._set_height(target)
+        elif not self._dragging:
+            self._height_motion.setStartValue(self.height())
+            self._height_motion.setEndValue(target)
+            self._height_motion.start()
 
     def set_status(self, title, detail):
         colors = surface_colors()
@@ -83,27 +168,45 @@ class DictationIndicator(QWidget):
         self.title.setText(title)
         self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, 198))
         self.detail.setToolTip(detail)
+        was_listening = self.listening
         self.listening = title == "Listening"
+        self._done = title in ("Text sent", "Copied to clipboard")
         self._ready = title == "Ready to dictate"
-        self.setCursor(Qt.CursorShape.PointingHandCursor if self._ready else Qt.CursorShape.ArrowCursor)
+        if not self._dragging:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.action.setVisible(self._ready or self.listening)
         self.action.set_glyph("stop" if self.listening else "mic")
         name = "Finish dictation" if self.listening else "Start recording"
         self.action.setAccessibleName(name)
         self.action.setToolTip(name)
-        self.preview.setVisible(self.listening)
-        self.setFixedHeight(80 if self.listening else 54)
-        if self.listening:
+        if self.listening and not was_listening:
             self.preview.setStyleSheet(
-                f"color: {colors['muted']}; background: transparent; padding: 2px 10px 2px 28px; font: 12px 'Segoe UI';")
+                f"color: {colors['text']}; background: transparent; padding: 0 12px 0 29px; font: 12px 'Segoe UI';")
             self.set_preview("")
             self.levels = [0.0] * 5
+        self._show_preview = self.listening or (title in ("Transcribing", "Cleaning up") and bool(self._preview_text))
+        self._resize_for_state()
         self.update()
 
     def set_preview(self, text):
-        line = " ".join(text.split())
-        self.preview.setText(self.preview.fontMetrics().elidedText(
-            line or "Waiting for speech…", Qt.TextElideMode.ElideLeft, 270))
+        self._preview_text = text
+        metrics = self.preview.fontMetrics()
+        width = self.width() - 44
+        recent = " ".join(text.split())[-400:] or "Waiting for speech…"
+        if metrics.horizontalAdvance(recent) <= width:
+            self.preview.setText(recent)
+            return
+        words = recent.split()
+        last = words.pop()
+        while words and metrics.horizontalAdvance(f"{words[-1]} {last}") <= width:
+            last = f"{words.pop()} {last}"
+        first = metrics.elidedText(" ".join(words), Qt.TextElideMode.ElideLeft, width)
+        last = metrics.elidedText(last, Qt.TextElideMode.ElideLeft, width)
+        self.preview.setText(f"{first}\n{last}" if first else last)
+
+    def set_elapsed(self, seconds):
+        minutes, seconds = divmod(seconds, 60)
+        self.detail.setText(f"{minutes}:{seconds:02d}  ·  Click stop to finish")
 
     def set_level(self, level):
         previous = self.levels
@@ -125,11 +228,21 @@ class DictationIndicator(QWidget):
         shine.setAlpha(75 if is_light_theme() else 23)
         painter.setBrush(shine)
         painter.drawRoundedRect(QRectF(16, 2, self.width() - 32, 1), 0.5, 0.5)
-        painter.setBrush(QColor(("#235945" if is_light_theme() else "#b5e3cc") if self.listening else colors["muted"]))
-        for index, level in enumerate(self.levels if self.listening else (0.07, 0.21, 0.36, 0.21, 0.07)):
-            height = 3 + level * (19 if index in (1, 2, 3) else 14)
-            painter.drawRoundedRect(QRectF(15 + index * 5, 27 - height / 2, 2.5, height), 1.25, 1.25)
-        if self.listening:
+        accent = QColor("#235945" if is_light_theme() else "#b5e3cc")
+        if self._done:
+            painter.setPen(QPen(accent, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            path = QPainterPath()
+            path.moveTo(17, 27)
+            path.lineTo(23, 32)
+            path.lineTo(33, 21)
+            painter.drawPath(path)
+            painter.setPen(Qt.PenStyle.NoPen)
+        else:
+            painter.setBrush(accent if self.listening else QColor(colors["muted"]))
+            for index, level in enumerate(self.levels if self.listening else (0.07, 0.21, 0.36, 0.21, 0.07)):
+                height = 3 + level * (19 if index in (1, 2, 3) else 14)
+                painter.drawRoundedRect(QRectF(15 + index * 5, 27 - height / 2, 2.5, height), 1.25, 1.25)
+        if self.preview.isVisible():
             painter.setBrush(QColor(colors["muted"]))
             for x, y, width, height in ((15, 60, 8, 1), (15, 63, 5, 1), (23, 63, 1, 7), (15, 66, 5, 1)):
                 painter.drawRoundedRect(QRectF(x, y, width, height), 0.5, 0.5)
@@ -142,6 +255,8 @@ class DictationController(QObject):
         super().__init__(notch)
         self._notch = notch
         self._api = None
+        self._live = None
+        self._live_retry_at = 0
         self._indicator = None
         self._mic = None
         self._keys = {}
@@ -152,6 +267,16 @@ class DictationController(QObject):
         self._pending_insert = ""
         self._restore = None
         self._phase = ""
+        self._position_file = data_path("dictation-position.json")
+        self._position = None
+        try:
+            saved = json.loads(self._position_file.read_text(encoding="utf-8"))
+            if (isinstance(saved.get("screen"), str)
+                    and all(type(saved.get(axis)) in (int, float) and 0 <= saved[axis] <= 1 for axis in ("x", "y"))):
+                self._position = saved
+        except (OSError, ValueError, AttributeError):
+            pass
+        QGuiApplication.instance().screenRemoved.connect(self._screen_removed)
         self.last_text = ""
         self.shortcut_status = ""
         self._sample_timer = QTimer(self, interval=40)
@@ -167,6 +292,7 @@ class DictationController(QObject):
         config = config if isinstance(config, dict) else {}
         if config != self._config:
             self.cancel()
+            self._live_retry_at = 0
             self._config = config
             self._keys = read_keys(config) if config.get("enabled") else {}
             if self._api is not None:
@@ -234,8 +360,11 @@ class DictationController(QObject):
         self._preview_speech_seconds = 0.0
         self._preview_text = ""
         self._previewing = False
-        self._status("Listening", "Click stop or press Ctrl+Alt+D")
+        self._meter_peak = 600.0
+        self._elapsed = 0
+        self._status("Listening", "0:00  ·  Click stop to finish")
         self._sample_timer.start()
+        self._start_live()
 
     @property
     def available(self):
@@ -257,7 +386,7 @@ class DictationController(QObject):
                 self._hide()
             else:
                 self._screen = self._notch.screen()
-                self._status("Ready to dictate", "Click to start", auto_hide=18000)
+                self._status("Ready to dictate", "Click to start  ·  Drag to move", auto_hide=18000)
 
     def _read_mic(self):
         if self._mic is None:
@@ -268,9 +397,13 @@ class DictationController(QObject):
             self.cancel()
             self._status("Microphone disconnected", "Reconnect it and try again.", auto_hide=4200)
             return
-        if time.monotonic() - self._started >= 90:
+        elapsed = int(time.monotonic() - self._started)
+        if elapsed != self._elapsed:
+            self._elapsed = elapsed
+            self._indicator.set_elapsed(elapsed)
+        if elapsed >= 90:
             self._stop_recording()
-        else:
+        elif self._live is None:
             self._maybe_preview()
 
     def _add_audio(self, data):
@@ -280,7 +413,10 @@ class DictationController(QObject):
             rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
             if rms >= 80:
                 self._speech_seconds += len(data) / 32000
-            self._indicator.set_level(min(1.0, math.sqrt(rms / 3300)))
+            self._meter_peak = max(600.0, self._meter_peak * 0.99, rms)
+            self._indicator.set_level(math.sqrt(rms / self._meter_peak) if rms >= 80 else 0)
+            if self._live is not None:
+                self._live.feed(data)
 
     def _pipeline(self):
         if self._api is None:
@@ -291,8 +427,9 @@ class DictationController(QObject):
         return self._api
 
     def _maybe_preview(self):
-        interval = 112000 if self._preview_attempts < 3 else 192000
-        if (self._previewing or len(self._pcm) - self._preview_offset < interval
+        interval = 80000 if self._preview_attempts < 2 else 192000
+        if (not self._config.get("streaming", True) or self._previewing
+                or len(self._pcm) - self._preview_offset < interval
                 or self._speech_seconds - self._preview_speech_seconds < 0.3):
             return
         self._previewing = True
@@ -303,24 +440,69 @@ class DictationController(QObject):
         self._pipeline().start(native.wav_data(self._pcm[offset:]), cleanup=False,
                                vocabulary=self._config.get("vocabulary", []), snippets={}, style="natural", preview=True)
 
+    def _start_live(self):
+        if not self._config.get("streaming", True) or time.monotonic() < self._live_retry_at:
+            return
+        if not self._keys.get("gemini"):
+            return
+        key = self._pipeline().live_key()
+        if key:
+            self._live = GeminiLiveDictation(self)
+            self._live.preview.connect(self._indicator.set_preview)
+            self._live.finalized.connect(self._live_result)
+            self._live.failed.connect(self._live_failed)
+            self._live.start(key, self._config.get("vocabulary", []))
+
+    def _close_live(self):
+        if self._live is not None:
+            live, self._live = self._live, None
+            live.cancel()
+            live.deleteLater()
+
+    def _live_result(self, text):
+        self._close_live()
+        if self._phase == "finishing":
+            self._pcm.clear()
+            self._pipeline().finish_transcript(text, **self._output_options())
+
+    def _live_failed(self):
+        self._close_live()
+        self._live_retry_at = time.monotonic() + 60
+        if self._phase == "finishing":
+            self._transcribe_recording()
+
     def _stop_recording(self):
         self._sample_timer.stop()
         mic, self._mic = self._mic, None
+        # A socket failure during the last read must not start a second finalization.
         self._previewing = False
         if self._api is not None:
             self._api.cancel()
         self._add_audio(mic.close(keep_audio=True))
         pcm, self._pcm = self._pcm, bytearray()
         if self._speech_seconds < 0.12:
+            self._close_live()
             self._phase = ""
             self._status("No speech heard", "Ctrl+Alt+D to try again", auto_hide=2100)
             return
+        self._pcm = pcm
+        if self._live is not None:
+            self._phase = "finishing"
+            self._status("Transcribing", "Finishing the live transcript")
+            self._live.finish()
+        else:
+            self._transcribe_recording()
+
+    def _output_options(self):
         style = self._config.get("style", "auto")
         if style == "auto":
             style = native.target_style(self._target[0]) if self._target else "natural"
-        self._pipeline().start(native.wav_data(pcm), cleanup=self._config.get("cleanup", True),
-                               vocabulary=self._config.get("vocabulary", []), snippets=self._config.get("snippets", {}),
-                               style=style)
+        return dict(cleanup=self._config.get("cleanup", True), vocabulary=self._config.get("vocabulary", []),
+                    snippets=self._config.get("snippets", {}), style=style)
+
+    def _transcribe_recording(self):
+        pcm, self._pcm = self._pcm, bytearray()
+        self._pipeline().start(native.wav_data(pcm), **self._output_options())
 
     def _processing(self, phase):
         if self._previewing:
@@ -404,19 +586,60 @@ class DictationController(QObject):
             self._indicator = DictationIndicator()
             self._indicator.clicked.connect(self.toggle)
             self._indicator.dismissed.connect(self.cancel)
+            self._indicator.drag_started.connect(self._hide_timer.stop)
+            self._indicator.moved.connect(self._remember_position)
+            self._indicator.reset_position.connect(self._reset_position)
         was_visible = self._indicator.isVisible()
         self._indicator.set_status(title, detail)
-        screen = getattr(self, "_screen", None)
-        if screen not in QGuiApplication.screens():
-            screen = self._notch.screen()
-        bounds = screen.availableGeometry()
-        self._indicator.move(bounds.center().x() - self._indicator.width() // 2,
-                             bounds.bottom() - self._indicator.height() - 22)
         if not was_visible:
+            self._place_indicator()
             self._indicator.show()
             self.panel_visible.emit(True)
         if auto_hide:
             self._hide_timer.start(auto_hide)
+
+    def _place_indicator(self):
+        screens = QGuiApplication.screens()
+        position = self._position
+        saved_screen = next((screen for screen in screens if position and screen.name() == position["screen"]), None)
+        screen = saved_screen or getattr(self, "_screen", None)
+        if screen not in screens:
+            screen = self._notch.screen()
+        bounds = screen.availableGeometry()
+        if saved_screen is not None:
+            x = bounds.left() + round(position["x"] * bounds.width())
+            y = bounds.top() + round(position["y"] * bounds.height())
+        else:
+            x = bounds.center().x()
+            y = bounds.bottom() - 22
+        self._indicator.place(QPoint(x - self._indicator.width() // 2, y - self._indicator.height()), screen)
+
+    def _screen_removed(self, _screen):
+        if self._indicator is not None and self._indicator.isVisible():
+            QTimer.singleShot(0, self, self._place_indicator)
+
+    def _remember_position(self):
+        pill = self._indicator
+        center = pill.geometry().center()
+        screen = QGuiApplication.screenAt(center) or pill.screen()
+        bounds = screen.availableGeometry()
+        self._position = {"screen": screen.name(),
+                          "x": (pill.x() + pill.width() // 2 - bounds.left()) / bounds.width(),
+                          "y": (pill.y() + pill.height() - bounds.top()) / bounds.height()}
+        try:
+            write_json(self._position_file, self._position)
+        except OSError:
+            pass
+        if not self._phase:
+            self._hide_timer.start(10000)
+
+    def _reset_position(self):
+        self._position = None
+        try:
+            write_json(self._position_file, {})
+        except OSError:
+            pass
+        self._place_indicator()
 
     def _hide(self):
         if self._indicator is not None and self._indicator.isVisible():
@@ -430,6 +653,7 @@ class DictationController(QObject):
         self._paste_timer.stop()
         self._pending_insert = ""
         self._previewing = False
+        self._close_live()
         if self._mic is not None:
             self._mic.close()
             self._mic = None

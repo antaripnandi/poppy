@@ -7,6 +7,7 @@ packaging==26.3
 pefile==2024.8.26
 pywin32-ctypes==0.2.3
 PySide6-Essentials==6.12.0
+PySide6-Addons==6.12.0
 PySide6-Pdf==6.12.0.140
 shiboken6==6.12.0
 winsdk==1.0.0b10

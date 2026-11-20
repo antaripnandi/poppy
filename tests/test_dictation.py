@@ -1,11 +1,14 @@
+import base64
 import json
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QPoint, Qt, Signal
 from PySide6.QtNetwork import QNetworkRequest
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QWidget
 
 from poppy.core import dictation_api
+from poppy.core.dictation_live import GeminiLiveDictation
 from poppy.ui.dictation import DictationController, native
 from poppy.core.window import DynamicNotchWindow
 from poppy.ui.settings_window import SettingsWindow
@@ -147,6 +150,7 @@ def test_recording_lifecycle_and_cancel_without_audio_upload(audit_app, monkeypa
 
     parent = QWidget()
     manager = DictationController(parent)
+    monkeypatch.setattr(manager, "_start_live", lambda: None)
     copies = []
     monkeypatch.setattr(native, "Microphone", Mic)
     monkeypatch.setattr(native, "focused_target", lambda: None)
@@ -227,6 +231,7 @@ def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_a
     copies = []
     monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text))
     controller = window.dictation
+    monkeypatch.setattr(controller, "_start_live", lambda: None)
     window.btn_hdr_dictation.click()
     assert controller._indicator.isVisible() and window.btn_hdr_dictation.isChecked()
     assert controller._mic is None
@@ -246,3 +251,137 @@ def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_a
     assert copies == ["The full recording."]
     controller.cancel()
     assert not window.btn_hdr_dictation.isChecked()
+
+
+def test_dragged_pill_keeps_its_anchor_through_resize_and_reopen(audit_app, monkeypatch):
+    monkeypatch.setattr("poppy.ui.dictation.system_animations_enabled", lambda: False)
+    parent = QWidget()
+    manager = DictationController(parent)
+    manager._status("Ready to dictate", "Click to start")
+    pill = manager._indicator
+    old = pill.pos()
+    clicks = []
+    pill.clicked.connect(lambda: clicks.append(True))
+    start = QPoint(110, 23)
+    QTest.mousePress(pill, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(pill, start + QPoint(52, -103))
+    QTest.mouseRelease(pill, Qt.MouseButton.LeftButton, pos=start)
+    assert pill.pos() != old and not clicks
+    anchor = (pill.x(), pill.y() + pill.height())
+    manager._status("Listening", "Recording")
+    assert (pill.x(), pill.y() + pill.height()) == anchor
+    manager._status("Copied to clipboard", "Ctrl+V to paste")
+    assert (pill.x(), pill.y() + pill.height()) == anchor
+    manager.close()
+    reopened = DictationController(parent)
+    reopened._status("Ready to dictate", "Click to start")
+    pill = reopened._indicator
+    assert (pill.x(), pill.y() + pill.height()) == anchor
+    reopened._reset_position()
+    assert pill.pos() == old
+    bounds = pill.screen().availableGeometry()
+    near_top = QPoint(bounds.left() + 10, bounds.top() + 2)
+    pill.place(near_top, pill.screen())
+    reopened._status("Listening", "Recording")
+    assert pill.y() == bounds.top()
+    reopened._status("Text sent", "Complete")
+    assert pill.pos() == near_top
+    reopened.close()
+
+
+def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch):
+    class Socket(QObject):
+        connected = Signal()
+        textMessageReceived = Signal(str)
+        binaryMessageReceived = Signal(bytes)
+        disconnected = Signal()
+        errorOccurred = Signal()
+
+        def setMaxAllowedIncomingMessageSize(self, size):
+            pass
+
+        def abort(self):
+            self.disconnected.emit()
+
+    monkeypatch.setattr("poppy.core.dictation_live.QWebSocket", Socket)
+    live = GeminiLiveDictation()
+    packets, preview, completed = [], [], []
+    monkeypatch.setattr(live, "_send", lambda packet: packets.append(packet) or True)
+    live.preview.connect(preview.append)
+    live.finalized.connect(completed.append)
+    live._active = True
+    live.feed(b"\x01\x02" * 1800)
+    assert not packets
+    live._message('{"setupComplete":{}}')
+    assert packets[0] == {"realtimeInput": {"activityStart": {}}}
+    assert len(packets) == 2 and len(live._buffer) == 400
+    live._message('{"serverContent":{"inputTranscription":{"text":"First phrase."}}}')
+    live._message('{"serverContent":{"interimInputTranscription":{"text":"Sec"}}}')
+    assert preview[-1] == "First phrase. Sec" and not completed
+    live.finish()
+    assert "audio" in packets[-2]["realtimeInput"]
+    assert packets[-1] == {"realtimeInput": {"activityEnd": {}}}
+    live._message('{"serverContent":{"inputTranscription":{"text":"Second phrase."}}}')
+    live._message('{"serverContent":{"inputTranscription":{"text":"Late reply."}}}')
+    assert completed == ["First phrase. Second phrase."]
+
+
+def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, monkeypatch):
+    class Mic:
+        def read(self):
+            return b"\x00\x10" * 3200
+
+        def close(self, *, keep_audio=False):
+            return b"\x00\x10" * 800 if keep_audio else b""
+
+    class Live(QObject):
+        preview = Signal(str)
+        finalized = Signal(str)
+        failed = Signal()
+
+        def start(self, key, vocabulary):
+            self.audio = bytearray()
+
+        def feed(self, pcm):
+            self.audio.extend(pcm)
+
+        def finish(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr("poppy.ui.dictation.GeminiLiveDictation", Live)
+    monkeypatch.setattr(native, "Microphone", Mic)
+    monkeypatch.setattr(native, "focused_target", lambda: None)
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    copies = []
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kwargs: copies.append(text))
+    parent = QWidget()
+    manager = DictationController(parent)
+    manager.configure({"enabled": True, "protected_keys": dictation_api.protect_keys({"gemini": ["test"]})})
+    replies = mock_network(manager._pipeline(), monkeypatch)
+    manager.toggle()
+    live = manager._live
+    manager._read_mic()
+    live.preview.emit("Preview fragment")
+    assert "Preview fragment" in manager._indicator.preview.text() and not copies
+    manager.toggle()
+    assert len(live.audio) == 8000 and not replies
+    live.finalized.emit("Final recognized words.")
+    assert len(replies) == 1 and b"Final recognized words." in replies[-1].body
+    assert b"inlineData" not in replies[-1].body
+    replies[-1].complete(200, gemini_text("Final words."))
+    assert copies == ["Final words."]
+
+    manager.toggle()
+    live = manager._live
+    manager._read_mic()
+    manager.toggle()
+    live.failed.emit()
+    payload = json.loads(replies[-1].body)
+    audio = base64.b64decode(payload["contents"][0]["parts"][0]["inlineData"]["data"])
+    assert audio[44:] == live.audio
+    assert copies == ["Final words."]
+    manager.cancel()
+    manager.close()

@@ -279,6 +279,26 @@ class DictationApi(QObject):
         self.phase_changed.emit("Transcribing")
         self._next()
 
+    def finish_transcript(self, text, *, cleanup, vocabulary, snippets, style):
+        """Apply the same output rules to audio already transcribed by a stream."""
+        self.cancel()
+        self._snippets = snippets
+        self._preview = False
+        self._vocabulary = vocabulary
+        self._prompt = _editor_prompt(style, vocabulary, snippets) if cleanup else ""
+        if cleanup:
+            self._deadline.start(14000)
+            self._start_cleanup(text)
+        else:
+            self._finish(text, "")
+
+    def live_key(self):
+        now = time.monotonic()
+        if self._cooldown.get(("gemini",), 0) > now:
+            return None
+        return next((key for i, key in enumerate(self._keys.get("gemini", ()))
+                     if self._cooldown.get(("gemini", i), 0) <= now), None)
+
     def cancel(self):
         self._deadline.stop()
         self._request_timeout.stop()
@@ -360,15 +380,18 @@ class DictationApi(QObject):
             self._cooldown[scope] = time.monotonic() + delay
             self._next()
         elif self._stage == "audio" and result and self._cleanup:
-            self._audio = b""
-            self._text = result
-            self._stage = "cleanup"
-            self._attempts = 0
-            self._queue = list(_CLEANUP)
-            self.phase_changed.emit("Cleaning up")
-            self._next()
+            self._start_cleanup(result)
         else:
             self._finish(result, "" if result else "No speech heard")
+
+    def _start_cleanup(self, text):
+        self._audio = b""
+        self._text = text
+        self._stage = "cleanup"
+        self._attempts = 0
+        self._queue = list(_CLEANUP)
+        self.phase_changed.emit("Cleaning up")
+        self._next()
 
     def _finish(self, text, message):
         text = _expand_snippets(text, self._snippets)

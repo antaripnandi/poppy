@@ -3,6 +3,7 @@
     "enabled": false,
     "cleanup": true,
     "auto_paste": true,
+    "streaming": true,
     "style": "auto",
     "vocabulary": [],
     "snippets": {}

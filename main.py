@@ -105,12 +105,14 @@ def _check_install():
     """Check the bundled runtime without opening the user's profile."""
     from PySide6.QtPdf import QPdfDocument
     from PySide6.QtNetwork import QSslSocket
+    from PySide6.QtWebSockets import QWebSocket
     from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
     from winsdk.windows.storage.streams import DataReader
     from poppy.core.weather_cities import local_city_search
     from poppy.ui.pill_fonts import DEFAULT_PILL_FONT, PILL_FONT_LICENSE, pill_font_family
 
     QPdfDocument()
+    QWebSocket()
     config = json.loads(resource_path("config.json").read_text(encoding="utf-8"))
     if (not isinstance(config, dict) or not QSslSocket.supportsSsl()
             or QIcon(str(resource_path("assets/branding/poppy-avatar.png"))).isNull()):
