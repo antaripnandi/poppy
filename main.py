@@ -195,6 +195,9 @@ def main():
     tray_menu.addAction("Voice typing settings", lambda: notch.open_settings("Voice typing"))
     copy_dictation = tray_menu.addAction("Copy last dictation", notch.dictation.copy_last)
     copy_dictation.setVisible(False)
+    retry_dictation = tray_menu.addAction("Retry last recording", notch.dictation.retry)
+    retry_dictation.setVisible(False)
+    tray_menu.aboutToShow.connect(lambda: retry_dictation.setVisible(notch.dictation.can_retry))
     tray_menu.aboutToShow.connect(lambda: copy_dictation.setVisible(bool(notch.dictation.last_text)))
 
     checker = UpdateChecker(app)

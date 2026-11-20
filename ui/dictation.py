@@ -25,6 +25,7 @@ _LOG = logging.getLogger(__name__)
 class DictationIndicator(QWidget):
     clicked = Signal()
     copy_requested = Signal()
+    retry_requested = Signal()
     dismissed = Signal()
     drag_started = Signal()
     moved = Signal()
@@ -56,15 +57,19 @@ class DictationIndicator(QWidget):
         self.action = DrawerToolButton("mic", "Start recording")
         self.action.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.action.clicked.connect(self._activate)
-        close = DrawerToolButton("close", "Dismiss voice typing")
-        close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        close.clicked.connect(self.dismissed)
+        self.retry = DrawerToolButton("retry", "Retry transcription")
+        self.retry.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.retry.clicked.connect(self.retry_requested)
+        self.dismiss_button = DrawerToolButton("close", "Dismiss voice typing")
+        self.dismiss_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.dismiss_button.clicked.connect(self.dismissed)
         row = QHBoxLayout(header)
         row.setContentsMargins(51, 0, 0, 0)
         row.setSpacing(3)
         row.addLayout(labels, 1)
         row.addWidget(self.action)
-        row.addWidget(close)
+        row.addWidget(self.retry)
+        row.addWidget(self.dismiss_button)
         self.preview.hide()
         self.levels = [0.0] * 5
         self._press = None
@@ -193,7 +198,7 @@ class DictationIndicator(QWidget):
             self._height_motion.setEndValue(target)
             self._height_motion.start()
 
-    def set_status(self, title, detail, *, offer_copy=False):
+    def set_status(self, title, detail, *, offer_copy=False, offer_retry=False):
         colors = surface_colors()
         self.title.setStyleSheet(f"color: {colors['text']}; background: transparent; font: 600 13px 'Segoe UI';")
         self.detail.setStyleSheet(f"color: {colors['muted']}; background: transparent; font: 11px 'Segoe UI';")
@@ -209,6 +214,10 @@ class DictationIndicator(QWidget):
         if not self._dragging:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.action.setVisible(self._ready or self.listening or offer_copy)
+        self.retry.setVisible(offer_retry)
+        dismiss = "Discard recording" if offer_retry else "Dismiss voice typing"
+        self.dismiss_button.setToolTip(dismiss)
+        self.dismiss_button.setAccessibleName(dismiss)
         glyph, name = "mic", "Start recording"
         if self.listening:
             glyph, name = "stop", "Finish dictation"
@@ -340,6 +349,14 @@ class DictationController(QObject):
         self._holding = False
         self._pending_insert = ""
         self._live_draft = ""
+        self._retry_audio = b""
+        self._retry_options = {}
+        self._retry_review = False
+        self._confirmed_text = ""
+        self._covered = 0
+        self._cut = None
+        self._started = None
+        self._first_caption = False
         self._previewing = False
         self._phase = ""
         self._stopped_at = None
@@ -436,9 +453,12 @@ class DictationController(QObject):
         self._start_capture()
 
     def _start_capture(self, *, hold=False, editing=False):
+        if self._retry_review and self._phase == "processing":
+            self.cancel()
         if self._phase or not self.available:
             return
         self.last_text = ""
+        self._forget_recording()
         self._live_draft = ""
         focus = native.focused_target()
         self._target = focus[0] if focus else None
@@ -475,7 +495,12 @@ class DictationController(QObject):
         self._preview_speech_seconds = 0.0
         self._preview_text = ""
         self._previewing = False
-        self._retried_live_key = False
+        self._reconnects = 0
+        self._quiet_bytes = self._unanswered_voice = 0
+        self._confirmed_text = ""
+        self._covered = 0
+        self._cut = None
+        self._first_caption = False
         self._meter_peak = 600.0
         self._elapsed = 0
         self._status("Listening", "0:00  ·  Click stop to finish")
@@ -528,6 +553,8 @@ class DictationController(QObject):
     def open_panel(self):
         if not self.available:
             self._notch.open_settings("Voice typing")
+        elif self.can_retry:
+            self._show_recovery()
         elif not self._phase:
             if self._indicator is not None and self._indicator.isVisible() and self._indicator._ready:
                 self._hide()
@@ -541,8 +568,11 @@ class DictationController(QObject):
         try:
             self._add_audio(self._mic.read())
         except OSError:
-            self.cancel()
-            self._status("Microphone disconnected", "Reconnect it and try again.", auto_hide=4200)
+            if self._speech_seconds >= 0.12:
+                self._stop_recording()
+            else:
+                self.cancel()
+                self._status("Microphone disconnected", "Reconnect it and try again.", auto_hide=4200)
             return
         elapsed = int(time.monotonic() - self._started)
         if elapsed != self._elapsed:
@@ -562,8 +592,20 @@ class DictationController(QObject):
                 self._speech_seconds += len(data) / 32000
             self._meter_peak = max(600.0, self._meter_peak * 0.99, rms)
             self._indicator.set_level(math.sqrt(rms / self._meter_peak) if rms >= 80 else 0)
-            if self._live is not None:
-                self._live.feed(data)
+            live = self._live
+            if live is not None and self._cut is None:
+                self._quiet_bytes = self._quiet_bytes + len(data) if rms < 80 else 0
+                if rms >= 80:
+                    self._unanswered_voice += len(data)
+                live.feed(data, voiced=rms >= 80)
+                if live is not self._live or self._mic is None:
+                    return
+                if self._unanswered_voice >= 6 * 32000:
+                    self._live_failed(0)
+                elif (len(self._pcm) - self._covered >= 18 * 32000 and self._quiet_bytes >= 32000
+                      and self._live_draft):
+                    self._cut = len(self._pcm)
+                    live.checkpoint()
 
     def _pipeline(self):
         if self._api is None:
@@ -595,12 +637,13 @@ class DictationController(QObject):
         key = self._pipeline().live_key()
         if key:
             self._live_credential = key
-            self._live = GeminiLiveDictation(self)
-            self._live.preview.connect(self._remember_live_draft)
-            self._live.finalized.connect(self._live_result)
-            self._live.failed.connect(self._live_failed)
-            self._live.start(key, self._config.get("vocabulary", []),
-                             language_codes=SPEECH_LANGUAGES[self._language_mode][1])
+            live = self._live = GeminiLiveDictation(self)
+            live.preview.connect(self._remember_live_draft)
+            live.checkpointed.connect(self._checkpointed)
+            live.finalized.connect(self._live_result)
+            live.failed.connect(self._live_failed)
+            live.start(key, self._config.get("vocabulary", []),
+                       language_codes=SPEECH_LANGUAGES[self._language_mode][1])
 
     def _close_live(self):
         if self._live is not None:
@@ -610,10 +653,39 @@ class DictationController(QObject):
             live.deleteLater()
 
     def _remember_live_draft(self, text):
+        if self.sender() is not None and self.sender() is not self._live:
+            return
+        if not text.strip():
+            return
+        self._unanswered_voice = 0
+        if not self._first_caption and self._started is not None:
+            self._first_caption = True
+            _LOG.debug("Dictation first caption ms=%d", int((time.monotonic() - self._started) * 1000))
         self._live_draft = text[:12000]
-        self._indicator.set_preview(text)
+        self._indicator.set_preview((self._confirmed_text + " " + text).strip())
+
+    def _checkpointed(self, text):
+        if self.sender() is not self._live or self._cut is None:
+            return
+        self._close_live()
+        self._covered, self._cut = self._cut, None
+        self._confirmed_text = (self._confirmed_text + " " + text).strip()
+        self._live_draft = ""
+        self._unanswered_voice = self._quiet_bytes = 0
+        tail = self._pcm[self._covered:]
+        if self._phase == "finishing" and not any(tail):
+            self._finish_live_text(self._confirmed_text)
+            return
+        if self._phase == "finishing":
+            self._transcribe_recording()
+            return
+        self._start_live()
+        if self._live is not None:
+            self._live.replay(tail)
 
     def _live_result(self, text, preview_reference):
+        if self.sender() is not None and self.sender() is not self._live:
+            return
         self._close_live()
         if self._phase == "finishing":
             _LOG.debug("Dictation Live finished recovery=%s stop_ms=%d", bool(preview_reference or not text.strip()),
@@ -621,30 +693,42 @@ class DictationController(QObject):
             if preview_reference or not text.strip():
                 self._transcribe_recording(live_text=text, preview_reference=preview_reference)
             else:
-                short_take = len(self._pcm) <= 640000  # 20 seconds of PCM.
-                self._pcm.clear()
-                self._indicator.set_preview(text)
-                self._pipeline().finish_transcript(text, short_take=short_take, **self._output_options())
+                self._finish_live_text((self._confirmed_text + " " + text).strip())
+
+    def _finish_live_text(self, text):
+        self._close_live()
+        short_take = len(self._pcm) <= 640000
+        self._pcm.clear()
+        self._indicator.set_preview(text)
+        self._pipeline().finish_transcript(text, short_take=short_take, **self._output_options())
 
     def _live_failed(self, status):
-        _LOG.debug("Dictation Live failed status=%s", status)
+        if isinstance(self.sender(), GeminiLiveDictation) and self.sender() is not self._live:
+            return
+        connected = self._live is not None and self._live.ready
+        _LOG.debug("Dictation Live failed status=%s ready=%s reconnects=%d", status, connected, self._reconnects)
         key = self._live_credential
         self._close_live()
+        self._cut = None
         if status in (401, 403) and key:
             self._pipeline().reject_live_key(key, invalid=status == 401)
-            if self._mic is not None and not self._retried_live_key and len(self._pcm) <= 64000:
-                self._retried_live_key = True
-                self._start_live()
-                if self._live is not None:
-                    self._live.feed(self._pcm)
-                    return
-        else:
-            self._live_retry_at = time.monotonic() + 60
+        if status == 429:
+            self._pipeline().cool_down_gemini()
+        retryable = status in (401, 403) or (status == 0 and connected)
+        if self._mic is not None and retryable and self._reconnects < 2:
+            self._reconnects += 1
+            self._unanswered_voice = self._quiet_bytes = 0
+            self._start_live()
+            if self._live is not None:
+                self._live.replay(self._pcm[self._covered:])
+                return
+        self._live_retry_at = time.monotonic() + 60
         if self._phase == "finishing":
             self._transcribe_recording()
 
     def _stop_recording(self):
         self._stopped_at = time.monotonic()
+        _LOG.debug("Dictation capture ms=%d", int((self._stopped_at - self._started) * 1000))
         self._sample_timer.stop()
         self._holding = False
         mic, self._mic = self._mic, None
@@ -652,7 +736,10 @@ class DictationController(QObject):
         self._previewing = False
         if self._api is not None:
             self._api.cancel()
-        self._add_audio(mic.close(keep_audio=True))
+        try:
+            self._add_audio(mic.close(keep_audio=True))
+        except OSError:
+            _LOG.debug("Dictation microphone closed before its final buffer was available")
         pcm, self._pcm = self._pcm, bytearray()
         if self._speech_seconds < 0.12:
             self._close_live()
@@ -662,8 +749,16 @@ class DictationController(QObject):
             self._status("No speech heard", "No new text copied", auto_hide=4800)
             return
         self._pcm = pcm
+        self._retry_audio = bytes(pcm)
+        self._retry_options = self._output_options()
+        self._phase = "finishing"
+        if self._live is not None and (not self._live.ready or (self._reconnects and not self._live.has_transcript
+                                                                and self._cut is None)):
+            self._close_live()
+        if self._covered and self._cut is None and not any(pcm[self._covered:]):
+            self._finish_live_text(self._confirmed_text)
+            return
         if self._live is not None:
-            self._phase = "finishing"
             self._status("Transcribing", "Finishing the live transcript")
             self._live.finish()
         else:
@@ -682,7 +777,8 @@ class DictationController(QObject):
 
     def _transcribe_recording(self, *, live_text="", preview_reference=""):
         pcm, self._pcm = self._pcm, bytearray()
-        self._pipeline().start(native.wav_data(pcm), **self._output_options(), live_text=live_text,
+        self._pipeline().start(native.wav_data(pcm[self._covered:]), **self._output_options(), live_text=live_text,
+                               confirmed_prefix=self._confirmed_text,
                                preview_reference=preview_reference,
                                recovery_draft=self._live_draft if not live_text and not self._editing else "")
 
@@ -701,19 +797,28 @@ class DictationController(QObject):
             return
         self._phase = ""
         self._live_draft = ""
+        self._confirmed_text = ""
+        self._covered = 0
+        self._cut = None
         if not text:
             self.last_text = ""
             self._text_scope = None
             if self._indicator is not None:
                 self._indicator.set_preview("")
-            self._status(message.partition(".")[0] or "Dictation failed", "No new text copied", auto_hide=6800)
+            self._failure_title = message.partition(".")[0] or "Dictation failed"
+            self._show_recovery()
             return
         self.last_text = text
-        if message == REVIEW_TRANSCRIPT:
+        if message == REVIEW_TRANSCRIPT or self._retry_review:
             self._text_scope = None
+            partial = message == REVIEW_TRANSCRIPT
+            if not partial:
+                self._forget_recording()
             self._indicator.set_preview(text)
-            self._status(REVIEW_TRANSCRIPT, "May be incomplete · Copy to review", offer_copy=True)
+            self._status(REVIEW_TRANSCRIPT, "May be incomplete · Copy to review" if partial else "Recovered · Click to copy",
+                         offer_copy=True, offer_retry=self.can_retry)
             return
+        self._forget_recording()
         self._pending_insert = text
         self._insertion_deadline = time.monotonic() + 0.8
         self._cleanup_message = message
@@ -753,6 +858,7 @@ class DictationController(QObject):
                     pasted = False
         self._text_scope = None
         if pasted:
+            self._log_delivery("editor" if editor is self._local_target and editor is not None else "paste submitted")
             self._status("Text sent", "Selection replaced" if editing else self._cleanup_message or "Copy it again from Poppy’s menu",
                          auto_hide=1700)
         elif editing:
@@ -762,6 +868,38 @@ class DictationController(QObject):
 
     def copy_last(self):
         self._copy_result(self.last_text, explicit=True)
+
+    def _log_delivery(self, destination):
+        if self._stopped_at is not None:
+            _LOG.debug("Dictation delivery=%s stop_ms=%d", destination, int((time.monotonic() - self._stopped_at) * 1000))
+
+    @property
+    def can_retry(self):
+        return not self._phase and bool(self._retry_audio)
+
+    def _forget_recording(self):
+        self._retry_audio = b""
+        self._retry_options = {}
+        self._retry_review = False
+
+    def _show_recovery(self):
+        if self.last_text:
+            self._indicator.set_preview(self.last_text)
+            self._status(REVIEW_TRANSCRIPT, "Copy draft or retry recording", offer_copy=True, offer_retry=self.can_retry)
+        else:
+            self._status(self._failure_title, "Retry recording or discard" if self.can_retry else "No new text copied",
+                         auto_hide=0 if self.can_retry else 6800, offer_retry=self.can_retry)
+
+    def retry(self):
+        if not self.can_retry:
+            return
+        self._retry_review = True
+        self._phase = "processing"
+        self._stopped_at = time.monotonic()
+        self._target = self._local_target = self._text_scope = None
+        self._pipeline().start(native.wav_data(self._retry_audio),
+                               **dict(self._retry_options, stopped_at=self._stopped_at),
+                               recovery_draft=self.last_text)
 
     def _copy_result(self, text, *, explicit):
         if not text:
@@ -773,23 +911,27 @@ class DictationController(QObject):
             self._status("Clipboard is busy", "Try copying again", auto_hide=10000, offer_copy=True)
             return
         if copied:
+            self._log_delivery("manual copy" if explicit else "clipboard")
+            if explicit:
+                self._forget_recording()
             detail = "Ctrl+V to paste" if explicit else self._cleanup_message or "Ctrl+V to paste"
             self._status("Copied to clipboard", detail, auto_hide=2100)
         else:
             self._status("Dictation ready", "Copy replaces clipboard contents", auto_hide=10000, offer_copy=True)
 
-    def _status(self, title, detail, *, auto_hide=0, offer_copy=False):
+    def _status(self, title, detail, *, auto_hide=0, offer_copy=False, offer_retry=False):
         self._hide_timer.stop()
         if self._indicator is None:
             self._indicator = DictationIndicator()
             self._indicator.clicked.connect(self.toggle)
             self._indicator.copy_requested.connect(self.copy_last)
+            self._indicator.retry_requested.connect(self.retry)
             self._indicator.dismissed.connect(self.cancel)
             self._indicator.drag_started.connect(self._hide_timer.stop)
             self._indicator.moved.connect(self._remember_position)
             self._indicator.reset_position.connect(self._reset_position)
         was_visible = self._indicator.isVisible()
-        self._indicator.set_status(title, detail, offer_copy=offer_copy)
+        self._indicator.set_status(title, detail, offer_copy=offer_copy, offer_retry=offer_retry)
         if not was_visible:
             self._place_indicator()
             self._indicator.show()
@@ -846,6 +988,12 @@ class DictationController(QObject):
             self.panel_visible.emit(False)
 
     def cancel(self):
+        if self._retry_audio or self._retry_review:
+            self.last_text = ""
+        self._forget_recording()
+        self._confirmed_text = ""
+        self._covered = 0
+        self._cut = None
         self._phase = ""
         self._sample_timer.stop()
         self._hide_timer.stop()

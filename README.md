@@ -6,7 +6,7 @@ The top-edge pill opens a drawer with media controls, a focus timer, a file shel
 
 ## Install
 
-Run `Poppy-Setup-0.1.17-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
+Run `Poppy-Setup-0.1.18-x64.exe` and launch **Poppy** from the Start menu. The installer targets Windows 10 version 1809 or later and Windows 11 on x64. It installs for the current user without administrator rights and includes Python, Qt, and the app's runtime dependencies.
 
 Before replacing a source checkout with the installed app, close Poppy from its tray menu. The installer and source app use the same local profile. Install a newer build over an existing installation to update it. Uninstalling through Windows removes the program and its shortcuts and keeps the profile.
 
@@ -33,9 +33,12 @@ selection again before replacing it. When the selection changes, the pill offers
 up to 200 characters before the caret as reference for the cleanup provider. Poppy only inserts the new dictation.
 With **Live transcript** on and a Gemini key, Poppy streams to Gemini Transcribe Live while you speak and uses
 that session’s final transcript. When live streaming is unavailable, the existing providers can show a preview
-in chunks and transcribe the saved recording at Stop. Optional cleanup runs after recognition.
-If the live transcript appears incomplete, Poppy rechecks the recording. When that fails, **Review transcript**
-lets you copy the current take’s draft. A failed take without a draft shows **No new text copied**.
+in chunks and transcribe captured audio at Stop. During a longer recording, Poppy can save progress at a pause
+when Gemini confirms the closed segment. After a disconnect it replays audio from the last confirmed
+pause, or from the beginning if the provider has yet to confirm one. Optional cleanup runs on the combined text.
+If transcription fails, click **Retry transcription** in the pill or **Retry last recording** in the tray.
+The pill shows recovered text for you to copy. **Discard recording**, starting another take, and quitting Poppy
+release the saved audio. Recovery keeps one recording of up to 90 seconds in memory.
 Choose **Mixed languages** under **Speech languages** if you switch languages in a recording. Poppy reuses
 a completed live transcript and sends text for any formatting. The Hindi, Bengali and English
 and Hindi, Marathi and English options also give Gemini language hints. **Writing system > Roman letters** uses

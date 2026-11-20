@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkRequest
@@ -19,6 +20,7 @@ _MAX_BUFFER = 128000
 class GeminiLiveDictation(QObject):
     preview = Signal(str)
     finalized = Signal(str, str)
+    checkpointed = Signal(str)
     failed = Signal(int)
 
     def __init__(self, parent=None):
@@ -32,10 +34,19 @@ class GeminiLiveDictation(QObject):
         self._socket.errorOccurred.connect(lambda _: self._disconnected())
         self._timeout = QTimer(self, singleShot=True)
         self._timeout.timeout.connect(self._fail)
+        self._drain = QTimer(self, interval=20, singleShot=True)
+        self._drain.timeout.connect(self._flush)
         self._active = False
         self._ready = False
         self._ended = False
         self._turn_closed = False
+        self._checkpointing = False
+        self._replaying = False
+        self._audio_bytes = 0
+        self._sent_bytes = 0
+        self._last_voice = 0
+        self._final_offset = 0
+        self._final_after_end = False
         self._buffer = bytearray()
         self._parts = []
         self._last_preview = ""
@@ -68,32 +79,94 @@ class GeminiLiveDictation(QObject):
                                             "languageCodes": self._language_codes},
             }})
 
-    def feed(self, pcm):
+    def feed(self, pcm, *, voiced=True):
         if not self._active or self._ended:
             return
+        self._audio_bytes += len(pcm)
+        if voiced and pcm:
+            self._last_voice = self._audio_bytes
         self._buffer.extend(pcm)
-        if len(self._buffer) > _MAX_BUFFER:
+        if len(self._buffer) > (91 * 32000 if self._replaying else _MAX_BUFFER):
             self._fail()
         elif self._ready:
             self._flush()
 
+    def replay(self, pcm):
+        """Queue captured audio when a connection or a new turn becomes ready."""
+        self._replaying = True
+        self.feed(pcm, voiced=bool(pcm))
+
+    @property
+    def has_offsets(self):
+        return self._final_offset > 0
+
+    @property
+    def ready(self):
+        return self._ready
+
+    @property
+    def has_transcript(self):
+        return bool(self._parts or self._last_preview)
+
+    def checkpoint(self):
+        self._checkpointing = True
+        self.finish()
+
     def finish(self):
+        if self._active and self._ended and self._checkpointing:
+            if self._timeout.remainingTime() > 3200:
+                self._timeout.start(3200)
+            return
         if not self._active or self._ended:
             return
         self._ended = True
-        self._timeout.start(3200)
+        self._timeout.start(10000 if self._checkpointing else 3200)
         if self._ready:
             self._flush()
 
     def _flush(self):
+        if not self._active or not self._ready:
+            return
+        packets = 0
         while self._buffer and (self._ended or len(self._buffer) >= _CHUNK_BYTES):
-            data = base64.b64encode(self._buffer[:_CHUNK_BYTES]).decode("ascii")
+            if self._replaying and (packets >= 8 or self._socket.bytesToWrite() > _MAX_BUFFER):
+                self._drain.start()
+                return
+            chunk = self._buffer[:_CHUNK_BYTES]
+            data = base64.b64encode(chunk).decode("ascii")
             del self._buffer[:_CHUNK_BYTES]
             if not self._send({"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": data}}}):
                 return
+            self._sent_bytes += len(chunk)
+            packets += 1
+        self._replaying = False
         if self._ended and not self._turn_closed:
             self._turn_closed = True
-            self._send({"realtimeInput": {"activityEnd": {}}})
+            if self._send({"realtimeInput": {"activityEnd": {}}}) and self._covers_voice():
+                self._complete()
+
+    def _covers_voice(self):
+        return self._last_voice > 0 and self._final_offset >= self._last_voice
+
+    def _complete(self, *, acknowledged=False):
+        result = " ".join(self._parts).strip()
+        if not result or (self.has_offsets and not self._covers_voice()):
+            self._fail()
+            return
+        reference = self._last_preview if transcript_needs_recovery(result, self._last_preview) else ""
+        if self._checkpointing:
+            # A timestamp-less stream needs both a final delivered after activityEnd
+            # and the provider's completion marker for this isolated audio turn.
+            if not self._covers_voice() and not (self._final_after_end and acknowledged):
+                return
+            if reference:
+                self._fail()
+                return
+            self.cancel()
+            self.checkpointed.emit(result)
+        else:
+            self.cancel()
+            self.finalized.emit(result, reference)
 
     def _message(self, raw):
         if not self._active:
@@ -119,7 +192,7 @@ class GeminiLiveDictation(QObject):
                 name = error.get("status")
                 codes = {"UNAUTHENTICATED": 401, "PERMISSION_DENIED": 403, "RESOURCE_EXHAUSTED": 429}
                 status = codes.get(name, error.get("code")) if isinstance(name, str) else error.get("code")
-                self._fail(status if status in (401, 403, 429) else 0)
+                self._fail(status if status in (400, 401, 403, 404, 429) else 0)
             elif "error" in message or "goAway" in message:
                 self._fail()
             return
@@ -131,19 +204,34 @@ class GeminiLiveDictation(QObject):
         if isinstance(final, dict):
             text = final.get("text")
             if isinstance(text, str) and text.strip():
-                self._parts.append(text.replace("\x00", "").strip())
+                text = text.replace("\x00", "").strip()
+                offset = final.get("endOffset")
+                if isinstance(offset, str) and re.fullmatch(r"[0-9]{1,4}(?:\.[0-9]{1,9})?s", offset):
+                    position = round(float(offset[:-1]) * 16000) * 2
+                    if position < self._final_offset or position > self._sent_bytes:
+                        self._fail()
+                        return
+                    if position > 0 and position == self._final_offset and self._parts:
+                        if text != self._parts[-1]:
+                            self._fail()
+                            return
+                        text = ""
+                    self._final_offset = position
+                if text:
+                    self._parts.append(text)
+                    if self._turn_closed:
+                        self._final_after_end = True
         live = interim.get("text", "") if isinstance(interim, dict) else ""
         if isinstance(live, str) and live.strip():
             self._last_preview = " ".join([*self._parts, live]).strip()
             self.preview.emit(self._last_preview)
-        if self._turn_closed and (content.get("generationComplete") or content.get("turnComplete")):
-            result = " ".join(self._parts).strip()
-            if result:
-                reference = self._last_preview if transcript_needs_recovery(result, self._last_preview) else ""
-                self.cancel()
-                self.finalized.emit(result, reference)
-            elif content.get("turnComplete"):
-                self._fail()
+        acknowledged = bool(content.get("turnComplete") or content.get("generationComplete"))
+        complete = self._covers_voice() or acknowledged
+        if self._turn_closed and complete:
+            if self.has_offsets and not self._covers_voice():
+                return  # Input transcription may arrive after a turn marker.
+            if self._parts or content.get("turnComplete"):
+                self._complete(acknowledged=acknowledged)
             return
         if isinstance(final, dict) and not live:
             confirmed = " ".join(self._parts).strip()
@@ -156,6 +244,7 @@ class GeminiLiveDictation(QObject):
         if self._active:
             self._active = False
             self._timeout.stop()
+            self._drain.stop()
             self._buffer.clear()
             self._parts.clear()
             self._last_preview = ""

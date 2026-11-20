@@ -390,6 +390,7 @@ class DictationApi(QObject):
         self._request_timeout.timeout.connect(self._abort_reply)
         self._keys = {}
         self._cooldown = {}
+        self._confirmed_prefix = ""
         self._audio = b""
         self._text = ""
         self._live_text = ""
@@ -407,9 +408,10 @@ class DictationApi(QObject):
 
     def start(self, audio, *, cleanup, vocabulary, snippets, style, preview=False,
               language_mode="auto", romanize=False, live_text="", preview_reference="", selection="", context="",
-              recovery_draft="", stopped_at=None):
+              recovery_draft="", confirmed_prefix="", stopped_at=None):
         self.cancel()
         self._audio = audio
+        self._confirmed_prefix = confirmed_prefix
         self._selection = selection
         self._context = context if cleanup and not selection else ""
         self._cleanup = cleanup or bool(selection)
@@ -426,6 +428,9 @@ class DictationApi(QObject):
         self._preview = preview
         short_take = stopped_at is not None and len(audio) <= 640044  # WAV header + 20 s.
         self._audio_timeout = 4500 if short_take or preview_reference else (8000 if self._recovery_draft else 13000)
+        if short_take and not preview and not (self._keys.get("groq") and self._keys.get("gemini")):
+            # A second upload to the same service would share the same short deadline.
+            self._audio_timeout = 8000
         self._cleanup_timeout = 2500 if short_take and not selection else 7000
         self._cleanup_attempts = 1 if short_take and not selection else 5
         self._attempt_limit = 1 if preview or preview_reference else (2 if stopped_at is not None else 5)
@@ -494,10 +499,15 @@ class DictationApi(QObject):
                 self._cooldown[scope] = time.monotonic() + 900
                 break
 
+    def cool_down_gemini(self):
+        scope = ("gemini",)
+        self._cooldown[scope] = max(self._cooldown.get(scope, 0), time.monotonic() + 60)
+
     def cancel(self):
         self._deadline.stop()
         self._request_timeout.stop()
         self._audio = b""
+        self._confirmed_prefix = ""
         self._text = ""
         self._live_text = ""
         self._preview_reference = ""
@@ -625,6 +635,9 @@ class DictationApi(QObject):
             self._finish(result, "" if result else "No speech heard")
 
     def _start_cleanup(self, text):
+        if self._confirmed_prefix:
+            text = self._confirmed_prefix + " " + text
+            self._confirmed_prefix = ""
         self._audio = b""
         self._live_text = ""
         self._preview_reference = ""
@@ -651,6 +664,10 @@ class DictationApi(QObject):
             self._finish(text, "Language check unavailable")
 
     def _finish(self, text, message):
+        if self._confirmed_prefix:
+            if not text:
+                message = REVIEW_TRANSCRIPT
+            text = (self._confirmed_prefix + " " + (text or "")).strip()
         if self._selection and (message or self._stage != "cleanup" or text == "[EDIT_UNAVAILABLE]"):
             text, message = "", "Could not edit the selection"
         if self._romanize and _has_non_latin_letters(text):

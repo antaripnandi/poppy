@@ -438,7 +438,8 @@ def test_dragged_pill_keeps_its_anchor_through_resize_and_reopen(audit_app, monk
     reopened.close()
 
 
-def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch):
+@pytest.fixture
+def offline_socket(monkeypatch):
     class Socket(QObject):
         connected = Signal()
         textMessageReceived = Signal(str)
@@ -449,6 +450,9 @@ def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch):
         def setMaxAllowedIncomingMessageSize(self, size):
             pass
 
+        def bytesToWrite(self):
+            return 0
+
         def abort(self):
             self.disconnected.emit()
 
@@ -456,6 +460,9 @@ def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch):
             return "API key not valid. Please pass a valid API key."
 
     monkeypatch.setattr("poppy.core.dictation_live.QWebSocket", Socket)
+
+
+def test_live_protocol_flushes_tail_and_only_finalizes_after_stop(monkeypatch, offline_socket):
     live = GeminiLiveDictation()
     packets, preview, completed, failures = [], [], [], []
     monkeypatch.setattr(live, "_send", lambda packet: packets.append(packet) or True)
@@ -498,8 +505,11 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
             return b"\x00\x10" * 800 if keep_audio else b""
 
     class Live(QObject):
+        ready = True
+        has_transcript = True
         preview = Signal(str)
         finalized = Signal(str, str)
+        checkpointed = Signal(str)
         failed = Signal(int)
 
         def start(self, key, vocabulary, *, language_codes):
@@ -507,8 +517,13 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
             self.language_codes = language_codes
             self.key = key
 
-        def feed(self, pcm):
+        def feed(self, pcm, *, voiced=True):
             self.audio.extend(pcm)
+
+        replay = feed
+
+        def checkpoint(self):
+            self.cut = len(self.audio)
 
         def finish(self):
             pass
@@ -613,6 +628,204 @@ def test_failed_long_take_offers_only_its_current_draft_for_manual_copy(monkeypa
     manager._indicator.action.click()
     assert copies == ["This new take has English. আমি বাংলায় বলছি।"]
     manager.close()
+
+
+@pytest.fixture
+def recovery_session(monkeypatch, offline_socket):
+    parent = QWidget()
+    editor = QLineEdit(parent)
+    manager = DictationController(parent)
+    manager._keys = {"gemini": ["test"]}
+    manager._config = {"cleanup": False}
+    monkeypatch.setattr(native, "Microphone", lambda: SimpleNamespace(close=lambda **_: b""))
+    monkeypatch.setattr(native, "focused_target", lambda: None)
+    monkeypatch.setattr(native, "modifiers_down", lambda: False)
+    monkeypatch.setattr(manager, "_local_editor", lambda: editor)
+    copies = []
+    monkeypatch.setattr(native, "copy_text", lambda hwnd, text, **kw: copies.append(text) or True)
+    monkeypatch.setattr(GeminiLiveDictation, "_send", lambda self, packet: True)
+
+    def start_socket(live, *args, **kwargs):
+        live._active = True
+        live._message('{"setupComplete":{}}')
+
+    monkeypatch.setattr(GeminiLiveDictation, "start", start_socket)
+    replies = mock_network(manager._pipeline(), monkeypatch)
+    manager.toggle()
+    yield manager, editor, copies, replies
+    manager.close()
+
+
+def _caption(live, text, offset=None):
+    key = "interimInputTranscription" if offset is None else "inputTranscription"
+    frame = {"text": text}
+    if offset is not None:
+        frame["endOffset"] = f"{offset}s"
+    live._message(json.dumps({"serverContent": {key: frame}}))
+
+
+def _wav_body(reply):
+    part = json.loads(reply.body)["contents"][0]["parts"][0]
+    return base64.b64decode(part["inlineData"]["data"])
+
+
+@pytest.mark.parametrize("stop_during_checkpoint", [False, True])
+def test_delayed_checkpoint_recovers_exact_audio_after_pause(recovery_session, stop_during_checkpoint):
+    manager, editor, copies, replies = recovery_session
+    live = manager._live
+    second = b"\x00\x10" * 16000
+    for i in range(18):
+        manager._add_audio(second)
+        if i == 10:
+            _caption(live, "Namaste", 11)
+        else:
+            _caption(live, "ami")
+    manager._add_audio(bytes(32000))
+    cut = 19 * 32000
+    assert manager._cut == cut and manager._covered == 0
+    # Eight more seconds arrive before Gemini acknowledges the original audio.
+    tail = bytearray()
+    for i in range(8):
+        chunk = bytes((i, 12)) * 16000
+        manager._add_audio(chunk)
+        tail.extend(chunk)
+    if stop_during_checkpoint:
+        manager.toggle()
+    _caption(live, "ami", 18)
+    assert manager._covered == cut
+    if not stop_during_checkpoint:
+        replacement = manager._live
+        assert replacement is not live and replacement._audio_bytes == len(tail)
+        replacement._fail()
+        assert manager._live is not replacement and manager._live._audio_bytes == len(tail)
+        for i in range(33):
+            manager._add_audio(second)
+            _caption(manager._live, "hello")
+            tail.extend(second)
+        manager.toggle()
+        manager._live._fail()
+    assert len(replies) == 1 and _wav_body(replies[0])[44:] == tail
+    replies[0].complete(200, gemini_text("hello"))
+    assert editor.text() == "Namaste ami hello" and copies == []
+    live.finalized.emit("old words", "")
+    assert editor.text() == "Namaste ami hello" and not manager.can_retry
+
+
+def test_retry_keeps_original_audio_and_requires_copy(recovery_session):
+    manager, editor, copies, replies = recovery_session
+    audio = b"\x00\x10" * 12000
+    manager._add_audio(audio)
+    manager.toggle()
+    manager._live._fail()
+    manager._api._timed_out()
+    assert manager.can_retry and manager._indicator.retry.isVisible()
+    manager._indicator.retry.click()
+    assert _wav_body(replies[-1])[44:] == audio and not manager.can_retry
+    replies[-1].complete(200, gemini_text("Recovered words"))
+    assert not editor.text() and not copies and not manager._retry_audio
+    manager._indicator.action.click()
+    assert copies == ["Recovered words"]
+
+
+@pytest.mark.parametrize("failed_before_stop", [False, True])
+def test_cold_socket_never_delays_batch_at_stop(recovery_session, failed_before_stop):
+    manager, editor, _, replies = recovery_session
+    live = manager._live
+    live._ready = False
+    manager._add_audio(b"\x00\x10" * 12000)
+    if failed_before_stop:
+        live._fail()
+        assert manager._live is None and not manager._reconnects
+    manager.toggle()
+    assert len(replies) == 1 and manager._phase == "processing"
+    assert manager._api._request_timeout.interval() == 8000
+    replies[0].complete(200, gemini_text("Quick note"))
+    assert editor.text() == "Quick note"
+
+
+def test_timestamps_finish_without_turn_marker_and_ignore_duplicate_segment(recovery_session):
+    manager, editor, copies, replies = recovery_session
+    live = manager._live
+    manager._add_audio(b"\x00\x10" * 32000)
+    _caption(live, "Abe", 1)
+    _caption(live, "Abe", 1)
+    manager.toggle()
+    live._message('{"serverContent":{"turnComplete":true}}')
+    assert not editor.text() and not replies
+    _caption(live, "what?", 2)
+    assert editor.text() == "Abe what?" and not copies and not replies
+
+
+def test_untimed_checkpoint_requires_new_final_and_completion(recovery_session):
+    manager, editor, _, _ = recovery_session
+    live = manager._live
+    for _ in range(18):
+        manager._add_audio(b"\x00\x10" * 16000)
+        _caption(live, "Namaste ami")
+    live._message('{"serverContent":{"inputTranscription":{"text":"Namaste"}}}')
+    manager._add_audio(bytes(32000))
+    live._message('{"serverContent":{"generationComplete":true}}')
+    assert manager._covered == 0 and manager._live is live
+    live._message('{"serverContent":{"inputTranscription":{"text":"ami"}}}')
+    assert manager._covered == 0
+    live._message('{"serverContent":{"turnComplete":true}}')
+    assert manager._covered == 19 * 32000 and manager._live is not live
+    manager.toggle()
+    assert editor.text() == "Namaste ami"
+
+
+def test_failed_tail_only_offers_confirmed_prefix_for_review(recovery_session):
+    manager, editor, copies, replies = recovery_session
+    live = manager._live
+    for i in range(18):
+        manager._add_audio(b"\x00\x10" * 16000)
+        _caption(live, "words", 18 if i == 17 else None)
+    manager._add_audio(bytes(32000))
+    manager._add_audio(b"\x01\x11" * 16000)
+    manager.toggle()
+    manager._live._fail()
+    manager._api._timed_out()
+    assert len(_wav_body(replies[-1])) == 32044 and not editor.text() and not copies
+    assert manager.last_text == "words" and manager.can_retry
+    assert manager._indicator.title.text() == dictation_api.REVIEW_TRANSCRIPT
+    manager._indicator.dismiss_button.click()
+    assert not manager.last_text and not manager.can_retry
+
+
+@pytest.mark.parametrize("discard", [False, True])
+def test_discard_or_new_recording_rejects_late_recovery(recovery_session, discard):
+    manager, editor, copies, replies = recovery_session
+    manager._add_audio(b"\x00\x10" * 12000)
+    old_live = manager._live
+    manager.toggle()
+    old_live._fail()
+    manager._api._timed_out()
+    manager.retry()
+    old_reply = replies[-1]
+    if discard:
+        manager._indicator.dismiss_button.click()
+        assert not manager.can_retry and not manager._retry_audio
+    manager.toggle()
+    old_reply.complete(200, gemini_text("Discarded words"))
+    old_live.finalized.emit("Stale final", "")
+    assert manager._phase == "recording" and not editor.text() and not copies
+
+
+def test_stall_reconnect_budget_and_quota_are_bounded(recovery_session):
+    manager, _, _, replies = recovery_session
+    for i in range(3):
+        live = manager._live
+        for _ in range(6):
+            manager._add_audio(b"\x00\x10" * 16000)
+        assert manager._live is not live
+    assert manager._live is None and manager._reconnects == 2
+    manager.toggle()
+    assert len(_wav_body(replies[-1])) == 44 + 18 * 32000
+    manager.cancel()
+    manager._live_retry_at = 0
+    manager.toggle()
+    manager._live._fail(429)
+    assert manager._live is None and manager._pipeline().live_key() is None and not manager._reconnects
 
 
 def test_empty_result_clears_old_dictation_and_never_copies_it(monkeypatch):
