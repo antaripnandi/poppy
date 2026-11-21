@@ -142,6 +142,7 @@ class DictationIndicator(QWidget):
 
     _PROCESSING = ("Transcribing", "Checking languages", "Checking transcript", "Cleaning up")
     _COMPACT = ("Ready to dictate", "Listening", "Text sent", "Copied to clipboard", *_PROCESSING)
+    _SIDE_ICON_OFFSET = 37
 
     def __init__(self):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
@@ -288,7 +289,7 @@ class DictationIndicator(QWidget):
 
     def _layout_pill(self):
         with_caption = not self.preview.isHidden()
-        body_height = 30 if self._compact else 44
+        body_height = 32 if self._compact else 44
         width = max(self._body_width, self.preview.width() if with_caption else 0) + 16
         height = body_height + 16 + (44 if with_caption else 0)
         self.setFixedSize(width, height)
@@ -335,7 +336,7 @@ class DictationIndicator(QWidget):
         self._ready = title == "Ready to dictate"
         self._copy_ready = offer_copy
         self._compact = title in self._COMPACT
-        self._body_width = 96 if self._ready or self._done else 110 if self._compact else 300
+        self._body_width = 114 if self._ready or self._done else 124 if self._compact else 300
         colors = surface_colors()
         self.title.setStyleSheet(f"color: {colors['text']}; background: transparent; font: 600 13px 'Segoe UI';")
         self.detail.setStyleSheet(f"color: {colors['muted']}; background: transparent; font: 11px 'Segoe UI';")
@@ -343,7 +344,8 @@ class DictationIndicator(QWidget):
         self.title.setVisible(not self._compact)
         self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, 200))
         self.detail.setVisible(not self._compact)
-        self.row.setContentsMargins(0 if self._compact else 42, 0, 3 if self._compact else 4, 0)
+        right_padding = self._body_width // 2 - self._SIDE_ICON_OFFSET - 12 if self._compact else 4
+        self.row.setContentsMargins(0 if self._compact else 42, 0, right_padding, 0)
         for button in (self.action, self.dismiss_button):
             button.setFixedWidth(24 if self._compact else 28)
         if not self._dragging:
@@ -397,7 +399,7 @@ class DictationIndicator(QWidget):
 
     def set_level(self, level):
         self.levels = [old * 0.38 + new * 0.62 for old, new in zip(self.levels, [*self.levels[1:], level])]
-        self.update(self.header.x() + 6, self.header.y() + 4, 25, 22)
+        self.update(self.header.geometry())
 
     def paintEvent(self, event):
         colors = surface_colors()
@@ -413,14 +415,15 @@ class DictationIndicator(QWidget):
         painter.setBrush(QColor(colors["root"]))
         painter.drawRoundedRect(bounds, radius, radius)
         if self._compact:
-            # Center the visible letters on the same axis as the side marks.
+            # Lower the lowercase wordmark slightly to align it optically with the marks.
             wordmark = "poppy"
             painter.setFont(self._wordmark_font)
             ink = QRectF(painter.fontMetrics().tightBoundingRect(wordmark))
             painter.setPen(QColor(colors["text"]))
-            painter.drawText(bounds.center() - ink.center(), wordmark)
+            painter.drawText(bounds.center() - ink.center() + QPointF(0, 2), wordmark)
             painter.setPen(Qt.PenStyle.NoPen)
-        painter.translate(bounds.left() + (15 if self._compact else 18), bounds.center().y())
+        mark_x = bounds.center().x() - self._SIDE_ICON_OFFSET if self._compact else bounds.left() + 18
+        painter.translate(mark_x, bounds.center().y())
         if self._done:
             painter.setPen(QPen(QColor(colors["text"]), 1.6, Qt.PenStyle.SolidLine,
                                 Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))

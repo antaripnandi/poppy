@@ -385,12 +385,13 @@ def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_a
     window.btn_hdr_dictation.click()
     pill = controller._indicator
     assert pill.isVisible() and window.btn_hdr_dictation.isChecked()
-    assert pill.title.isHidden() and pill.width() < 120
+    assert pill.title.isHidden() and pill.header.width() == 114
     assert not controller._hide_timer.isActive() and pill.preview.isHidden()
     assert controller._mic is None
     QTest.mouseClick(pill, Qt.MouseButton.LeftButton, pos=pill.header.geometry().center())
     assert controller._indicator.listening
     assert abs(pill.action.geometry().center().y() - pill.header.rect().center().y()) <= 1
+    assert pill.action.geometry().center().x() - pill.header.rect().center().x() == pill._SIDE_ICON_OFFSET
     replies = mock_network(controller._pipeline(), monkeypatch)
     for _ in range(36):
         controller._read_mic()
