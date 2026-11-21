@@ -6,10 +6,13 @@ Open **Settings → Voice typing**, enter a Groq or Gemini key, and enable the f
 
 ## Recording and shortcuts
 
-The microphone next to the drawer’s other tools opens the recording pill. Click it to start, then use its
-stop button to finish. For direct dictation into a field, focus the field and press **Ctrl+Alt+D** to start
-or finish. Press **Ctrl+Alt+Shift+D** to cancel. Drag the pill to move it. Its position is remembered,
-and you can reset it from the ready pill’s right-click menu.
+The microphone next to the drawer’s other tools opens the **poppy** pill. Click the pill to start or finish
+dictation. Recent words appear in a single line above it as captions arrive. The pill stays ready until you
+close it from the drawer or choose **Hide Poppy** in its right-click menu. Drag it to move it, or use that menu
+to reset its saved position.
+
+For direct dictation into a field, focus the field and press **Ctrl+Alt+D** to start or finish.
+Press **Ctrl+Alt+Shift+D** to cancel.
 
 Hold **Ctrl+Alt+Space** to record and release the keys to finish. For **Edit Mode**, select text in a supported
 editable field and press **Ctrl+Alt+Shift+E**. Speak an instruction such as “make this shorter” and press the

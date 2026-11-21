@@ -6,8 +6,8 @@ import math
 import time
 from pywintypes import error as WindowsError
 
-from PySide6.QtCore import QEasingCurve, QLineF, QObject, QPoint, QPointF, QPropertyAnimation, QRectF, Qt, QTimer, Signal, QVariantAnimation
-from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient, QTextCursor
+from PySide6.QtCore import QEasingCurve, QLineF, QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal, QVariantAnimation
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion, QTextCursor
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
 
 from poppy.core import dictation_windows as native
@@ -16,10 +16,119 @@ from poppy.core.dictation_live import GeminiLiveDictation
 from poppy.core.storage import data_path, write_json
 from poppy.core.system_controls import system_animations_enabled
 from poppy.ui.drawer_tools import DrawerToolButton
-from poppy.ui.theme import is_light_theme, surface_colors
+from poppy.ui.theme import surface_colors
 
 
 _LOG = logging.getLogger(__name__)
+
+
+class _TranscriptStrip(QLabel):
+    """A visual tail of the caption, independent of the text ultimately delivered."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAccessibleName("Live transcript preview")
+        font = QFont("Segoe UI")
+        font.setPixelSize(13)
+        font.setWeight(QFont.Weight.DemiBold)
+        self.setFont(font)
+        self.fade = 0.0
+        self._offset = 0.0
+        self._target_x = 0.0
+        self._leaving = ""
+        self._leaving_x = 0.0
+        self._motion = QVariantAnimation(self, duration=240)
+        self._motion.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._motion.valueChanged.connect(self._move_words)
+
+    def _move_words(self, offset):
+        self._offset = offset
+        self.update()
+
+    def set_caption(self, text):
+        metrics = self.fontMetrics()
+        words = text.rsplit(None, 6)[-6:]
+        width = max(1, self.width() - 30)
+        while len(words) > 1 and metrics.horizontalAdvance(" ".join(words)) > width:
+            words.pop(0)
+        line = metrics.elidedText(" ".join(words), Qt.TextElideMode.ElideLeft, width)
+        if line == self.text():
+            return
+        previous = self.text().split()
+        current = line.split()
+        old_x = self._target_x + self._offset
+        self._motion.stop()
+        self.setText(line)
+        self._target_x = (self.width() - metrics.horizontalAdvance(line)) / 2
+        self._offset = 0.0
+        self._leaving = ""
+        if previous and current and system_animations_enabled():
+            shared = next((n for n in range(min(len(previous), len(current)), 0, -1)
+                           if previous[-n:] == current[:n]), 0)
+            if shared:
+                self._leaving = " ".join(previous[:-shared])
+                prefix = self._leaving + " " if self._leaving else ""
+                self._offset = old_x + metrics.horizontalAdvance(prefix) - self._target_x
+                self._leaving_x = old_x - self._offset
+            else:
+                self._offset = 5.0
+            if abs(self._offset) > 0.5:
+                self._motion.setStartValue(self._offset)
+                self._motion.setEndValue(0.0)
+                self._motion.start()
+        self.update()
+
+    def paintEvent(self, event):
+        if not self.text() or self.fade <= 0:
+            return
+        colors = surface_colors()
+        painter = QPainter(self)
+        painter.setOpacity(self.fade)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(colors["card"]))
+        painter.drawRoundedRect(QRectF(self.rect()), 10, 10)
+
+        # Fade the two edges and spread the glyphs by a pixel in those bands.
+        ratio = self.devicePixelRatioF()
+        layer = QPixmap(round(self.width() * ratio), round(self.height() * ratio))
+        layer.setDevicePixelRatio(ratio)
+        layer.fill(Qt.GlobalColor.transparent)
+        text_painter = QPainter(layer)
+        text_painter.setFont(self.font())
+        text_painter.setPen(QColor(colors["text"]))
+        metrics = self.fontMetrics()
+        baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2
+        edge = 15
+        regions = (
+            (QRectF(edge, 0, self.width() - 2 * edge, self.height()), (0,)),
+            (QRectF(0, 0, edge, self.height()), (-1, 0, 1)),
+            (QRectF(self.width() - edge, 0, edge, self.height()), (-1, 0, 1)),
+        )
+        for clip, shifts in regions:
+            text_painter.save()
+            text_painter.setClipRect(clip)
+            for shift in shifts:
+                text_painter.setOpacity(1.0 if len(shifts) == 1 else 0.38)
+                text_painter.drawText(QPointF(self._target_x + self._offset + shift, baseline), self.text())
+                if self._leaving and self._motion.state() == self._motion.State.Running:
+                    text_painter.save()
+                    text_painter.setOpacity(text_painter.opacity() * abs(self._offset / self._motion.startValue()))
+                    text_painter.drawText(QPointF(self._leaving_x + self._offset + shift, baseline), self._leaving)
+                    text_painter.restore()
+            text_painter.restore()
+        mask = QLinearGradient(0, 0, self.width(), 0)
+        mask.setColorAt(0.0, Qt.GlobalColor.transparent)
+        mask.setColorAt(edge / self.width(), Qt.GlobalColor.white)
+        mask.setColorAt(1 - edge / self.width(), Qt.GlobalColor.white)
+        mask.setColorAt(1.0, Qt.GlobalColor.transparent)
+        text_painter.setOpacity(1)
+        text_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        text_painter.fillRect(self.rect(), mask)
+        text_painter.end()
+        painter.drawPixmap(0, 0, layer)
 
 
 class DictationIndicator(QWidget):
@@ -31,30 +140,29 @@ class DictationIndicator(QWidget):
     moved = Signal()
     reset_position = Signal()
 
+    _PROCESSING = ("Transcribing", "Checking languages", "Checking transcript", "Cleaning up")
+    _COMPACT = ("Ready to dictate", "Listening", "Text sent", "Copied to clipboard", *_PROCESSING)
+
     def __init__(self):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setFixedSize(324, 54)
-        self.setAccessibleName("Voice typing")
-        self.setToolTip("Drag the pill to move it. Right-click while idle to reset its position.")
-        header = QWidget(self)
-        header.setGeometry(1, 7, self.width() - 9, 40)
-        self.title = QLabel()
-        self.detail = QLabel()
-        self.preview = QLabel(self)
-        self.preview.setGeometry(0, 51, self.width(), 36)
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.preview.setAccessibleName("Live transcript preview")
-        for label in (self.title, self.detail, self.preview):
+        self.setAccessibleName("Poppy voice typing")
+        self._wordmark_font = QFont("Segoe UI")
+        self._wordmark_font.setPixelSize(13)
+        self._wordmark_font.setWeight(QFont.Weight.DemiBold)
+        self.header = QWidget(self)
+        self.title = QLabel(self.header)
+        self.detail = QLabel(self.header)
+        for label in (self.title, self.detail):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         labels = QVBoxLayout()
-        labels.setSpacing(1)
+        labels.setSpacing(0)
         labels.addWidget(self.title)
         labels.addWidget(self.detail)
-        self.action = DrawerToolButton("mic", "Start recording")
+        self.action = DrawerToolButton("stop", "Finish dictation")
         self.action.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.action.clicked.connect(self._activate)
         self.retry = DrawerToolButton("retry", "Retry transcription")
@@ -63,39 +171,37 @@ class DictationIndicator(QWidget):
         self.dismiss_button = DrawerToolButton("close", "Dismiss voice typing")
         self.dismiss_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dismiss_button.clicked.connect(self.dismissed)
-        row = QHBoxLayout(header)
-        row.setContentsMargins(51, 0, 0, 0)
-        row.setSpacing(3)
-        row.addLayout(labels, 1)
-        row.addWidget(self.action)
-        row.addWidget(self.retry)
-        row.addWidget(self.dismiss_button)
+        self.row = QHBoxLayout(self.header)
+        self.row.setSpacing(2)
+        self.row.addLayout(labels, 1)
+        for button in (self.action, self.retry, self.dismiss_button):
+            self.row.addWidget(button)
+        self.preview = _TranscriptStrip(self)
+        # Give the strip a stable text width before the first caption arrives.
+        self.preview.resize(276, 34)
         self.preview.hide()
         self.levels = [0.0] * 5
         self._press = None
         self._dragging = False
-        self._bottom_anchor = None
-        self._show_preview = False
+        self._anchor = None
         self._preview_text = ""
+        self._feedback = ""
+        self._hint = ""
+        self._status_title = ""
+        self._caption_open = False
         self.listening = False
         self._ready = False
         self._copy_ready = False
         self._done = False
-        self._glow_amount = 0.45
         self._check_amount = 1.0
-        self._arrival = QPropertyAnimation(self, b"windowOpacity", self)
-        self._arrival.setDuration(165)
-        self._arrival.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._height_motion = QVariantAnimation(self, duration=180)
-        self._height_motion.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._height_motion.valueChanged.connect(self._set_height)
-        self._glow = QVariantAnimation(self, duration=1800, loopCount=-1, startValue=0.0, endValue=0.0)
-        self._glow.setKeyValueAt(0.5, 1.0)
-        self._glow.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._glow.valueChanged.connect(self._set_glow)
+        self._caption_fade = QVariantAnimation(self, duration=180)
+        self._caption_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._caption_fade.valueChanged.connect(self._set_caption_fade)
+        self._caption_fade.finished.connect(self._settle_caption)
         self._check = QVariantAnimation(self, duration=200, startValue=0.0, endValue=1.0)
         self._check.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._check.valueChanged.connect(self._set_check)
+        self.set_status("Ready to dictate", "Click to start  ·  Drag to move")
 
     def _activate(self):
         if self._copy_ready:
@@ -103,20 +209,19 @@ class DictationIndicator(QWidget):
         else:
             self.clicked.emit()
 
-    def _set_glow(self, value):
-        self._glow_amount = value
-        self.update()
-
     def _set_check(self, value):
         self._check_amount = value
         self.update()
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        if system_animations_enabled() and QApplication.platformName() == "windows":
-            self._arrival.setStartValue(0.55)
-            self._arrival.setEndValue(1.0)
-            self._arrival.start()
+    def _set_caption_fade(self, value):
+        self.preview.fade = value
+        self.preview.move((self.width() - self.preview.width()) // 2, 4 + round(4 * (1 - value)))
+        self.preview.update()
+
+    def _settle_caption(self):
+        if not self._caption_open:
+            self.preview.hide()
+            self._layout_pill()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -133,7 +238,6 @@ class DictationIndicator(QWidget):
         delta = event.globalPosition().toPoint() - origin
         if self._dragging or delta.manhattanLength() >= QApplication.startDragDistance():
             if not self._dragging:
-                self._height_motion.stop()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 self.drag_started.emit()
             self._dragging = True
@@ -149,22 +253,25 @@ class DictationIndicator(QWidget):
             self._dragging = False
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             self.moved.emit()
-            self._resize_for_state()
-        elif self._ready and self.rect().contains(event.position().toPoint()):
+        elif (self._ready or self.listening) and self.header.geometry().contains(event.position().toPoint()):
             self.clicked.emit()
         event.accept()
 
     def contextMenuEvent(self, event):
-        if not self._ready:
+        if not (self._ready or self.listening):
             return
         menu = QMenu(self)
-        menu.addAction("Reset pill position", self.reset_position)
+        if self._ready:
+            menu.addAction("Reset pill position", self.reset_position)
+        menu.addAction("Cancel recording" if self.listening else "Hide Poppy", self.dismissed)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(event.globalPos())
 
     def hideEvent(self, event):
-        self._height_motion.stop()
-        self._glow.stop()
+        self._caption_fade.stop()
+        self._caption_open = False
+        self.preview.fade = 0.0
+        self.preview.hide()
         self._check.stop()
         self._check_amount = 1.0
         self._press = None
@@ -177,60 +284,80 @@ class DictationIndicator(QWidget):
         y = max(bounds.top(), min(point.y(), bounds.bottom() - self.height() + 1))
         self.move(x, y)
         if set_anchor:
-            self._bottom_anchor = y + self.height()
+            self._anchor = QPoint(x + self.width() // 2, y + self.height())
 
-    def _set_height(self, height):
-        bottom = self._bottom_anchor if self._bottom_anchor is not None else self.y() + self.height()
-        self.setFixedHeight(height)
-        if self.isVisible() and not self._dragging:
-            self._bottom_anchor = bottom
-            self.place(QPoint(self.x(), bottom - height), self.screen(), set_anchor=False)
-        self.preview.setVisible(self._show_preview and height >= 87)
+    def _layout_pill(self):
+        with_caption = not self.preview.isHidden()
+        body_height = 30 if self._compact else 44
+        width = max(self._body_width, self.preview.width() if with_caption else 0) + 16
+        height = body_height + 16 + (44 if with_caption else 0)
+        self.setFixedSize(width, height)
+        self.header.setGeometry((width - self._body_width) // 2, height - body_height - 9,
+                                self._body_width, body_height)
+        self.preview.move((width - self.preview.width()) // 2, 4 + round(4 * (1 - self.preview.fade)))
+        if self._anchor is not None and self.isVisible() and not self._dragging:
+            screen = QGuiApplication.screenAt(self._anchor - QPoint(0, 1)) or self.screen()
+            self.place(self._anchor - QPoint(width // 2, height), screen, set_anchor=False)
+        if QApplication.platformName() == "windows":
+            mask = QRegion(self.header.geometry().adjusted(-7, -4, 7, 8))
+            if with_caption:
+                mask |= QRegion(self.preview.geometry().adjusted(-4, -4, 4, 6))
+            self.setMask(mask)
         self.update()
 
-    def _resize_for_state(self):
-        target = 94 if self._show_preview else 54
-        self._height_motion.stop()
-        if not self.isVisible() or not system_animations_enabled() or self.height() == target:
-            self._set_height(target)
-        elif not self._dragging:
-            self._height_motion.setStartValue(self.height())
-            self._height_motion.setEndValue(target)
-            self._height_motion.start()
+    def _sync_caption(self):
+        visible = bool(self._preview_text) and (
+            self.listening or self._status_title in (*self._PROCESSING, REVIEW_TRANSCRIPT))
+        if visible == self._caption_open:
+            return
+        self._caption_open = visible
+        self._caption_fade.stop()
+        if visible:
+            self.preview.show()
+            self._layout_pill()
+        target = float(visible)
+        if not self.isVisible() or not system_animations_enabled() or self.preview.fade == target:
+            self._set_caption_fade(target)
+            self._settle_caption()
+        else:
+            self._caption_fade.setStartValue(self.preview.fade)
+            self._caption_fade.setEndValue(target)
+            self._caption_fade.start()
 
     def set_status(self, title, detail, *, offer_copy=False, offer_retry=False):
+        was_listening = self.listening
+        was_done = self._done
+        self._status_title = title
+        self._hint = detail
+        self.listening = title == "Listening"
+        self._feedback = "Checking microphone…" if self.listening else ""
+        self._done = title in ("Text sent", "Copied to clipboard")
+        self._ready = title == "Ready to dictate"
+        self._copy_ready = offer_copy
+        self._compact = title in self._COMPACT
+        self._body_width = 96 if self._ready or self._done else 110 if self._compact else 300
         colors = surface_colors()
         self.title.setStyleSheet(f"color: {colors['text']}; background: transparent; font: 600 13px 'Segoe UI';")
         self.detail.setStyleSheet(f"color: {colors['muted']}; background: transparent; font: 11px 'Segoe UI';")
         self.title.setText(title)
-        self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, 198))
-        self.detail.setToolTip(detail)
-        was_listening = self.listening
-        was_done = self._done
-        self.listening = title == "Listening"
-        self._done = title in ("Text sent", "Copied to clipboard")
-        self._ready = title == "Ready to dictate"
-        self._copy_ready = offer_copy
+        self.title.setVisible(not self._compact)
+        self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, 200))
+        self.detail.setVisible(not self._compact)
+        self.row.setContentsMargins(0 if self._compact else 42, 0, 3 if self._compact else 4, 0)
+        for button in (self.action, self.dismiss_button):
+            button.setFixedWidth(24 if self._compact else 28)
         if not self._dragging:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.action.setVisible(self._ready or self.listening or offer_copy)
+        self.action.setVisible(self.listening or offer_copy)
         self.retry.setVisible(offer_retry)
+        self.dismiss_button.setVisible(not (self._ready or self.listening or self._done))
         dismiss = "Discard recording" if offer_retry else "Dismiss voice typing"
         self.dismiss_button.setToolTip(dismiss)
         self.dismiss_button.setAccessibleName(dismiss)
-        glyph, name = "mic", "Start recording"
-        if self.listening:
-            glyph, name = "stop", "Finish dictation"
-        elif offer_copy:
-            glyph, name = "copy", "Copy dictation"
+        glyph, name = ("copy", "Copy dictation") if offer_copy else ("stop", "Finish dictation")
         self.action.set_glyph(glyph)
         self.action.setAccessibleName(name)
         self.action.setToolTip(name)
-        if self.listening != was_listening:
-            self._glow.stop()
-            self._glow_amount = 0.45
-            if self.listening and system_animations_enabled():
-                self._glow.start()
         if self._done != was_done:
             self._check.stop()
             self._check_amount = 1.0
@@ -238,69 +365,66 @@ class DictationIndicator(QWidget):
                 self._check_amount = 0.0
                 self._check.start()
         if self.listening and not was_listening:
-            self.preview.setStyleSheet(
-                f"color: {colors['text']}; background: transparent; padding: 0 12px 0 29px; font: 12px 'Segoe UI';")
             self.set_preview("")
             self.levels = [0.0] * 5
-        self._show_preview = self.listening or (
-            title in ("Transcribing", "Checking languages", "Checking transcript", "Cleaning up", REVIEW_TRANSCRIPT)
-            and bool(self._preview_text))
-        self._resize_for_state()
-        self.update()
+        self._update_hint()
+        self._sync_caption()
+        self._layout_pill()
+
+    def _update_hint(self):
+        hint = "\n".join(part for part in (self._status_title, self._hint, self._feedback) if part)
+        self.setToolTip(hint)
+        self.setAccessibleDescription(hint)
 
     def set_preview(self, text):
-        self._preview_text = text
-        metrics = self.preview.fontMetrics()
-        width = self.width() - 44
-        recent = " ".join(text.split())[-400:] or "Checking microphone…"
-        if metrics.horizontalAdvance(recent) <= width:
-            self.preview.setText(recent)
-            return
-        words = recent.split()
-        last = words.pop()
-        while words and metrics.horizontalAdvance(f"{words[-1]} {last}") <= width:
-            last = f"{words.pop()} {last}"
-        first = metrics.elidedText(" ".join(words), Qt.TextElideMode.ElideLeft, width)
-        last = metrics.elidedText(last, Qt.TextElideMode.ElideLeft, width)
-        self.preview.setText(f"{first}\n{last}" if first else last)
+        self._preview_text = text.strip()
+        if self._preview_text and self._feedback:
+            self._feedback = ""
+            self._update_hint()
+        self.preview.set_caption(self._preview_text)
+        self._sync_caption()
 
     def set_capture_feedback(self, text):
-        if not self._preview_text and self.preview.text() != text:
-            self.preview.setText(text)
+        if not self._preview_text and self._feedback != text:
+            self._feedback = text
+            self._update_hint()
 
     def set_elapsed(self, seconds, *, hold=False, editing=False):
         minutes, seconds = divmod(seconds, 60)
         hint = "Release the keys to finish" if hold else "Speak an edit, then click Stop" if editing else "Click stop to finish"
-        self.detail.setText(f"{minutes}:{seconds:02d}  ·  {hint}")
+        self._hint = f"{minutes}:{seconds:02d}  ·  {hint}"
+        self._update_hint()
 
     def set_level(self, level):
-        previous = self.levels
-        self.levels = [old * 0.38 + new * 0.62 for old, new in zip(previous, [*previous[1:], level])]
-        self.update()
+        self.levels = [old * 0.38 + new * 0.62 for old, new in zip(self.levels, [*self.levels[1:], level])]
+        self.update(self.header.x() + 6, self.header.y() + 4, 25, 22)
 
     def paintEvent(self, event):
         colors = surface_colors()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        bounds = QRectF(self.rect()).adjusted(6, 3, -6, -7)
-        for spread, opacity in ((5, 9), (4, 10), (3, 12), (2, 15), (1, 17)):
+        bounds = QRectF(self.header.geometry())
+        radius = bounds.height() / 2
+        for spread, opacity in ((5, 7), (4, 9), (3, 11), (2, 15), (1, 19)):
             painter.setBrush(QColor(0, 0, 0, opacity))
             shadow = bounds.adjusted(-spread, 2 - spread, spread, 2 + spread)
-            painter.drawRoundedRect(shadow, 18 + spread, 18 + spread)
-        surface = QLinearGradient(0, 0, 0, bounds.height())
-        surface.setColorAt(0, QColor(colors["card"]))
-        surface.setColorAt(1, QColor(colors["root"]))
-        painter.setBrush(surface)
-        painter.drawRoundedRect(bounds, 18, 18)
-        shine = QColor("#ffffff")
-        shine.setAlpha(75 if is_light_theme() else 23)
-        painter.setBrush(shine)
-        painter.drawRoundedRect(QRectF(19, 4, self.width() - 38, 1), 0.5, 0.5)
-        accent = QColor("#235945" if is_light_theme() else "#b5e3cc")
+            painter.drawRoundedRect(shadow, radius + spread, radius + spread)
+        painter.setBrush(QColor(colors["root"]))
+        painter.drawRoundedRect(bounds, radius, radius)
+        if self._compact:
+            # Center the visible letters on the same axis as the side marks.
+            wordmark = "poppy"
+            painter.setFont(self._wordmark_font)
+            ink = QRectF(painter.fontMetrics().tightBoundingRect(wordmark))
+            painter.setPen(QColor(colors["text"]))
+            painter.drawText(bounds.center() - ink.center(), wordmark)
+            painter.setPen(Qt.PenStyle.NoPen)
+        painter.translate(bounds.left() + (15 if self._compact else 18), bounds.center().y())
         if self._done:
-            painter.setPen(QPen(accent, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            start, elbow, end = QPointF(17, 27), QPointF(23, 32), QPointF(33, 21)
+            painter.setPen(QPen(QColor(colors["text"]), 1.6, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            start, elbow, end = QPointF(-6, 0), QPointF(-2, 4), QPointF(6, -4)
             first, second = QLineF(start, elbow), QLineF(elbow, end)
             distance = self._check_amount * (first.length() + second.length())
             path = QPainterPath(start)
@@ -308,25 +432,16 @@ class DictationIndicator(QWidget):
             if distance > first.length():
                 path.lineTo(second.pointAt((distance - first.length()) / second.length()))
             painter.drawPath(path)
-            painter.setPen(Qt.PenStyle.NoPen)
-        else:
-            if self.listening:
-                halo = QRadialGradient(25, 27, 18)
-                glow = QColor(accent)
-                glow.setAlpha(int(13 + 21 * self._glow_amount))
-                halo.setColorAt(0, glow)
-                glow.setAlpha(0)
-                halo.setColorAt(1, glow)
-                painter.setBrush(halo)
-                painter.drawEllipse(QRectF(7, 9, 36, 36))
-            painter.setBrush(accent if self.listening else QColor(colors["muted"]))
-            for index, level in enumerate(self.levels if self.listening else (0.07, 0.21, 0.36, 0.21, 0.07)):
-                height = 3 + level * (19 if index in (1, 2, 3) else 14)
-                painter.drawRoundedRect(QRectF(15 + index * 5, 27 - height / 2, 2.5, height), 1.25, 1.25)
-        if self.preview.isVisible():
-            painter.setBrush(QColor(colors["muted"]))
-            for x, y, width, height in ((15, 60, 8, 1), (15, 63, 5, 1), (23, 63, 1, 7), (15, 66, 5, 1)):
-                painter.drawRoundedRect(QRectF(x, y, width, height), 0.5, 0.5)
+            return
+        painter.setBrush(QColor(colors["text"] if self.listening else colors["muted"]))
+        if self._status_title in self._PROCESSING:
+            for x in (-5, 0, 5):
+                painter.drawEllipse(QPointF(x, 0), 1.1, 1.1)
+            return
+        levels = self.levels if self.listening else (0.10, 0.30, 0.46, 0.30, 0.10)
+        for index, level in enumerate(levels):
+            height = 3 + level * 14
+            painter.drawRoundedRect(QRectF(-8.5 + index * 4, -height / 2, 1.8, height), 0.9, 0.9)
 
 
 class DictationController(QObject):
@@ -365,6 +480,7 @@ class DictationController(QObject):
         self._capture_interrupted = False
         self._previewing = False
         self._phase = ""
+        self._keep_panel = False
         self._stopped_at = None
         self._position_file = data_path("dictation-position.json")
         self._position = None
@@ -381,7 +497,7 @@ class DictationController(QObject):
         self._sample_timer = QTimer(self, interval=40)
         self._sample_timer.timeout.connect(self._read_mic)
         self._hide_timer = QTimer(self, singleShot=True)
-        self._hide_timer.timeout.connect(self._hide)
+        self._hide_timer.timeout.connect(self._expire_status)
         self._paste_timer = QTimer(self, singleShot=True)
         self._paste_timer.timeout.connect(self._deliver)
 
@@ -567,8 +683,18 @@ class DictationController(QObject):
             if self._indicator is not None and self._indicator.isVisible() and self._indicator._ready:
                 self._hide()
             else:
+                self._keep_panel = True
                 self._screen = self._notch.screen()
-                self._status("Ready to dictate", "Click to start  ·  Drag to move", auto_hide=18000)
+                self._show_ready()
+
+    def _show_ready(self):
+        self._status("Ready to dictate", "Click to start  ·  Drag to move")
+
+    def _expire_status(self):
+        if self._keep_panel and not self._phase:
+            self._show_ready()
+        else:
+            self._hide()
 
     def _read_mic(self):
         if self._mic is None:
@@ -1021,7 +1147,7 @@ class DictationController(QObject):
             write_json(self._position_file, self._position)
         except OSError:
             pass
-        if not self._phase:
+        if not self._phase and not pill._ready and not self.can_retry:
             self._hide_timer.start(10000)
 
     def _reset_position(self):
@@ -1033,6 +1159,8 @@ class DictationController(QObject):
         self._place_indicator()
 
     def _hide(self):
+        self._keep_panel = False
+        self._hide_timer.stop()
         if self._indicator is not None and self._indicator.isVisible():
             self._indicator.hide()
             self.panel_visible.emit(False)

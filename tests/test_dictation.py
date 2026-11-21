@@ -322,11 +322,11 @@ def test_recording_lifecycle_and_cancel_without_audio_upload(audit_app, monkeypa
     manager._api = api
     replies = mock_network(api, monkeypatch)
     manager.toggle()
-    assert manager._indicator.title.text() == "Transcribing"
+    assert manager._indicator.accessibleDescription().startswith("Transcribing")
     replies[-1].complete(200, gemini_text("Hello, Poppy."))
     replies[-1].complete(200, gemini_text("Hello, Poppy."))
     assert manager.last_text == "Hello, Poppy."
-    assert manager._indicator.title.text() == "Copied to clipboard"
+    assert manager._indicator.accessibleDescription().startswith("Copied to clipboard")
     assert copies == [("Hello, Poppy.", {"history": False, "preserve_complex": True})]
     manager.close()
 
@@ -383,10 +383,14 @@ def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_a
     controller = window.dictation
     monkeypatch.setattr(controller, "_start_live", lambda: None)
     window.btn_hdr_dictation.click()
-    assert controller._indicator.isVisible() and window.btn_hdr_dictation.isChecked()
+    pill = controller._indicator
+    assert pill.isVisible() and window.btn_hdr_dictation.isChecked()
+    assert pill.title.isHidden() and pill.width() < 120
+    assert not controller._hide_timer.isActive() and pill.preview.isHidden()
     assert controller._mic is None
-    controller._indicator.action.click()
+    QTest.mouseClick(pill, Qt.MouseButton.LeftButton, pos=pill.header.geometry().center())
     assert controller._indicator.listening
+    assert abs(pill.action.geometry().center().y() - pill.header.rect().center().y()) <= 1
     replies = mock_network(controller._pipeline(), monkeypatch)
     for _ in range(36):
         controller._read_mic()
@@ -399,7 +403,10 @@ def test_drawer_mic_opens_idle_pill_then_previews_speech_without_copying(audit_a
     assert len(replies) == 2
     replies[-1].complete(200, gemini_text("The full recording."))
     assert copies == ["The full recording."]
-    controller.cancel()
+    controller._expire_status()
+    assert pill.isVisible() and pill._ready and not controller._hide_timer.isActive()
+    window.btn_hdr_dictation.click()
+    assert not pill.isVisible()
     assert not window.btn_hdr_dictation.isChecked()
 
 
@@ -412,27 +419,30 @@ def test_dragged_pill_keeps_its_anchor_through_resize_and_reopen(audit_app, monk
     old = pill.pos()
     clicks = []
     pill.clicked.connect(lambda: clicks.append(True))
-    start = QPoint(110, 23)
+    start = pill.header.geometry().center()
     QTest.mousePress(pill, Qt.MouseButton.LeftButton, pos=start)
     QTest.mouseMove(pill, start + QPoint(52, -103))
     QTest.mouseRelease(pill, Qt.MouseButton.LeftButton, pos=start)
     assert pill.pos() != old and not clicks
-    anchor = (pill.x(), pill.y() + pill.height())
+    anchor = (pill.x() + pill.width() // 2, pill.y() + pill.height())
     manager._status("Listening", "Recording")
-    assert (pill.x(), pill.y() + pill.height()) == anchor
+    assert (pill.x() + pill.width() // 2, pill.y() + pill.height()) == anchor
+    pill.set_preview("This caption opens above the pill.")
+    assert (pill.x() + pill.width() // 2, pill.y() + pill.height()) == anchor
     manager._status("Copied to clipboard", "Ctrl+V to paste")
-    assert (pill.x(), pill.y() + pill.height()) == anchor
+    assert (pill.x() + pill.width() // 2, pill.y() + pill.height()) == anchor
     manager.close()
     reopened = DictationController(parent)
     reopened._status("Ready to dictate", "Click to start")
     pill = reopened._indicator
-    assert (pill.x(), pill.y() + pill.height()) == anchor
+    assert (pill.x() + pill.width() // 2, pill.y() + pill.height()) == anchor
     reopened._reset_position()
     assert pill.pos() == old
     bounds = pill.screen().availableGeometry()
     near_top = QPoint(bounds.left() + 10, bounds.top() + 2)
     pill.place(near_top, pill.screen())
     reopened._status("Listening", "Recording")
+    pill.set_preview("This caption fits on the screen.")
     assert pill.y() == bounds.top()
     reopened._status("Text sent", "Complete")
     assert pill.pos() == near_top
@@ -566,7 +576,8 @@ def test_stream_success_reuses_text_and_failure_uses_full_capture(audit_app, mon
     manager._read_mic()
     manager.toggle()
     live.finalized.emit("Partial final.", "Partial final with an ending.")
-    assert b"inlineData" in replies[-1].body and manager._indicator.title.text() == "Checking transcript"
+    assert b"inlineData" in replies[-1].body
+    assert manager._indicator.accessibleDescription().startswith("Checking transcript")
     assert b"Partial final with an ending." not in replies[-1].body
     replies[-1].complete(200, gemini_text("Keep that."))
     assert manager.last_text == "Partial final with an ending."
@@ -685,7 +696,7 @@ def test_mixed_take_rechecks_locked_language_from_original_audio(recovery_sessio
     manager._confirmed_text = first
     manager.toggle()
     live.finalized.emit(last, "")
-    assert manager._indicator.title.text() == "Checking languages"
+    assert manager._indicator.accessibleDescription().startswith("Checking languages")
     payload = json.loads(replies[0].body)
     parts = payload["contents"][0]["parts"]
     assert len(parts) == 1
@@ -730,14 +741,15 @@ def test_balanced_mixed_live_text_does_not_upload_audio(recovery_session):
 
 def test_mic_feedback_distinguishes_low_level_from_pending_captions(recovery_session):
     manager, _, _, replies = recovery_session
-    assert manager._indicator.preview.text() == "Checking microphone…"
+    assert "Checking microphone…" in manager._indicator.accessibleDescription()
+    assert manager._indicator.preview.isHidden()
     manager._started -= 3
     manager._mic.read = lambda: bytes(6400)
     manager._read_mic()
-    assert manager._indicator.preview.text() == "Low mic level · Check Windows input"
+    assert "Low mic level · Check Windows input" in manager._indicator.accessibleDescription()
     manager._mic.read = lambda: b"\x00\x10" * 3200
     manager._read_mic()
-    assert manager._indicator.preview.text() == "Mic signal detected · Waiting for captions"
+    assert "Mic signal detected · Waiting for captions" in manager._indicator.accessibleDescription()
     _caption(manager._live, "Recognized words")
     manager._read_mic()
     assert manager._indicator.preview.text() == "Recognized words" and not replies
@@ -1151,19 +1163,22 @@ def test_pill_keeps_preview_during_language_check_and_respects_reduced_motion(mo
     pill = DictationIndicator()
     pill.set_status("Listening", "")
     pill.set_preview("Preview phrase.")
-    assert pill.height() == 94 and pill._glow.state() == pill._glow.State.Stopped
+    assert pill.preview.geometry().bottom() < pill.header.geometry().top()
+    assert pill.preview.fade == 1.0 and pill.preview._motion.state() == pill.preview._motion.State.Stopped
     pill.set_status("Checking languages", "")
-    assert pill.height() == 94 and pill.preview.text() == "Preview phrase."
+    assert pill.preview.text() == "Preview phrase."
     pill.set_status("Copied to clipboard", "")
-    assert pill.height() == 54 and pill._check_amount == 1.0
+    assert pill.preview.isHidden() and pill._check_amount == 1.0
     assert pill._check.state() == pill._check.State.Stopped
     monkeypatch.setattr("poppy.ui.dictation.system_animations_enabled", lambda: True)
     pill.set_status("Listening", "")
-    assert pill._glow.state() == pill._glow.State.Running
-    pill._glow.setCurrentTime(900)
-    assert pill._glow_amount > 0.99
+    pill.set_preview("one two three four five six")
+    pill.set_preview("one two three four five six seven")
+    assert pill.preview.text() == "two three four five six seven"
+    assert pill.preview._motion.state() == pill.preview._motion.State.Running
+    pill.preview._motion.setCurrentTime(240)
+    assert pill.preview._offset == 0.0
     pill.set_status("Text sent", "")
-    assert pill._glow.state() == pill._glow.State.Stopped
     assert pill._check.state() == pill._check.State.Running
     pill._check.setCurrentTime(100)
     assert 0 < pill._check_amount < 1
@@ -1194,7 +1209,7 @@ def test_hold_shortcut_stops_once_on_release(monkeypatch):
     manager._extra_shortcuts.add(native.HOLD_HOTKEY)
     replies = mock_network(manager._pipeline(), monkeypatch)
     assert manager.handle_shortcut(native.HOLD_HOTKEY) and manager._mic is not None
-    assert "Release" in manager._indicator.detail.text()
+    assert "Release" in manager._indicator.accessibleDescription()
     manager._read_mic()
     assert not replies
     held[0] = False
