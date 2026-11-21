@@ -181,6 +181,7 @@ QTextEdit:focus {{
 QPushButton {{
     background-color: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.07);
+    outline: none;
     border-radius: 6px;
     padding: 4px 10px;
     font-size: 12px;
@@ -194,7 +195,10 @@ QPushButton:hover {{
     color: #ffffff;
 }}
 
-QPushButton:focus {{ border: 1px solid #b5babe; }}
+QPushButton:focus {{
+    background-color: rgba(255, 255, 255, 0.24);
+    color: #ffffff;
+}}
 QPushButton:disabled {{ color: #727779; background: rgba(255,255,255,0.025); }}
 
 QPushButton:pressed {{

@@ -1939,13 +1939,14 @@ class DynamicNotchWindow(QWidget):
                     background: transparent;
                     color: {ink};
                     border: 1px solid transparent;
+                    outline: none;
                     border-radius: 5px;
                     padding: 0;
                     font-family: '{font}';
                     font-size: 11px;
                 }}
                 QPushButton:hover {{ background: rgba({rgb},0.10); }}
-                QPushButton:focus {{ border-color: {muted}; }}
+                QPushButton[poppyKeyboardFocus="true"]:focus {{ background: rgba({rgb},0.28); }}
                 QPushButton:disabled {{ color: {muted}; }}
             """)
         self.peek_seek.setStyleSheet(f"""

@@ -405,13 +405,15 @@ class HomeTabView(QWidget):
         button.setMinimumHeight(24)
         set_widget_style(button, """
             QPushButton {
-                background: transparent; border: none; border-radius: 5px;
+                background: transparent; border: none; border-radius: 5px; outline: none;
                 color: #b9bfbd; font-family: 'Segoe UI'; font-size: 12px; padding: 2px 5px;
             }
             QPushButton:hover, QPushButton:checked {
                 background: rgba(255,255,255,0.08); color: #edf1f0;
             }
-            QPushButton:focus { border: 1px solid #a7adab; }
+            QPushButton:focus {
+                background: rgba(255,255,255,0.24); color: #edf1f0;
+            }
         """)
         return button
 

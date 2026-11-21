@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
 )
 
-from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors
+from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors, keyboard_focused
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.core.system_controls import AudioPeakMeter, system_animations_enabled
 
@@ -152,10 +152,9 @@ class ToggleSwitch(QWidget):
         thumb_color = QColor(255, 255, 255)
         painter.setBrush(QBrush(thumb_color))
         painter.drawEllipse(QRectF(self._thumb_pos, 2.0, thumb_d, thumb_d))
-        if self.hasFocus():
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor("#ffffff"), 1))
-            painter.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), r, r)
+        if keyboard_focused(self):
+            painter.setBrush(QColor("#34414a"))
+            painter.drawEllipse(QRectF(self._thumb_pos + thumb_d / 2 - 2, h / 2 - 2, 4, 4))
 
 
 class SettingRow(QWidget):

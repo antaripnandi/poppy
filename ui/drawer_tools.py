@@ -4,7 +4,7 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionButton
 
-from poppy.ui.theme import is_light_theme, surface_colors
+from poppy.ui.theme import keyboard_focused, surface_colors
 
 
 def _tool_path(name):
@@ -124,16 +124,14 @@ class DrawerToolButton(QPushButton):
         ink = QColor(surface_colors()["text"])
         active = self.isChecked()
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        focused = bool(option.state & QStyle.StateFlag.State_HasFocus)
+        focused = keyboard_focused(self)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if active or hovered or focused or self.isDown():
             surface = QColor(ink)
-            surface.setAlphaF((0.16 if is_light_theme() else 0.19) if active or self.isDown() else 0.09)
-            outline = QColor(ink)
-            outline.setAlphaF(0.54)
-            painter.setPen(QPen(outline, 1) if focused else Qt.PenStyle.NoPen)
+            surface.setAlphaF(0.30 if focused else 0.18 if active or self.isDown() else 0.09)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(surface)
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6, 6)
 

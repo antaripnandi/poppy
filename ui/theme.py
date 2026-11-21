@@ -6,6 +6,7 @@ conversions. Artwork and user content are left untouched.
 
 import re
 from functools import lru_cache
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -121,6 +122,37 @@ def resolve_light_mode(mode):
     return windows_uses_light_theme() if mode == "System" else mode == "Light"
 
 
+class _KeyboardFocus(QObject):
+    """Keep visual focus cues for keyboard navigation and shortcuts."""
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind == QEvent.Type.FocusIn and isinstance(watched, QWidget):
+            reason = event.reason()
+            if reason in (Qt.FocusReason.ActiveWindowFocusReason, Qt.FocusReason.PopupFocusReason):
+                return False
+            widget = watched
+            visible = reason in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                                 Qt.FocusReason.ShortcutFocusReason)
+        elif kind == QEvent.Type.MouseButtonPress:
+            # Clicking an already focused control does not produce a FocusIn.
+            widget = self.parent().focusWidget()
+            visible = False
+        else:
+            return False
+        if widget and bool(widget.property("poppyKeyboardFocus")) != visible:
+            widget.setProperty("poppyKeyboardFocus", visible)
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
+            widget.update()
+        return False
+
+
+def keyboard_focused(widget):
+    return widget.hasFocus() and bool(widget.property("poppyKeyboardFocus"))
+
+
 def is_light_theme():
     app = QApplication.instance()
     return bool(app and app.property("poppyLight"))
@@ -128,6 +160,9 @@ def is_light_theme():
 
 def configure_theme(appearance):
     app = QApplication.instance()
+    if not hasattr(app, "_poppy_focus_filter"):
+        app._poppy_focus_filter = _KeyboardFocus(app)
+        app.installEventFilter(app._poppy_focus_filter)
     light = resolve_light_mode(appearance.get("mode", "Dark"))
     changed = is_light_theme() != light
     if app.property("poppyLight") != light:
@@ -205,7 +240,24 @@ def themed_stylesheet(source):
     source = _design_stylesheet(source, layout)
     if is_light_theme():
         source = _light_stylesheet(source, layout in ("Paper", "Daily"))
-    return _direction_stylesheet(source, layout, is_light_theme())
+    return _keyboard_focus_stylesheet(_direction_stylesheet(source, layout, is_light_theme()))
+
+
+@lru_cache(maxsize=1024)
+def _keyboard_focus_stylesheet(source):
+    # Insert the attribute before any Qt subcontrol or pseudo-state.
+    # Native-outline suppression also applies to mouse-focused sliders.
+    if ":focus" not in source:
+        return source
+    return re.sub(
+        r"([^{}]+)\{([^{}]*)\}",
+        lambda rule: (
+            re.sub(r"(?<![\w:#-])([\w-]+(?:#[\w-]+)?)(?=(?::+[\w-]+)*:focus\b)",
+                   r'\1[poppyKeyboardFocus="true"]', rule[1])
+            if "outline: none" not in rule[2] else rule[1]
+        ) + "{" + rule[2] + "}",
+        source,
+    )
 
 
 @lru_cache(maxsize=1024)

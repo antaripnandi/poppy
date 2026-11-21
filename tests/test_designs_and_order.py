@@ -164,11 +164,49 @@ def test_design_compilation_preserves_focus_and_restores_authored_controls(audit
             configure_theme({"mode": mode, "layout": name})
             refresh_theme()
             assert "QPushButton:hover" in button.styleSheet()
-            assert "QPushButton:focus" in button.styleSheet()
+            assert 'QPushButton[poppyKeyboardFocus="true"]:focus' in button.styleSheet()
             assert button.property("poppyStyleSource") == original
     configure_theme({"mode": "Dark", "layout": "Classic"})
     refresh_theme()
-    assert button.styleSheet() == original
+    assert button.styleSheet().replace('[poppyKeyboardFocus="true"]', "") == original
+
+
+@pytest.mark.parametrize("mode", ["Dark", "Light"])
+def test_home_button_keeps_keyboard_focus_cue_without_a_click_outline(audit_app, mode):
+    from PySide6.QtWidgets import QPushButton, QWidget
+    from poppy.ui.views import HomeTabView
+
+    configure_theme({"mode": mode, "layout": "Classic"})
+    panel = QWidget()
+    panel.resize(180, 90)
+    before = QPushButton("Before", panel)
+    mic = HomeTabView._text_action("Mic", "Mute or unmute microphone")
+    mic.setCheckable(True)
+    mic.setParent(panel)
+    mic.setGeometry(10, 35, 90, 28)
+    panel.show()
+    panel.activateWindow()
+    before.setFocus()
+    audit_app.processEvents()
+    QTest.mouseMove(panel, QPoint(160, 75))
+    resting = mic.grab().toImage()
+
+    QTest.keyClick(before, Qt.Key.Key_Tab)
+    assert mic.hasFocus()
+    tabbed = mic.grab().toImage()
+    assert tabbed.pixelColor(18, 14) != resting.pixelColor(18, 14)
+    assert tabbed.pixelColor(18, 14) == tabbed.pixelColor(1, 14)
+
+    QTest.mouseClick(mic, Qt.MouseButton.LeftButton)
+    QTest.mouseMove(panel, QPoint(160, 75))
+    audit_app.processEvents()
+    assert mic.hasFocus()
+    assert mic.isChecked()
+    clicked = mic.grab().toImage()
+    assert clicked.pixelColor(18, 14) != resting.pixelColor(18, 14)
+    assert clicked.pixelColor(18, 14) == clicked.pixelColor(1, 14)
+    before.setFocus()
+    assert mic.grab().toImage() == clicked
 
 
 def test_deck_daily_and_console_style_every_tab(editor, audit_app):

@@ -175,7 +175,7 @@ class CalendarTabView(QWidget):
         return f"""
             QPushButton {{ background: {self._accent}; color: {ink}; border: 2px solid transparent;
                            border-radius: {radius}px; padding: {padding}; font-size: 12px; font-weight: 600; }}
-            QPushButton:hover, QPushButton:focus {{ border-color: {ink}; }}
+            QPushButton:hover, QPushButton[poppyKeyboardFocus="true"]:focus {{ border-color: {ink}; }}
         """
 
     def set_accent(self, accent):
