@@ -92,7 +92,7 @@ def test_layout_and_mode_preview_preserves_notes_and_cancel_restores(dashboard_w
     settings.appearance_live_updated.connect(window._apply_live_appearance)
     settings.show()
     settings.combo_mode.setCurrentText("Light")
-    settings.combo_layout.setCurrentText("Soft")
+    settings.layout_preview.move_card("notes", 1)
     audit_app.processEvents()
     assert is_light_theme()
     assert window.tab_home is original_view
@@ -131,35 +131,22 @@ def test_layout_selection_changes_visible_arrangements_and_restores(dashboard_wi
     settings.show()
     home, music = window.tab_home, window.tab_music
     home.txt_notes.setPlainText("Keep my note")
-    snapshots = {}
-    for name in ("Classic", "Minimal", "Soft", "Classic"):
-        settings.combo_layout.setCurrentText(name)
-        for tab in ("Home", "Music", "Docs"):
-            window._switch_to_tab_by_name(tab, animate=False)
-            window._apply_geometry_for_state(window.state, animate=False)
-            audit_app.processEvents()
-            if tab == "Home":
-                assert (home.card_notes.y() < home.card_controls.y()) == (name == "Soft")
-                if name == "Minimal":
-                    assert home.card_clock.width() < home.card_controls.width()
-                elif name == "Classic":
-                    assert abs(home.card_clock.width() - home.card_controls.width()) <= 1
-            elif tab == "Music":
-                assert music.player_card.x() < music.lyrics_widget.x()
-                if name == "Minimal":
-                    assert music.player_card.width() < music.lyrics_widget.width()
-                    assert music.lbl_large_art.width() == 96
-                snapshots[name] = window.grab().toImage()
-            else:
-                cards = window.tab_docs.findChildren(CardFrame)
-                assert cards
-                assert all(card.property("layoutTheme") == name for card in cards)
-        preview = settings.layout_preview
-        assert (preview.cards["notes"].y() < preview.cards["controls"].y()) == (name == "Soft")
-        assert settings.lbl_layout_description.text() == LAYOUT_THEMES[name]["description"]
-    assert snapshots["Classic"] != snapshots["Minimal"]
-    assert snapshots["Classic"] != snapshots["Soft"]
-    settings.combo_layout.setCurrentText("Soft")
+    name = "Classic"
+    settings.combo_layout.setCurrentText(name)
+    for tab in ("Home", "Music", "Docs"):
+        window._switch_to_tab_by_name(tab, animate=False)
+        window._apply_geometry_for_state(window.state, animate=False)
+        audit_app.processEvents()
+        if tab == "Home":
+            assert abs(home.card_clock.width() - home.card_controls.width()) <= 1
+        elif tab == "Music":
+            assert music.player_card.x() < music.lyrics_widget.x()
+        else:
+            cards = window.tab_docs.findChildren(CardFrame)
+            assert cards
+            assert all(card.property("layoutTheme") == name for card in cards)
+    preview = settings.layout_preview
+    assert settings.lbl_layout_description.text() == LAYOUT_THEMES[name]["description"]
     settings.close()
     audit_app.processEvents()
     assert music.player_card.x() < music.lyrics_widget.x()
@@ -170,7 +157,7 @@ def test_layout_selection_changes_visible_arrangements_and_restores(dashboard_wi
 def test_saved_layout_applies_to_music_and_other_pages_on_startup(audit_app, monkeypatch):
     monkeypatch.setattr("poppy.ui.settings_window.set_autostart_state", lambda *args: None)
     settings = SettingsWindow({"appearance": {"layout": "Classic", "layout_version": 3}})
-    settings.combo_layout.setCurrentText("Soft")
+    settings.combo_layout.setCurrentText("Classic")
     assert settings._save_settings()
     settings.close()
     from poppy.main import load_config
@@ -182,8 +169,7 @@ def test_saved_layout_applies_to_music_and_other_pages_on_startup(audit_app, mon
     window._anim_opacity.setCurrentTime(window._anim_opacity.duration())
     audit_app.processEvents()
     assert window.tab_music.player_card.x() < window.tab_music.lyrics_widget.x()
-    assert window.tab_home.dashboard_grid.itemAtPosition(0, 1).widget() is window.tab_home.card_notes
-    assert window.tab_docs.layout().spacing() == LAYOUT_THEMES["Soft"]["spacing"]
+    assert window.tab_docs.layout().spacing() == LAYOUT_THEMES["Classic"]["spacing"]
     window.close()
 
 
@@ -530,19 +516,19 @@ def test_settings_plain_labels_theme_and_size_persist(monkeypatch):
     settings.select_page("Tabs Manager")
     assert settings.nav_list.currentRow() == 1
     settings.combo_theme.setCurrentText("Graphite")
-    settings.combo_layout.setCurrentText("Soft")
+    settings.combo_layout.setCurrentText("Classic")
     settings.combo_mode.setCurrentText("Light")
     settings.combo_media_background.setCurrentText("Theme")
     settings.chk_media_players.setChecked(False)
     assert settings._save_settings()
     assert settings.config["appearance"]["theme"] == "Graphite"
     assert settings.config["appearance"]["layout_version"] == APPEARANCE_LAYOUT_VERSION
-    assert settings.config["appearance"]["layout"] == "Soft"
+    assert settings.config["appearance"]["layout"] == "Classic"
     assert settings.config["appearance"]["mode"] == "Light"
     assert settings.config["media"]["background"] == "theme"
     assert not settings.config["media"]["show_player_tiles"]
     reloaded = SettingsWindow(settings.config)
-    assert reloaded.combo_layout.currentText() == "Soft"
+    assert reloaded.combo_layout.currentText() == "Classic"
     assert reloaded.combo_mode.currentText() == "Light"
 
 

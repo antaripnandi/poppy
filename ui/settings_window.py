@@ -393,7 +393,7 @@ class SettingsWindow(QWidget):
                 border: none;
                 background: transparent;
             }
-            QScrollBar::corner {
+            QAbstractScrollArea::corner, QScrollBar::corner {
                 background: transparent;
                 border: none;
             }
@@ -474,7 +474,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_app = QWidget()
         l_app = QVBoxLayout(page_app)
-        l_app.setContentsMargins(0, 0, 8, 0)
+        l_app.setContentsMargins(0, 0, 8, 18)
         l_app.setSpacing(12)
 
         lbl_app_hdr = QLabel("Appearance")
@@ -640,7 +640,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_tabs = QWidget()
         l_tabs = QVBoxLayout(page_tabs)
-        l_tabs.setContentsMargins(0, 0, 8, 0)
+        l_tabs.setContentsMargins(0, 0, 8, 18)
         l_tabs.setSpacing(12)
 
         lbl_tabs_hdr = QLabel("Tools")
@@ -712,7 +712,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_beh = QWidget()
         l_beh = QVBoxLayout(page_beh)
-        l_beh.setContentsMargins(0, 0, 8, 0)
+        l_beh.setContentsMargins(0, 0, 8, 18)
         l_beh.setSpacing(12)
 
         lbl_beh_hdr = QLabel("Behavior")
@@ -750,7 +750,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_notif = QWidget()
         l_notif = QVBoxLayout(page_notif)
-        l_notif.setContentsMargins(0, 0, 8, 0)
+        l_notif.setContentsMargins(0, 0, 8, 18)
         l_notif.setSpacing(12)
 
         lbl_notif_hdr = QLabel("Notifications")
@@ -783,7 +783,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_st = QWidget()
         l_st = QVBoxLayout(page_st)
-        l_st.setContentsMargins(0, 0, 8, 0)
+        l_st.setContentsMargins(0, 0, 8, 18)
         l_st.setSpacing(12)
 
         lbl_st_hdr = QLabel("Screen time")
@@ -949,7 +949,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_media = QWidget()
         l_media = QVBoxLayout(page_media)
-        l_media.setContentsMargins(0, 0, 8, 0)
+        l_media.setContentsMargins(0, 0, 8, 18)
         l_media.setSpacing(12)
 
         lbl_media_hdr = QLabel("Music")
@@ -1004,7 +1004,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_weath = QWidget()
         l_weath = QVBoxLayout(page_weath)
-        l_weath.setContentsMargins(0, 0, 8, 0)
+        l_weath.setContentsMargins(0, 0, 8, 18)
         l_weath.setSpacing(12)
 
         lbl_weath_hdr = QLabel("Weather")
@@ -1040,7 +1040,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_pomo = QWidget()
         l_pomo = QVBoxLayout(page_pomo)
-        l_pomo.setContentsMargins(0, 0, 8, 0)
+        l_pomo.setContentsMargins(0, 0, 8, 18)
         l_pomo.setSpacing(12)
 
         lbl_pomo_hdr = QLabel("Timer")
@@ -1080,7 +1080,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_rpc = QWidget()
         l_rpc = QVBoxLayout(page_rpc)
-        l_rpc.setContentsMargins(0, 0, 8, 0)
+        l_rpc.setContentsMargins(0, 0, 8, 18)
         l_rpc.setSpacing(12)
 
         lbl_rpc_hdr = QLabel("Discord")
@@ -1114,7 +1114,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_hw = QWidget()
         l_hw = QVBoxLayout(page_hw)
-        l_hw.setContentsMargins(0, 0, 8, 0)
+        l_hw.setContentsMargins(0, 0, 8, 18)
         l_hw.setSpacing(12)
 
         lbl_hw_hdr = QLabel("System")
@@ -1141,7 +1141,7 @@ class SettingsWindow(QWidget):
         # =====================================================================
         page_abt = QWidget()
         l_abt = QVBoxLayout(page_abt)
-        l_abt.setContentsMargins(0, 0, 8, 0)
+        l_abt.setContentsMargins(0, 0, 8, 18)
         l_abt.setSpacing(12)
 
         lbl_abt_hdr = QLabel("Poppy")

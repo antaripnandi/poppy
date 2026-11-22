@@ -26,7 +26,7 @@ class DownloadActivityMenu(QMenu):
         set_widget_style(self.items, """
             QListWidget { background: #242829; color: #edf0f0; border: none; border-radius: 6px; }
             QListWidget::item { padding: 4px 8px; }
-            QScrollBar::corner { background: transparent; }
+            QAbstractScrollArea::corner, QScrollBar::corner { background: transparent; }
         """)
         layout.addWidget(self.items)
         self._open_folder = open_folder

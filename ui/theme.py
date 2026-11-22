@@ -15,79 +15,17 @@ LAYOUT_THEMES = {
         "radius": 14, "padding": 16, "spacing": 12, "fill": 0.045,
         "inset": 12, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
         "media_columns": (1, 1), "art_size": 144,
-        "description": "Balanced dashboard cards and player beside lyrics.",
-    },
-    "Minimal": {
-        "radius": 4, "padding": 12, "spacing": 8, "fill": 0.0,
-        "inset": 6, "columns": (2, 3), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (2, 3), "art_size": 96,
-        "description": "Narrow summary column, flat surfaces and more room for controls and lyrics.",
-    },
-    "Soft": {
-        "radius": 22, "padding": 20, "spacing": 16, "fill": 0.075,
-        "inset": 16, "columns": (3, 2), "home_order": ("clock", "notes", "controls", "shelf"),
-        "media_columns": (1, 1), "art_size": 160,
-        "description": "Notes beside the clock, rounded surfaces and a spacious media player.",
-    },
-    "Flat": {
-        "radius": 2, "padding": 14, "spacing": 12, "fill": 0.0,
-        "inset": 12, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (2, 3), "art_size": 80,
-        "description": "A continuous desktop surface with divider lines, underline tabs and slim controls.",
-    },
-    "Paper": {
-        "radius": 0, "padding": 16, "spacing": 14, "fill": 0.0,
-        "inset": 16, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (1, 1), "art_size": 80,
-        "description": "An open page with a serif clock, quiet headings, plain notes and text-led controls.",
-    },
-    "Instrument": {
-        "radius": 2, "padding": 12, "spacing": 8, "fill": 0.035,
-        "inset": 10, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (1, 1), "art_size": 128,
-        "description": "Compact instrument panels with header strips, numeric readouts and segmented meters.",
-    },
-    "Deck": {
-        "radius": 15, "padding": 13, "spacing": 10, "fill": 0.075,
-        "inset": 10, "columns": (4, 5, 5), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (3, 2), "art_size": 160,
-        "description": "Icon tabs, tinted modules, and a player with artwork beside the controls.",
-    },
-    "Daily": {
-        "radius": 0, "padding": 9, "spacing": 9, "fill": 0.0,
-        "inset": 18, "columns": (5, 4), "home_order": ("clock", "notes", "controls", "shelf"),
-        "media_columns": (4, 6), "art_size": 148,
-        "description": "A serif agenda with a date masthead, an open scratchpad, and navigation at the bottom.",
-    },
-    "Console": {
-        "radius": 0, "padding": 12, "spacing": 9, "fill": 0.035,
-        "inset": 12, "columns": (2, 4, 3), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (5, 4), "art_size": 76,
-        "description": "A compact status panel with monospaced readings, labeled transport and timestamped lyrics.",
+        "description": "Tactile Bento dashboard with compact media controls and fluid system tools.",
     },
 }
 
 HOME_CARDS = ("clock", "controls", "notes", "shelf")
-DESIGN_PALETTES = {
-    "Deck": (("#202d48", "#2a3857", "#edf3ff", "#b6c7e3", "#aac9ff"),
-             ("#e6eefb", "#f3f7ff", "#202f4d", "#4e6383", "#365fa0")),
-    "Daily": (("#211e1a", "#29241f", "#f3eadd", "#c2b6a2", "#e6a588"),
-              ("#f5f0e5", "#ebe3d4", "#292822", "#665f52", "#a14c35")),
-    "Console": (("#151a16", "#202820", "#edf0e8", "#aeb9aa", "#c7e987"),
-                ("#e9eee5", "#dce6d8", "#202820", "#4d604c", "#42612e")),
-}
-TRACK_LAYOUTS = ("Flat", "Paper", "Instrument", "Deck", "Daily", "Console")
+DESIGN_PALETTES = {}
+TRACK_LAYOUTS = ()
 
 
 def home_slots(name, count, *, wide=True):
     """Use the same draggable slot order in Settings and on Home."""
-    if count == 4:
-        if name == "Deck" and wide:
-            return ((0, 0, 2, 1), (0, 1, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1))
-        if name == "Daily" and wide:
-            return ((0, 0, 1, 2), (1, 0, 2, 1), (1, 1, 1, 1), (2, 1, 1, 1))
-        if name == "Console" and wide:
-            return ((0, 0, 2, 1), (0, 1, 1, 2), (1, 1, 1, 1), (1, 2, 1, 1))
     return tuple((i // 2, i % 2, 1, 2 if i == count - 1 and i % 2 == 0 else 1)
                  for i in range(count))
 

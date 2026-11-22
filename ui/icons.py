@@ -82,3 +82,25 @@ class Icons:
     WEATHER_SNOW = "\uE775" # Snow
     WEATHER_STORM = "\uEA39"# Thunderstorm
 
+    # Extended UI Icons (Hitodama-inspired views, zero emoji)
+    STAR = "\uE734"         # Star outline
+    STAR_FILL = "\uE735"    # Star filled
+    CHEVRON_DOWN = "\uE70D" # Chevron down
+    CHEVRON_RIGHT = "\uE76C"# Chevron right
+    LINK = "\uE71B"         # Link / URL
+    CODE = "\uE943"         # Code / Terminal snippet
+    VIDEO = "\uE714"        # Video media
+    FOLDER = "\uE8B7"       # Folder
+    DOWNLOAD = "\uE896"     # Download / Downloads folder
+    DARK_MODE = "\uE793"    # Theme / Dark-Light mode
+    ADD = "\uE710"          # Plus / Add
+    ARROW_RIGHT = "\uE72A"  # Submit arrow right
+    STATS = "\uE9D9"        # System telemetry / Stats
+    TODAY = "\uE787"        # Today / Daily view
+    APPS = "\uE71D"         # Applications
+    SWAP = "\uE8AB"         # Swap / Toggle mode
+    NETWORK = "\uE968"      # Network / Speed
+    DISK = "\uEDA2"         # Storage drive
+    CLOCK = "\uE823"        # Clock / Uptime
+
+

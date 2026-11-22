@@ -10,7 +10,7 @@ import re
 import time
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer, QSize, QRect, QEvent
-from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QPainterPath, QDesktopServices, QFont
+from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QPainterPath, QDesktopServices, QFont, QPalette
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QTextEdit, QPushButton, QSlider,
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, home_order, home_slots
 from poppy.ui.components import (
-    IconButton, CircularProgressRing, MetricLabel,
+    IconButton, CircularProgressRing, MetricLabel, SquircleTileButton,
     CardFrame, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
     ScreenTimeHomeWidget, CapsuleSlider, ScrollArea, PlaybackSlider
 )
@@ -71,17 +71,27 @@ class HomeTabView(QWidget):
     lock_workstation_requested = Signal()
     player_menu_requested = Signal()
     audio_device_menu_requested = Signal()
+    audio_gear_menu_requested = Signal(object)
     bluetooth_menu_requested = Signal()
     weather_refresh_requested = Signal()
     screentime_clicked = Signal()
     customize_requested = Signal()
     layout_changed = Signal()
 
+    @staticmethod
+    def _kicker_font() -> QFont:
+        font = QFont("Segoe UI")
+        font.setPixelSize(10)
+        font.setWeight(QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108.0)
+        return font
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._latest_shelf_path = ""
         self._track_title = "Nothing playing"
         self._track_artist = ""
+        self._audio_muted = False
         self._layout_name = "Classic"
         self._dashboard_wide = True
         self._hidden_sections = set()
@@ -92,6 +102,7 @@ class HomeTabView(QWidget):
         self._design_headers = []
         for card, text in ((self.card_clock, "SYSTEM"), (self.card_controls, "CONTROLS")):
             label = QLabel(text)
+            label.setFont(self._kicker_font())
             card.layout().insertWidget(0, label)
             label.hide()
             self._design_headers.append(label)
@@ -118,7 +129,7 @@ class HomeTabView(QWidget):
         self.home_scroll.verticalScrollBar().setSingleStep(24)
         set_widget_style(self.home_scroll, """
             QScrollArea { background: transparent; border: none; }
-            QScrollBar::corner { background: transparent; border: none; }
+            QAbstractScrollArea::corner, QScrollBar::corner { background: transparent; border: none; }
             QScrollBar:horizontal { height: 0px; }
         """)
         home.addWidget(self.home_scroll, 1)
@@ -181,6 +192,7 @@ class HomeTabView(QWidget):
         self.metrics = (self.lbl_cpu, self.lbl_gpu, self.lbl_ram, self.lbl_bat)
         for column, metric in enumerate(self.metrics):
             telemetry_row.addWidget(metric, 0, column)
+            telemetry_row.setColumnStretch(column, 1)
         self.clock_face = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.clock_face.setSpacing(4)
         self.clock_detail = QVBoxLayout()
@@ -202,7 +214,7 @@ class HomeTabView(QWidget):
         l_ctrl = QVBoxLayout(card_controls)
         self.controls_layout = l_ctrl
         l_ctrl.setContentsMargins(18, 14, 18, 14)
-        l_ctrl.setSpacing(4)
+        l_ctrl.setSpacing(6)
 
         self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=True)
         self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self, compact_track=True)
@@ -210,39 +222,50 @@ class HomeTabView(QWidget):
             slider.setAccessibleName(label)
             slider.setToolTip(label)
             slider.installEventFilter(self)
-            l_ctrl.addWidget(slider)
 
-        audio_row = QHBoxLayout()
+        self.vol_row_widget = QWidget(card_controls)
+        vol_row = QHBoxLayout(self.vol_row_widget)
+        vol_row.setContentsMargins(0, 0, 0, 0)
+        vol_row.setSpacing(4)
+        vol_row.addWidget(self.slider_vol, 1)
+        self.btn_audio_gear = IconButton(Icons.SETTINGS, "Audio options (Mute, App mixer, Sound output)",
+                                         parent=self.vol_row_widget, size=26, font_size=13, is_fluent=True)
+        self.btn_audio_gear.clicked.connect(lambda: self.audio_gear_menu_requested.emit(self.btn_audio_gear))
+        vol_row.addWidget(self.btn_audio_gear)
+        l_ctrl.addWidget(self.vol_row_widget)
+        l_ctrl.addWidget(self.slider_bright)
+
+        # Hidden compatibility triggers (surfaced inside the volume gear menu)
         self.btn_vol_mute = self._text_action("Mute", "Mute system audio")
         self.btn_app_mixer = self._text_action("App mixer", "Set volume and mute for individual apps")
         self.btn_audio_drop = self._text_action("Sound output", "Choose an output or open Windows Sound Settings")
         self.btn_audio_drop.clicked.connect(self.audio_device_menu_requested.emit)
-        audio_row.addWidget(self.btn_vol_mute)
-        audio_row.addWidget(self.btn_app_mixer)
-        audio_row.addStretch()
-        audio_row.addWidget(self.btn_audio_drop)
-        l_ctrl.addLayout(audio_row)
-        l_ctrl.addSpacing(4)
+        for hidden_btn in (self.btn_vol_mute, self.btn_app_mixer, self.btn_audio_drop):
+            hidden_btn.setParent(card_controls)
+            hidden_btn.hide()
 
         actions = QGridLayout()
-        actions.setSpacing(3)
+        self.quick_actions_grid = actions
+        actions.setContentsMargins(0, 2, 0, 0)
+        actions.setSpacing(6)
         self.quick_actions = []
-        for index, (attr, label, tip, signal, toggle) in enumerate((
-            ("btn_act_caffeine", "Awake", "Keep the PC awake", self.caffeine_toggle_requested, True),
-            ("btn_act_mic", "Mic", "Mute or unmute microphone", self.mic_mute_toggle_requested, True),
-            ("btn_act_shield", "Focus", "Start or pause a focus sprint", self.focus_shield_requested, True),
-            ("btn_act_snip", "Snip", "Take a screen snip", self.screen_snip_requested, False),
-            ("btn_act_eyedropper", "Color", "Pick a screen color", self.eyedropper_requested, False),
-            ("btn_act_search", "Calc", "Focus the calculator", self.quick_search_requested, False),
-            ("btn_act_bt", "Bluetooth", "Show Bluetooth devices", self.bluetooth_menu_requested, False),
-            ("btn_dev_lock", "Lock", "Lock Windows", self.lock_workstation_requested, False),
+        for index, (attr, icon_glyph, label, tip, signal, toggle) in enumerate((
+            ("btn_act_caffeine", Icons.POWER, "Awake", "Keep the PC awake", self.caffeine_toggle_requested, True),
+            ("btn_act_mic", Icons.MIC, "Mic", "Mute or unmute microphone", self.mic_mute_toggle_requested, True),
+            ("btn_act_shield", Icons.SHIELD, "Focus", "Start or pause a focus sprint", self.focus_shield_requested, True),
+            ("btn_act_snip", Icons.SNIP, "Snip", "Take a screen snip", self.screen_snip_requested, False),
+            ("btn_act_eyedropper", Icons.COLOR, "Color", "Pick a screen color", self.eyedropper_requested, False),
+            ("btn_act_search", Icons.CALCULATOR, "Calc", "Open calculator in commands", self.quick_search_requested, False),
+            ("btn_act_bt", Icons.BLUETOOTH, "Bluetooth", "Show Bluetooth devices", self.bluetooth_menu_requested, False),
+            ("btn_dev_lock", Icons.LOCK, "Lock", "Lock Windows", self.lock_workstation_requested, False),
         )):
-            button = self._text_action(label, tip)
-            button.setCheckable(toggle)
+            button = SquircleTileButton(icon_glyph, label, tip, toggle=toggle, parent=card_controls)
             button.clicked.connect(signal.emit)
             setattr(self, attr, button)
             self.quick_actions.append((button, label, button.property("poppyStyleSource")))
             actions.addWidget(button, index // 4, index % 4)
+        for col in range(4):
+            actions.setColumnStretch(col, 1)
         l_ctrl.addLayout(actions)
         l_ctrl.addStretch()
         grid.addWidget(card_controls, 0, 1)
@@ -257,9 +280,10 @@ class HomeTabView(QWidget):
         l_notes.setSpacing(8)
 
         notes_hdr = QHBoxLayout()
-        lbl_notes_title = QLabel("Notes")
+        lbl_notes_title = QLabel("SCRATCHPAD")
+        lbl_notes_title.setFont(self._kicker_font())
         self.lbl_notes_title = lbl_notes_title
-        set_widget_style(lbl_notes_title, "QLabel { font-size: 13px; font-weight: 500; color: #edf1f0; background: transparent; border: none; }")
+        set_widget_style(lbl_notes_title, "QLabel { font-size: 10px; font-weight: 700; color: rgba(255, 255, 255, 0.35); background: transparent; border: none; }")
         self.btn_pop_note = self._text_action("Floating copy", "Open a floating copy of these notes")
         self.btn_pop_note.clicked.connect(self._on_tear_off)
         notes_hdr.addWidget(lbl_notes_title)
@@ -270,14 +294,20 @@ class HomeTabView(QWidget):
         self.txt_notes = QTextEdit()
         self.txt_notes.setMinimumHeight(64)
         self.txt_notes.setPlaceholderText("Jot something down...")
+        notes_pal = self.txt_notes.palette()
+        notes_pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(255, 255, 255, 64))
+        self.txt_notes.setPalette(notes_pal)
         set_widget_style(self.txt_notes, """
             QTextEdit {
-                background: rgba(255, 255, 255, 0.025);
-                border: 1px solid rgba(255, 255, 255, 0.05);
-                border-radius: 10px;
+                background: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(255, 255, 255, 0.04);
+                border-radius: 8px;
                 padding: 10px;
                 color: #f1f5f9;
-                font-size: 11.5px;
+                font-size: 12px;
+            }
+            QTextEdit:focus {
+                border: 1px solid rgba(100, 160, 240, 0.4);
             }
         """)
         self._notes_file = data_path("home_notes.txt")
@@ -298,13 +328,13 @@ class HomeTabView(QWidget):
         grid.addWidget(card_notes, 1, 0)
 
         # -------------------------------------------------------------
-        # Card 4: Quick Shelf & Calculator (Option 1 Bento)
+        # Card 4: Quick Shelf & Calculator
         # -------------------------------------------------------------
         card_shelf = CardFrame(self)
         self.card_shelf = card_shelf
         l_shelf = QVBoxLayout(card_shelf)
         l_shelf.setContentsMargins(18, 14, 18, 14)
-        l_shelf.setSpacing(8)
+        l_shelf.setSpacing(6)
 
         shelf_hdr = QHBoxLayout()
         self.lbl_shelf_status = QLabel("Shelf · 0 files")
@@ -316,24 +346,24 @@ class HomeTabView(QWidget):
         shelf_hdr.addWidget(self.btn_clear_shelf)
         l_shelf.addLayout(shelf_hdr)
 
-        # Staged preview frame
+        # Primary staged file row (latest file with Copy/Pin actions)
         self.shelf_preview_frame = QFrame()
         set_widget_style(self.shelf_preview_frame, """
             QFrame {
-                background: rgba(255, 255, 255, 0.025);
-                border: 1px dashed rgba(255, 255, 255, 0.1);
-                border-radius: 10px;
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
             }
             QFrame:hover {
-                background: rgba(255, 255, 255, 0.045);
-                border: 1px dashed rgba(255, 255, 255, 0.18);
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.14);
             }
         """)
         spf_layout = QHBoxLayout(self.shelf_preview_frame)
         spf_layout.setContentsMargins(6, 4, 6, 4)
         spf_layout.setSpacing(8)
 
-        self.shelf_thumb = DraggableThumbnail(size=34, border_radius=6, parent=self)
+        self.shelf_thumb = DraggableThumbnail(size=30, border_radius=6, parent=self)
         spf_layout.addWidget(self.shelf_thumb)
 
         meta_spf = QVBoxLayout()
@@ -341,17 +371,17 @@ class HomeTabView(QWidget):
         self.lbl_shelf_item_name = QLabel("Screenshot.png")
         self.lbl_shelf_item_name.setTextFormat(Qt.TextFormat.PlainText)
         self.lbl_shelf_item_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.lbl_shelf_item_name, "font-size: 12px; font-weight: 500; color: #f1f5f9; background: transparent; border: none;")
+        set_widget_style(self.lbl_shelf_item_name, "font-size: 12px; font-weight: 600; color: #ffffff; background: transparent; border: none;")
         self.lbl_shelf_item_sub = QLabel()
-        set_widget_style(self.lbl_shelf_item_sub, "font-size: 11px; color: #a7b2bf; background: transparent; border: none;")
+        set_widget_style(self.lbl_shelf_item_sub, "font-size: 10.5px; color: rgba(255, 255, 255, 0.45); background: transparent; border: none;")
         meta_spf.addWidget(self.lbl_shelf_item_name)
         meta_spf.addWidget(self.lbl_shelf_item_sub)
         spf_layout.addLayout(meta_spf, stretch=1)
 
         self.btn_home_shelf_chat = QPushButton("Copy")
         self.btn_home_shelf_chat.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_home_shelf_chat.setToolTip("Copy image to clipboard")
-        self.btn_home_shelf_chat.setMinimumWidth(64)
+        self.btn_home_shelf_chat.setToolTip("Copy file or image to clipboard")
+        self.btn_home_shelf_chat.setMinimumWidth(52)
         spf_layout.addWidget(self.btn_home_shelf_chat)
 
         self.btn_home_shelf_pin = QPushButton("Pin")
@@ -365,25 +395,27 @@ class HomeTabView(QWidget):
         # Empty hint
         self.lbl_shelf_empty = QLabel("Drop files here")
         self.lbl_shelf_empty.setToolTip("Drop files or use Windows + Shift + S to take a snip")
-        set_widget_style(self.lbl_shelf_empty, "font-size: 12px; color: #a7b2bf; background: transparent; border: none;")
+        set_widget_style(self.lbl_shelf_empty, "font-size: 12px; color: rgba(255, 255, 255, 0.45); background: transparent; border: none;")
         l_shelf.addWidget(self.lbl_shelf_empty)
 
         # Inline Calculator
         calc_row = QHBoxLayout()
+        calc_row.setSpacing(6)
         self.input_calc = QLineEdit()
         self.input_calc.setPlaceholderText("Calculate…")
         self.input_calc.setAccessibleName("Calculator")
         set_widget_style(self.input_calc, """
             QLineEdit {
                 background: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.07);
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #f8fafc;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 4px 10px;
+                color: #ffffff;
+                font-family: 'Segoe UI';
                 font-size: 11px;
             }
             QLineEdit:focus {
-                border: 1px solid rgba(10, 132, 255, 0.5);
+                border: 1px solid rgba(10, 132, 255, 0.6);
                 background: rgba(255, 255, 255, 0.07);
             }
         """)
@@ -435,32 +467,34 @@ class HomeTabView(QWidget):
         """)
         row.addWidget(self.lbl_music_art)
 
-        metadata = QVBoxLayout()
-        metadata.setSpacing(2)
+        metadata = QHBoxLayout()
+        metadata.setSpacing(6)
         metadata.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.lbl_music_title = QLabel(self._track_title)
+        self.lbl_music_sep = QLabel("·")
         self.lbl_music_artist = QLabel()
         for label, style in (
-            (self.lbl_music_title, "font-size: 14px; font-weight: 500; color: #edf1f0;"),
-            (self.lbl_music_artist, "font-size: 12px; color: #a7adab;"),
+            (self.lbl_music_title, "font-size: 14px; font-weight: 700; color: #ffffff;"),
+            (self.lbl_music_sep, "font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, 0.35);"),
+            (self.lbl_music_artist, "font-size: 12px; font-weight: 400; color: rgba(255, 255, 255, 0.55);"),
         ):
             label.setTextFormat(Qt.TextFormat.PlainText)
-            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             set_widget_style(label, style)
-            metadata.addWidget(label)
+        self.lbl_music_title.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        self.lbl_music_artist.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        metadata.addWidget(self.lbl_music_title)
+        metadata.addWidget(self.lbl_music_sep)
+        metadata.addWidget(self.lbl_music_artist, 1)
+        self.lbl_music_sep.hide()
         self.lbl_music_artist.hide()
         row.addLayout(metadata, 1)
 
         actions = QHBoxLayout()
-        actions.setSpacing(4)
-        self.btn_player_drop = self._text_action("Players", "Switch media player")
-        self.btn_player_drop.clicked.connect(self.player_menu_requested.emit)
-        self.btn_player_drop.setMaximumWidth(150)
-        self.btn_player_drop.hide()
-        actions.addWidget(self.btn_player_drop)
+        actions.setSpacing(8)
+        actions.addStretch(1)
 
         transport = QHBoxLayout()
-        transport.setSpacing(2)
+        transport.setSpacing(4)
         self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous track", size=32, font_size=16, is_fluent=True)
         self.btn_ctrl_play = IconButton(Icons.PLAY, "Play", size=32, font_size=16, is_fluent=True)
         self.btn_ctrl_next = IconButton(Icons.NEXT, "Next track", size=32, font_size=16, is_fluent=True)
@@ -468,7 +502,39 @@ class HomeTabView(QWidget):
             button.setEnabled(False)
             transport.addWidget(button)
         actions.addLayout(transport)
-        self.mini_layout.addLayout(actions)
+        actions.addStretch(1)
+
+        self.btn_player_drop = QPushButton("Players")
+        self.btn_player_drop.setToolTip("Switch media player")
+        self.btn_player_drop.setAccessibleName("Switch media player")
+        self.btn_player_drop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_player_drop.setFixedHeight(26)
+        self.btn_player_drop.setMaximumWidth(150)
+        set_widget_style(self.btn_player_drop, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 13px;
+                color: rgba(255, 255, 255, 0.85);
+                font-family: 'Segoe UI';
+                font-size: 11.5px;
+                font-weight: 500;
+                padding: 2px 10px;
+                outline: none;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.11);
+                color: #ffffff;
+            }
+            QPushButton:focus {
+                border: 1px solid rgba(190, 211, 242, 0.7);
+            }
+        """)
+        self.btn_player_drop.clicked.connect(self.player_menu_requested.emit)
+        self.btn_player_drop.hide()
+        actions.addWidget(self.btn_player_drop)
+
+        self.mini_layout.addLayout(actions, 1)
         self.daily_audio = QWidget(self.mini_player)
         self.daily_audio_layout = QHBoxLayout(self.daily_audio)
         self.daily_audio_layout.setContentsMargins(4, 0, 0, 0)
@@ -482,7 +548,9 @@ class HomeTabView(QWidget):
         self._track_artist = artist if available else ""
         self.lbl_music_title.setToolTip(self._track_title)
         self.lbl_music_artist.setToolTip(self._track_artist)
-        self.lbl_music_artist.setVisible(bool(self._track_artist))
+        has_artist = bool(self._track_artist)
+        self.lbl_music_sep.setVisible(has_artist)
+        self.lbl_music_artist.setVisible(has_artist)
         for button in (self.btn_ctrl_prev, self.btn_ctrl_play, self.btn_ctrl_next):
             button.setEnabled(available)
         self._update_home_player_chrome()
@@ -496,8 +564,14 @@ class HomeTabView(QWidget):
         self.mini_layout.setContentsMargins(12, 4 if compact_idle else 8, 12, 4 if compact_idle else 8)
 
     def _elide_track_labels(self):
-        for label, text in ((self.lbl_music_title, self._track_title), (self.lbl_music_artist, self._track_artist)):
-            label.setText(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(40, label.width())))
+        avail = max(80, self.mini_player.width() // 2 - 64)
+        title_cap = int(avail * 0.6) if self._track_artist else avail
+        self.lbl_music_title.setText(self.lbl_music_title.fontMetrics().elidedText(
+            self._track_title, Qt.TextElideMode.ElideRight, max(48, title_cap)))
+        if self._track_artist:
+            artist_w = max(40, self.lbl_music_artist.width() or int(avail * 0.4))
+            self.lbl_music_artist.setText(self.lbl_music_artist.fontMetrics().elidedText(
+                self._track_artist, Qt.TextElideMode.ElideRight, artist_w))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -554,32 +628,16 @@ class HomeTabView(QWidget):
         cards = {"clock": self.card_clock, "controls": self.card_controls,
                  "notes": self.card_notes, "shelf": self.card_shelf}
         visible = [key for key in self._card_order if key not in self._hidden_sections]
-        wide = self._dashboard_wide
         player_visible = "player" not in self._hidden_sections
-        deck_grid = name == "Deck" and wide and len(visible) == 4 and player_visible
-        slots = home_slots(name, len(visible), wide=deck_grid if name == "Deck" else wide)
+        slots = home_slots(name, len(visible))
         for card in (*cards.values(), self.mini_player):
             grid.removeWidget(card)
         self.layout().removeWidget(self.mini_player)
         for key, slot in zip(visible, slots):
             grid.addWidget(cards[key], *slot)
-        if deck_grid:
-            grid.addWidget(self.mini_player, 0, 2)
-        else:
-            # Daily keeps its media and transport strip beneath the content.
-            self.layout().insertWidget(1 if name == "Daily" else 0, self.mini_player)
-        self.mini_layout.setDirection(QBoxLayout.Direction.TopToBottom if deck_grid else QBoxLayout.Direction.LeftToRight)
-        daily_strip = name == "Daily" and wide and player_visible and "controls" in visible
-        if daily_strip != (self.daily_audio_layout.count() > 0):
-            for i, slider in enumerate((self.slider_vol, self.slider_bright)):
-                if daily_strip:
-                    self.controls_layout.removeWidget(slider)
-                    self.daily_audio_layout.addWidget(slider)
-                else:
-                    self.daily_audio_layout.removeWidget(slider)
-                    self.controls_layout.insertWidget(i + 1, slider)
-                slider.show()
-        self.daily_audio.setVisible(daily_strip)
+        self.layout().insertWidget(0, self.mini_player)
+        self.mini_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+        self.daily_audio.setVisible(False)
         for key, card in cards.items():
             card.setVisible(key in visible)
         self.mini_player.setVisible(player_visible)
@@ -587,89 +645,56 @@ class HomeTabView(QWidget):
         self.home_scroll.setVisible(body_visible)
         self.btn_customize.setVisible(not (player_visible or body_visible))
         columns = LAYOUT_THEMES[name]["columns"]
-        for column in range(3):
-            grid.setColumnStretch(column, columns[column] if column < len(columns)
-                                  and (column < 2 or any(slot[1] + slot[3] > 2 for slot in slots)) else 0)
+        for column in range(2):
+            grid.setColumnStretch(column, columns[column] if column < len(columns) else 1)
         rows = max((row + span for row, _, span, _ in slots), default=0)
-        for row in range(3):
-            grid.setRowStretch(row, int(row < rows and (name != "Daily" or row == 1)))
+        for row in range(max(2, rows)):
+            grid.setRowStretch(row, 1)
 
     def _apply_design(self, name):
-        classic = name == "Classic"
         for widget, source in self._design_sources.items():
             set_widget_style(widget, source)
         for label in self._design_headers:
-            label.setVisible(name == "Instrument" or (name == "Console" and self._dashboard_wide))
-            set_widget_style(label, "background: rgba(255,255,255,0.08); color: #b6c3bd; font-family: 'Consolas'; font-size: 10px; padding: 3px 6px; border: none;")
+            label.hide()
         controls_title = self._design_headers[1]
-        controls_title.setText("System controls" if classic else "CONTROLS")
-        if classic:
-            controls_title.show()
-            set_widget_style(controls_title, "font-size: 14px; font-weight: 600; color: #edf1f0;")
-            for card in (self.card_clock, self.card_notes, self.card_shelf):
-                set_widget_style(card, "CardFrame#cardFrame { background: transparent; border: none; }")
-            set_widget_style(self.lbl_big_time, "font-size: 40px; font-weight: 500; color: #edf1f0;")
-            set_widget_style(self.lbl_date, "font-size: 13px; color: #a7adab;")
-            set_widget_style(self.txt_notes, """
-                QTextEdit { background: rgba(255,255,255,0.035); border: 1px solid transparent;
-                            border-radius: 6px; color: #edf1f0; padding: 8px; font-size: 13px; }
-                QTextEdit:focus { border-color: #a7adab; }
-            """)
+        controls_title.setText("System controls")
+        controls_title.show()
+        set_widget_style(controls_title, "font-size: 14px; font-weight: 600; color: #edf1f0;")
+        for card in (self.card_clock, self.card_notes, self.card_shelf):
+            set_widget_style(card, "CardFrame#cardFrame { background: transparent; border: none; }")
+        set_widget_style(self.lbl_big_time, "font-size: 40px; font-weight: 500; color: #edf1f0;")
+        set_widget_style(self.lbl_date, "font-size: 13px; color: #a7adab;")
+        set_widget_style(self.txt_notes, """
+            QTextEdit { background: rgba(255,255,255,0.035); border: 1px solid transparent;
+                        border-radius: 6px; color: #edf1f0; padding: 8px; font-size: 13px; }
+            QTextEdit:focus { border-color: #a7adab; }
+        """)
         clock_layout = self.card_clock.layout()
         before, after = clock_layout.count() - 2, clock_layout.count() - 1
-        old_index, new_index = (before, after) if classic else (after, before)
-        if clock_layout.itemAt(old_index).spacerItem() is not None:
-            spacer = clock_layout.takeAt(old_index).spacerItem()
-            clock_layout.insertSpacerItem(new_index, spacer)
-            clock_layout.setStretch(new_index, 1)
+        if clock_layout.itemAt(before).spacerItem() is not None:
+            spacer = clock_layout.takeAt(before).spacerItem()
+            clock_layout.insertSpacerItem(after, spacer)
+            clock_layout.setStretch(after, 1)
         labels = ("Keep awake", "Microphone", "Focus", "Screen snip",
                   "Pick color", "Calculator", "Bluetooth", "Lock PC")
         for (button, original, source), label in zip(self.quick_actions, labels):
-            button.setText(label if classic else original)
-            set_widget_style(button, source + " QPushButton { text-align: left; }" if classic else source)
+            button.setText(label)
+            set_widget_style(button, source + " QPushButton { text-align: left; }")
         self._update_home_player_chrome()
-        daily = name == "Daily"
-        self.clock_face.setDirection(QBoxLayout.Direction.LeftToRight if daily else QBoxLayout.Direction.TopToBottom)
+        self.clock_face.setDirection(QBoxLayout.Direction.TopToBottom)
         self.clock_face.removeWidget(self.lbl_date)
         self.clock_detail.removeWidget(self.lbl_date)
         self.clock_detail.removeWidget(self.lbl_weather_text)
-        if daily:
-            self.clock_face.insertWidget(0, self.lbl_date, 1)
-            self.clock_detail.addWidget(self.lbl_weather_text)
-        else:
-            self.clock_detail.insertWidget(0 if classic else 1, self.lbl_date)
-            self.clock_detail.addWidget(self.lbl_weather_text)
-        metric_columns = 2 if name in ("Deck", "Console") and self._dashboard_wide else 4
+        self.clock_detail.insertWidget(0, self.lbl_date)
+        self.clock_detail.addWidget(self.lbl_weather_text)
         for i, metric in enumerate(self.metrics):
             self.telemetry_grid.removeWidget(metric)
-            self.telemetry_grid.addWidget(metric, i // metric_columns, i % metric_columns,
-                                          Qt.AlignmentFlag.AlignLeft)
-            metric.apply_design(name)
-        if name == "Paper":
-            set_widget_style(self.lbl_big_time, "font-family: 'Cambria'; font-size: 34px; font-weight: 400; color: #f0ece3; background: transparent; border: none;")
-            set_widget_style(self.txt_notes, "QTextEdit { background: transparent; border: none; padding: 4px 0; font-size: 14px; color: #e8e5de; selection-background-color: #40584a; }")
-        elif name == "Instrument":
-            set_widget_style(self.lbl_big_time, "font-family: 'Consolas'; font-size: 28px; font-weight: 600; color: #e7ede9; background: transparent; border: none;")
-            for label in (self.lbl_notes_title, self.lbl_shelf_status):
-                set_widget_style(label, "background: rgba(255,255,255,0.08); color: #b6c3bd; font-family: 'Consolas'; font-size: 10px; padding: 3px 6px; border: none;")
-        elif name == "Flat":
-            set_widget_style(self.lbl_big_time, "font-family: 'Segoe UI'; font-size: 28px; font-weight: 600; color: #edf1f0; background: transparent; border: none;")
-        elif daily:
-            set_widget_style(self.lbl_date, "QLabel { font-family: 'Georgia'; font-size: 29px; color: #edf1f0; }")
-            set_widget_style(self.lbl_big_time, "QLabel { font-family: 'Georgia'; font-size: 23px; color: #edf1f0; }")
-            set_widget_style(self.txt_notes, "QTextEdit { font-family: 'Georgia'; font-size: 15px; color: #edf1f0; border: none; background: transparent; }")
-        elif name in ("Deck", "Console"):
-            family = "Bahnschrift" if name == "Console" else "Segoe UI"
-            set_widget_style(self.lbl_big_time, f"QLabel {{ font-family: '{family}'; font-size: 30px; font-weight: 600; color: #edf1f0; }}")
+            self.telemetry_grid.addWidget(metric, 0, i, Qt.AlignmentFlag.AlignLeft)
+            metric.apply_design("Classic")
 
     def fit_height(self, available_height, width=None, *, max_height=None):
         """Fit the cards first and scroll any extra content on shorter displays."""
         width = self.width() if width is None else width
-        wide = width >= 1000
-        if self._dashboard_wide != wide and self._layout_name in ("Deck", "Daily", "Console"):
-            self._dashboard_wide = wide
-            self._arrange_dashboard()
-            self._apply_design(self._layout_name)
         self._position_screen_time(width)
         spec = LAYOUT_THEMES.get(self._layout_name, LAYOUT_THEMES["Classic"])
         cards = (self.card_clock, self.card_controls, self.card_notes, self.card_shelf)
@@ -1088,41 +1113,30 @@ class MusicTabView(QWidget):
                 self._fitted_art_key = key
 
     def _art_radius(self):
-        return {"Deck": 12, "Daily": 1, "Console": 0}.get(
-            self._layout_name, LAYOUT_THEMES[self._layout_name]["radius"] if self._layout_name in ("Flat", "Paper", "Instrument") else 10)
+        return 10
 
     def apply_layout(self, name):
-        self._layout_name = name if name in LAYOUT_THEMES else "Classic"
-        spec = LAYOUT_THEMES[self._layout_name]
-        horizontal = name in ("Flat", "Paper", "Console")
-        if name == "Deck":
-            if self.player_shell.indexOf(self.lbl_large_art) < 0:
-                self.identity_layout.removeWidget(self.lbl_large_art)
-                self.player_shell.insertWidget(0, self.lbl_large_art, 0, Qt.AlignmentFlag.AlignVCenter)
-        elif self.player_shell.indexOf(self.lbl_large_art) >= 0:
+        self._layout_name = "Classic"
+        spec = LAYOUT_THEMES["Classic"]
+        if self.player_shell.indexOf(self.lbl_large_art) >= 0:
             self.player_shell.removeWidget(self.lbl_large_art)
             self.identity_layout.insertWidget(0, self.lbl_large_art)
-        self.identity_layout.setDirection(QBoxLayout.Direction.LeftToRight if horizontal else QBoxLayout.Direction.TopToBottom)
-        left = horizontal or name in ("Deck", "Daily")
-        alignment = (Qt.AlignmentFlag.AlignLeft if left else Qt.AlignmentFlag.AlignHCenter) | Qt.AlignmentFlag.AlignVCenter
+        self.identity_layout.setDirection(QBoxLayout.Direction.TopToBottom)
+        alignment = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
         self.lbl_title.setAlignment(alignment)
         self.lbl_artist.setAlignment(alignment)
-        if name != "Deck":
-            self.identity_layout.setAlignment(self.lbl_large_art, Qt.AlignmentFlag.AlignLeft if name == "Daily" else Qt.AlignmentFlag.AlignCenter)
-        family = {"Daily": "Georgia", "Console": "Bahnschrift"}.get(name, "Segoe UI")
-        font_size = {"Deck": 24, "Daily": 26, "Console": 23}.get(name, 18)
-        set_widget_style(self.lbl_title, f"font-family: '{family}'; font-size: {font_size}px; font-weight: 500; color: #edf1f0;")
-        for control, glyph, word in ((self.btn_prev, Icons.PREV, "Previous"), (self.btn_next, Icons.NEXT, "Next")):
-            control.setText(word if name == "Console" else glyph)
-            control.setFixedWidth(72 if name == "Console" else 36)
-            set_widget_style(control, self._text_transport_style() if name == "Console" else self._transport_styles[control])
-        self.btn_play.setFixedWidth(60 if name == "Console" else 36)
+        self.identity_layout.setAlignment(self.lbl_large_art, Qt.AlignmentFlag.AlignCenter)
+        set_widget_style(self.lbl_title, "font-family: 'Segoe UI'; font-size: 18px; font-weight: 500; color: #edf1f0;")
+        for control, glyph in ((self.btn_prev, Icons.PREV), (self.btn_next, Icons.NEXT)):
+            control.setText(glyph)
+            control.setFixedWidth(36)
+            set_widget_style(control, self._transport_styles[control])
+        self.btn_play.setFixedWidth(36)
         set_widget_style(self.btn_play, self._play_button_style())
-        self.btn_play.setText(("Pause" if self._is_playing else "Play") if name == "Console" else (Icons.PAUSE if self._is_playing else Icons.PLAY))
-        self.lyrics_widget.apply_design(name)
+        self.btn_play.setText(Icons.PAUSE if self._is_playing else Icons.PLAY)
+        self.lyrics_widget.apply_design("Classic")
         for label in (self.lbl_elapsed, self.lbl_remaining):
-            family = "Consolas" if name in ("Instrument", "Console") else "Segoe UI"
-            set_widget_style(label, f"font-family: '{family}'; font-size: 11px; color: #a7adab;")
+            set_widget_style(label, "font-family: 'Segoe UI'; font-size: 11px; color: #a7adab;")
         columns = self.layout()
         columns.removeWidget(self.player_card)
         columns.removeWidget(self.lyrics_widget)
@@ -1141,16 +1155,7 @@ class MusicTabView(QWidget):
             self.fit_height(self.height())
             QTimer.singleShot(0, self, self._elide_metadata)
 
-    @staticmethod
-    def _text_transport_style():
-        return "QPushButton { font-family: 'Consolas'; font-size: 11px; background: transparent; color: #edf1f0; border: 1px solid #53664d; padding: 0; } QPushButton:hover, QPushButton:focus { border: 1px solid #9ebc79; } QPushButton:disabled { color: #64748b; }"
-
     def _play_button_style(self):
-        if self._layout_name == "Console":
-            return self._text_transport_style()
-        if self._layout_name in ("Deck", "Daily"):
-            tint = "#416393" if self._layout_name == "Deck" else "#784c3d"
-            return f"QPushButton {{ background: {tint}; color: #edf1f0; border: none; border-radius: 16px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 16px; padding: 0; }} QPushButton:hover {{ background: #567486; }} QPushButton:focus {{ border: 1px solid #a7bbc7; }} QPushButton:disabled {{ color: #64748b; }}"
         return "QPushButton { background: transparent; color: #edf1f0; border: none; border-radius: 4px; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 17px; padding: 0; } QPushButton:hover { background: rgba(255,255,255,0.08); } QPushButton:pressed { background: rgba(255,255,255,0.14); } QPushButton:disabled { color: #64748b; } QPushButton:focus { border: 1px solid #a7bbc7; }"
 
     def _set_surface(self, color):
@@ -1159,10 +1164,9 @@ class MusicTabView(QWidget):
         if is_light_theme() and self._surface_mode == "artwork":
             hue, saturation, _, _ = color.getHsl()
             color = QColor.fromHsl(max(0, hue), min(saturation, 65), 242)
-        spec = LAYOUT_THEMES[self._layout_name]
-        background = "transparent" if self._layout_name in ("Minimal", "Flat", "Paper", "Daily") and self._surface_mode == "theme" else color.name()
-        if self._layout_name in ("Deck", "Console") and self._surface_mode == "theme":
-            background = "rgba(160,193,244,0.12)" if self._layout_name == "Deck" else "rgba(168,191,154,0.07)"
+        spec = LAYOUT_THEMES["Classic"]
+        background = color.name()
+        set_widget_style(self.player_card, f"QFrame#mediaCard {{ background: {background}; border: none; border-radius: {spec['radius']}px; }} QFrame#mediaCard QLabel {{ background: transparent; border: none; }}")
         set_widget_style(self.player_card, f"QFrame#mediaCard {{ background: {background}; border: none; border-radius: {spec['radius']}px; }} QFrame#mediaCard QLabel {{ background: transparent; border: none; }}")
 
     @property

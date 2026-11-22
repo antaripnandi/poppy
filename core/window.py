@@ -966,7 +966,7 @@ class DynamicNotchWindow(QWidget):
 
     def _update_clock(self):
         now = datetime.now()
-        show_seconds = self.tab_home.lbl_big_time.isVisible() and self._appearance.get("layout") != "Classic"
+        show_seconds = self.tab_home.lbl_big_time.isVisible()
         time_short = now.strftime("%I:%M %p").lstrip("0")
         self.lbl_clock.setText(time_short)
         self.tab_home.lbl_big_time.setText(now.strftime("%I:%M:%S %p").lstrip("0") if show_seconds else time_short)
