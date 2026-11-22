@@ -209,26 +209,31 @@ class AnimatedTabStrip(QWidget):
     """Compact tab navigation with text-only selection."""
     tab_changed = Signal(int)
 
-    def __init__(self, tab_items: list[tuple[str, str]], accent="#0a84ff", parent=None):
+    def __init__(self, tab_items: list[tuple[str, str]], accent="#f28c5a", parent=None):
         super().__init__(parent)
         self._current_index = -1
+        self._accent = accent
         self.buttons: list[QPushButton] = []
 
         set_widget_style(self, """
             AnimatedTabStrip {
                 background-color: transparent;
                 border: none;
-                border-radius: 10px;
-                padding: 2px 3px;
+                border-radius: 12px;
+                padding: 2px 2px;
             }
         """)
 
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(3, 2, 3, 2)
-        self._layout.setSpacing(2)
+        self._layout.setContentsMargins(2, 2, 2, 2)
+        self._layout.setSpacing(4)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.set_tabs(tab_items)
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self._update_buttons_style()
 
     def set_tabs(self, tab_items: list[tuple[str, str]]):
         """Dynamically replace tabs in the strip without recreating the widget."""
@@ -259,33 +264,41 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_buttons_style(self):
-        name = current_layout()
+        accent = getattr(self, "_accent", "#f28c5a")
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             btn.setChecked(is_active)
-            color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
-            font_weight = "600" if is_active else "500"
-            btn.setFixedHeight(34 if name == "Deck" else 28)
+            btn.setFixedHeight(30)
             label = btn.property("tabLabel")
-            btn.setText(label.upper() if name == "Console" else label)
-            btn.setIcon(self._tab_icon(label, is_light_theme()) if name == "Deck" else QIcon())
+            btn.setText(label)
+            btn.setIcon(QIcon())
             btn.setIconSize(QSize(15, 15))
-            family = {"Daily": "Georgia", "Console": "Consolas"}.get(name, "Segoe UI")
+            if is_active:
+                bg = accent
+                color = "#0e1117"
+                font_weight = "700"
+                hover_bg = accent
+            else:
+                bg = "transparent"
+                color = "rgba(255, 255, 255, 0.55)" if not is_light_theme() else "rgba(0, 0, 0, 0.65)"
+                font_weight = "500"
+                hover_bg = "rgba(255, 255, 255, 0.08)" if not is_light_theme() else "rgba(0, 0, 0, 0.06)"
             set_widget_style(btn, f"""
                 QPushButton {{
-                    background-color: transparent;
+                    background-color: {bg};
                     border: none;
-                    border-radius: 11px;
+                    border-radius: 12px;
                     color: {color};
-                    font-family: '{family}';
+                    font-family: 'Segoe UI', -apple-system, sans-serif;
                     font-size: 12px;
                     font-weight: {font_weight};
-                    padding: 3px {6 if name == "Deck" else 9}px;
+                    padding: 3px 12px;
                 }}
                 QPushButton:hover {{
-                    color: #ffffff;
+                    background-color: {hover_bg};
+                    color: {"#0e1117" if is_active else ("#ffffff" if not is_light_theme() else "#000000")};
                 }}
-                QPushButton:focus {{ border: 1px solid rgba(190,211,242,0.65); }}
+                QPushButton:focus {{ border: 1px solid rgba(242, 140, 90, 0.65); }}
             """)
 
     @staticmethod
@@ -455,18 +468,10 @@ class CardFrame(QFrame):
     def apply_layout(self, name, *, outline=True):
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
         self.setProperty("layoutTheme", name)
-        border = "1px solid rgba(255,255,255,0.08)" if outline and name != "Minimal" else "none"
-        if name == "Flat":
-            border = "none; border-top: 1px solid rgba(255,255,255,0.13)"
-        elif name == "Paper":
-            border = "none"
-        elif name == "Daily":
-            border = "none; border-top: 1px solid rgba(236,222,194,0.25)"
-        elif name in ("Instrument", "Console"):
-            border = "1px solid rgba(255,255,255,0.16)"
-        elif name == "Deck":
-            border = "1px solid rgba(172,199,247,0.22)"
-        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255,255,255,{spec['fill']}); border: {border}; border-radius: {spec['radius']}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
+        border = "1px solid rgba(255, 255, 255, 0.08)" if outline else "none"
+        fill_alpha = spec.get('fill', 0.05) if not is_light_theme() else 0.04
+        radius = spec.get('radius', 16)
+        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255, 255, 255, {fill_alpha}); border: {border}; border-radius: {radius}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
 class CircularProgressRing(QWidget):
@@ -713,29 +718,28 @@ class AudioVisualizerBars(QWidget):
 
 
 class MetricLabel(QLabel):
-    """Clean hardware telemetry label."""
+    """Clean hardware telemetry label with tactile chip styling matching Hitodama."""
     def __init__(self, tag: str, val: str = "--%", parent=None):
         super().__init__(parent)
         self.tag = tag
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setText(f"{tag} {val}")
         self._default_style = """
             QLabel {
-                background: transparent;
-                border: none;
-                color: #a7adab;
-                font-family: 'Segoe UI';
+                background: rgba(255, 255, 255, 0.045);
+                border: 1px solid rgba(255, 255, 255, 0.075);
+                border-radius: 8px;
+                color: rgba(255, 255, 255, 0.85);
+                font-family: 'Segoe UI', -apple-system, sans-serif;
                 font-size: 11px;
-                padding: 3px 2px;
+                font-weight: 600;
+                padding: 4px 6px;
             }
         """
         self.apply_design(current_layout())
 
     def apply_design(self, name):
-        if name in ("Flat", "Paper", "Instrument"):
-            family = "Consolas" if name == "Instrument" else "Segoe UI"
-            set_widget_style(self, f"QLabel {{ background: transparent; border: none; color: #a6b5b0; font-family: '{family}'; font-size: 10px; padding: 2px 5px 9px 5px; }}")
-        else:
-            set_widget_style(self, self._default_style)
+        set_widget_style(self, self._default_style)
         self.update()
 
     def set_val(self, val_str: str):
@@ -823,39 +827,39 @@ class SquircleTileButton(QPushButton):
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
 
         if checked:
-            fill = QColor(37, 99, 235, 36) if light else QColor(100, 160, 240, 51)
-            border = QColor(37, 99, 235, 115) if light else QColor(100, 160, 240, 128)
+            fill = QColor(234, 110, 50) if light else QColor(242, 140, 90)
+            border = QColor(234, 110, 50) if light else QColor(242, 140, 90)
         elif pressed:
-            fill = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 28)
+            fill = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 26)
             border = QColor(0, 0, 0, 32) if light else QColor(255, 255, 255, 36)
         elif self._hovered:
             fill = QColor(0, 0, 0, 16) if light else QColor(255, 255, 255, 20)
             border = QColor(0, 0, 0, 26) if light else QColor(255, 255, 255, 28)
         else:
-            fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 9)
-            border = QColor(0, 0, 0, 20) if light else QColor(255, 255, 255, 16)
+            fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 11)
+            border = QColor(0, 0, 0, 20) if light else QColor(255, 255, 255, 18)
 
         if keyboard_focused(self):
-            border = QColor("#2563eb") if light else QColor(190, 211, 242, 180)
+            border = QColor("#2563eb") if light else QColor(242, 140, 90)
 
         painter.setBrush(QBrush(fill))
         painter.setPen(QPen(border, 1.0))
-        painter.drawRoundedRect(rect, 10.0, 10.0)
+        painter.drawRoundedRect(rect, 12.0, 12.0)
 
         w, h = self.width(), self.height()
-        icon_color = (QColor("#1d4ed8") if light else QColor("#dbeafe")) if checked else (
-            QColor("#1e293b") if light else QColor("#eef2f6")
+        icon_color = (QColor("#ffffff") if light else QColor("#0e1117")) if checked else (
+            QColor("#1e293b") if light else QColor("#ffffff")
         )
-        label_color = (QColor("#1d4ed8") if light else QColor("#dbeafe")) if checked else (
-            QColor(30, 41, 59, 175) if light else QColor(255, 255, 255, 170)
+        label_color = (QColor("#ffffff") if light else QColor("#0e1117")) if checked else (
+            QColor(30, 41, 59, 175) if light else QColor(255, 255, 255, 175)
         )
 
         icon_font = QFont(get_fluent_font_family())
-        icon_font.setPixelSize(13 if self._compact else 15)
+        icon_font.setPixelSize(13 if self._compact else 16)
         painter.setFont(icon_font)
         painter.setPen(icon_color)
-        icon_h = int(h * 0.56)
-        painter.drawText(QRect(0, 2 if self._compact else 4, w, icon_h),
+        icon_h = int(h * 0.54)
+        painter.drawText(QRect(0, 3 if self._compact else 5, w, icon_h),
                          Qt.AlignmentFlag.AlignCenter, self._icon_glyph)
 
         lbl_font = QFont("Segoe UI")
@@ -864,7 +868,7 @@ class SquircleTileButton(QPushButton):
         painter.setFont(lbl_font)
         painter.setPen(label_color)
         elided = painter.fontMetrics().elidedText(self._tile_label, Qt.TextElideMode.ElideRight, max(12, w - 6))
-        painter.drawText(QRect(3, icon_h - 1, max(1, w - 6), h - icon_h),
+        painter.drawText(QRect(3, icon_h - 1, max(1, w - 6), h - icon_h - 2),
                          Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, elided)
 
 
@@ -1286,7 +1290,7 @@ class CapsuleSlider(QSlider):
     Renders as a 30px rounded pill with fluid fill, embedded icon, and clean numeric readout.
     Fully backwards compatible with standard QSlider APIs.
     """
-    def __init__(self, icon: str = "", accent: str = "#0a84ff", orientation=Qt.Orientation.Horizontal,
+    def __init__(self, icon: str = "", accent: str = "#f28c5a", orientation=Qt.Orientation.Horizontal,
                  parent=None, *, compact_track=False):
         super().__init__(orientation, parent)
         self._icon = icon
@@ -1377,7 +1381,7 @@ class CapsuleSlider(QSlider):
             painter.setClipPath(path)
 
             fill_color = QColor(self._accent)
-            fill_color.setAlpha(200)
+            fill_color.setAlpha(240)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(fill_color))
             painter.drawRect(fill_rect)

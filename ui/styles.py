@@ -68,8 +68,8 @@ THEME_PRESETS = {
         "name": "Pure black",
         "bg": "#000000",
         "gradient": "#000000",
-        "accent": "#0a84ff",
-        "desc": "The original flat black",
+        "accent": "#f28c5a",
+        "desc": "Deep velvet black with Hitodama peach accent",
     },
 }
 

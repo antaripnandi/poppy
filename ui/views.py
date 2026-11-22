@@ -162,21 +162,21 @@ class HomeTabView(QWidget):
         self.lbl_big_time = QLabel("12:11:29 AM")
         set_widget_style(self.lbl_big_time, """
             QLabel {
-                font-size: 32px;
-                font-weight: 500;
-                color: #edf1f0;
+                font-size: 36px;
+                font-weight: 700;
+                color: #ffffff;
                 background: transparent;
                 border: none;
             }
         """)
         self.lbl_date = QLabel("Monday, 5 October")
-        set_widget_style(self.lbl_date, "QLabel { font-size: 11.5px; color: #94a3b8; font-weight: 500; background: transparent; border: none; }")
+        set_widget_style(self.lbl_date, "QLabel { font-size: 11.5px; color: rgba(255, 255, 255, 0.65); font-weight: 500; background: transparent; border: none; }")
 
         self.lbl_weather_text = WeatherLabel()
         self.lbl_weather_text.setText("Fetching weather…")
         self.lbl_weather_text.setTextFormat(Qt.TextFormat.PlainText)
         self.lbl_weather_text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.lbl_weather_text, "font-size: 12px; color: #b9bfbd; background: transparent;")
+        set_widget_style(self.lbl_weather_text, "font-size: 12.5px; font-weight: 600; color: #f28c5a; background: transparent;")
         self.lbl_weather_text.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_weather_text.setToolTip("Refresh weather")
         self.lbl_weather_text.mousePressEvent = lambda e: self.weather_refresh_requested.emit()
@@ -216,8 +216,8 @@ class HomeTabView(QWidget):
         l_ctrl.setContentsMargins(18, 14, 18, 14)
         l_ctrl.setSpacing(6)
 
-        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=True)
-        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self, compact_track=True)
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False)
+        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self, compact_track=False)
         for slider, label in ((self.slider_vol, "Volume"), (self.slider_bright, "Brightness")):
             slider.setAccessibleName(label)
             slider.setToolTip(label)
@@ -494,10 +494,33 @@ class HomeTabView(QWidget):
         actions.addStretch(1)
 
         transport = QHBoxLayout()
-        transport.setSpacing(4)
-        self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous track", size=32, font_size=16, is_fluent=True)
-        self.btn_ctrl_play = IconButton(Icons.PLAY, "Play", size=32, font_size=16, is_fluent=True)
-        self.btn_ctrl_next = IconButton(Icons.NEXT, "Next track", size=32, font_size=16, is_fluent=True)
+        transport.setSpacing(6)
+        self.btn_ctrl_prev = IconButton(Icons.PREV, "Previous track", size=32, font_size=15, is_fluent=True)
+        self.btn_ctrl_play = IconButton(Icons.PLAY, "Play", size=34, font_size=15, is_fluent=True)
+        set_widget_style(self.btn_ctrl_play, """
+            QPushButton {
+                background: #f28c5a;
+                border: none;
+                border-radius: 11px;
+                color: #0e1117;
+                font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+                font-size: 15px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #ff9f70;
+                color: #0e1117;
+            }
+            QPushButton:pressed {
+                background: #e07a4a;
+                color: #0e1117;
+            }
+            QPushButton:disabled {
+                background: rgba(255, 255, 255, 0.08);
+                color: rgba(255, 255, 255, 0.35);
+            }
+        """)
+        self.btn_ctrl_next = IconButton(Icons.NEXT, "Next track", size=32, font_size=15, is_fluent=True)
         for button in (self.btn_ctrl_prev, self.btn_ctrl_play, self.btn_ctrl_next):
             button.setEnabled(False)
             transport.addWidget(button)
@@ -1732,9 +1755,9 @@ class ShelfTabView(QWidget):
         # Header
         hdr = QHBoxLayout()
         self.lbl_title = QLabel("Shelf")
-        set_widget_style(self.lbl_title, "QLabel { font-size: 14px; font-weight: 500; color: #dce3df; background: transparent; border: none; }")
+        set_widget_style(self.lbl_title, "QLabel { font-size: 15px; font-weight: 700; color: #ffffff; background: transparent; border: none; }")
         self.btn_clear = QPushButton("Clear shelf")
-        set_widget_style(self.btn_clear, "font-size: 12px; padding: 5px 10px; border-radius: 6px; background: #242829;")
+        set_widget_style(self.btn_clear, "font-size: 11.5px; padding: 5px 12px; border-radius: 9px; background: rgba(255, 255, 255, 0.05); color: rgba(255, 255, 255, 0.7); border: 1px solid rgba(255, 255, 255, 0.08);")
         self.btn_clear.clicked.connect(self.shelf_mgr.clear_shelf)
         hdr.addWidget(self.lbl_title)
         hdr.addStretch()
@@ -1742,6 +1765,7 @@ class ShelfTabView(QWidget):
         self.btn_downloads.hide()
         hdr.addWidget(self.btn_downloads)
         self.btn_add = QPushButton("Add files")
+        set_widget_style(self.btn_add, "font-size: 11.5px; padding: 5px 12px; border-radius: 9px; background: #f28c5a; color: #0e1117; font-weight: 600; border: none;")
         self.btn_add.clicked.connect(self._browse_files)
         hdr.addWidget(self.btn_add)
         hdr.addWidget(self.btn_clear)

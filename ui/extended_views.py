@@ -395,11 +395,40 @@ class ClipboardTabView(QWidget):
         self.input_search = QLineEdit()
         self.input_search.setPlaceholderText("Search clipboard history")
         self.input_search.setAccessibleName("Search clipboard history")
+        set_widget_style(self.input_search, """
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                padding: 6px 12px;
+                color: #ffffff;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border: 1px solid rgba(242, 140, 90, 0.65);
+                background: rgba(255, 255, 255, 0.06);
+            }
+        """)
         self.input_search.textChanged.connect(self._render_clips)
         hdr.addWidget(self.input_search, stretch=1)
 
         self.btn_clear = QPushButton("Clear unpinned")
         self.btn_clear.setToolTip("Remove unpinned entries from clipboard history")
+        set_widget_style(self.btn_clear, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                padding: 6px 12px;
+                color: rgba(255, 255, 255, 0.75);
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.09);
+                color: #ffffff;
+            }
+        """)
         self.btn_clear.clicked.connect(self.clip_mgr.clear_all)
         hdr.addWidget(self.btn_clear)
         layout.addLayout(hdr)
@@ -459,11 +488,12 @@ class ClipboardTabView(QWidget):
             set_widget_style(row, """
                 QFrame {
                     background: rgba(255, 255, 255, 0.04);
-                    border: none;
-                    border-radius: 8px;
+                    border: 1px solid rgba(255, 255, 255, 0.07);
+                    border-radius: 10px;
                 }
                 QFrame:hover {
-                    background: rgba(255, 255, 255, 0.08);
+                    background: rgba(255, 255, 255, 0.07);
+                    border-color: rgba(255, 255, 255, 0.12);
                 }
             """)
             r_l = QHBoxLayout(row)
@@ -773,6 +803,20 @@ class LauncherTabView(QWidget):
         self.input_search = QLineEdit()
         self.input_search.setPlaceholderText("Search tabs, actions, apps, or calculate (e.g. 24 * 7)")
         self.input_search.setAccessibleName("Search commands and apps")
+        set_widget_style(self.input_search, """
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.045);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 11px;
+                padding: 8px 14px;
+                color: #ffffff;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border: 1px solid rgba(242, 140, 90, 0.65);
+                background: rgba(255, 255, 255, 0.06);
+            }
+        """)
         self.input_search.textChanged.connect(self._render_results)
         self.input_search.returnPressed.connect(self._launch_current)
         layout.addWidget(self.input_search)
@@ -783,6 +827,7 @@ class LauncherTabView(QWidget):
         self.results.itemActivated.connect(lambda item: self._launch_current())
         layout.addWidget(self.results, 1)
         self.status = QLabel("Enter to open · Esc to close")
+        set_widget_style(self.status, "font-size: 11px; color: rgba(255, 255, 255, 0.45); padding: 4px 2px;")
         layout.addWidget(self.status)
         for key, offset in (("Down", 1), ("Up", -1)):
             shortcut = QShortcut(QKeySequence(key), self.input_search)
