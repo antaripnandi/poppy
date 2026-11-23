@@ -469,12 +469,12 @@ class CardFrame(QFrame):
         self.setObjectName("cardFrame")
         self.apply_layout(current_layout())
 
-    def apply_layout(self, name, *, outline=True):
+    def apply_layout(self, name, *, outline=False):
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
         self.setProperty("layoutTheme", name)
         border = "1px solid rgba(255, 255, 255, 0.08)" if outline else "none"
         fill_alpha = spec.get('fill', 0.05) if not is_light_theme() else 0.04
-        radius = spec.get('radius', 16)
+        radius = spec.get('radius', 18)
         set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255, 255, 255, {fill_alpha}); border: {border}; border-radius: {radius}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
@@ -997,17 +997,19 @@ class ControlPillTile(QPushButton):
                 fill = QColor(0, 0, 0, 16) if light else QColor(255, 255, 255, 20)
             else:
                 fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 11)
-            border = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 18)
+            border = Qt.PenStyle.NoPen
             ink = QColor("#18202a") if light else QColor("#f4f7fb")
             sub_ink = QColor(32, 40, 51, 145) if light else QColor(255, 255, 255, 128)
             badge_bg = QColor(0, 0, 0, 15) if light else QColor(255, 255, 255, 16)
-            div_col = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 18)
+            div_col = QColor(0, 0, 0, 0) if light else QColor(255, 255, 255, 0)
 
         if keyboard_focused(self):
             border = QColor("#2563eb") if light else QColor(190, 211, 242, 210)
+            painter.setPen(QPen(border, 1.0))
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
 
         painter.setBrush(QBrush(fill))
-        painter.setPen(QPen(border, 1.0))
         painter.drawRoundedRect(rect, radius, radius)
 
         # Left circular icon badge
@@ -2363,8 +2365,8 @@ class WeekCalendarStrip(QWidget):
         # Next event capsule
         event_y = 90.0
         event_rect = QRectF(12.0, event_y, w - 24.0, 40.0)
-        painter.setPen(QPen(QColor(255, 255, 255, 14), 1.0))
-        painter.setBrush(QBrush(QColor(255, 255, 255, 8)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(255, 255, 255, 10)))
         painter.drawRoundedRect(event_rect, 12.0, 12.0)
 
         # Pink accent vertical line
@@ -2447,7 +2449,7 @@ class PomodoroFocusWidget(QWidget):
         for lbl in (self.lbl_h, self.lbl_m):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-            set_widget_style(lbl, "background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; color: #ffffff; font-size: 11px; font-weight: 600; padding: 4px 10px;")
+            set_widget_style(lbl, "background: rgba(255,255,255,0.04); border: none; border-radius: 8px; color: #ffffff; font-size: 11px; font-weight: 600; padding: 4px 10px;")
             top_row.addWidget(lbl, 1)
         self.lbl_h.mouseReleaseEvent = lambda e: self._increment_hours()
         self.lbl_m.mouseReleaseEvent = lambda e: self._increment_minutes()
@@ -2465,8 +2467,8 @@ class PomodoroFocusWidget(QWidget):
             btn.clicked.connect(lambda _, m=mins: self._select_preset(m))
             set_widget_style(btn, f"""
                 QPushButton {{
-                    background: rgba(255,255,255,0.05);
-                    border: 1px solid rgba(255,255,255,0.08);
+                    background: rgba(255,255,255,0.04);
+                    border: none;
                     border-radius: 6px;
                     color: rgba(255,255,255,0.7);
                     font-size: 10px;
@@ -2511,7 +2513,7 @@ class PomodoroFocusWidget(QWidget):
         set_widget_style(self.btn_reset, """
             QPushButton {
                 background: rgba(255,255,255,0.06);
-                border: 1px solid rgba(255,255,255,0.09);
+                border: none;
                 color: #ffffff;
                 font-size: 12px;
                 font-weight: 600;
@@ -2681,19 +2683,18 @@ class TodoChecklistWidget(QWidget):
         bot_row = QHBoxLayout()
         bot_row.setSpacing(8)
         self.txt_new = QLineEdit()
-        self.txt_new.setPlaceholderText("+ Add a to-do...")
+        self.txt_new.setPlaceholderText("+ Add a task...")
         set_widget_style(self.txt_new, """
             QLineEdit {
-                background: rgba(255,255,255,0.05);
-                border: 1px dashed rgba(255,255,255,0.15);
+                background: rgba(255,255,255,0.04);
+                border: none;
                 border-radius: 10px;
                 color: #ffffff;
                 font-size: 12px;
-                padding: 6px 12px;
+                padding: 7px 12px;
             }
             QLineEdit:focus {
-                border: 1px solid rgba(242,140,90,0.6);
-                background: rgba(255,255,255,0.08);
+                background: rgba(255,255,255,0.07);
             }
         """)
         self.txt_new.returnPressed.connect(self._add_item)

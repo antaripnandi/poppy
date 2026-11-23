@@ -955,7 +955,7 @@ class TodayTabView(QWidget):
 
         col1_w = QWidget(self)
         col1_w.setLayout(col1)
-        col1_w.setFixedWidth(190)
+        col1_w.setFixedWidth(220)
         main_layout.addWidget(col1_w)
 
         # ---------------------------------------------------------
@@ -983,17 +983,24 @@ class TodayTabView(QWidget):
 
         col2_w = QWidget(self)
         col2_w.setLayout(col2)
-        main_layout.addWidget(col2_w, 2)
+        main_layout.addWidget(col2_w, 3)
 
         # ---------------------------------------------------------
         # Column 3 (Right): Today To-Do Checklist
         # ---------------------------------------------------------
         card_todo = CardFrame(self)
+        card_todo.setMinimumWidth(280)
         ct_lay = QVBoxLayout(card_todo)
         ct_lay.setContentsMargins(8, 8, 8, 8)
         self.todo_widget = TodoChecklistWidget(card_todo, accent=self._accent)
         ct_lay.addWidget(self.todo_widget)
         main_layout.addWidget(card_todo, 2)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(960, 460)
+
+    def sizeHint(self) -> QSize:
+        return QSize(1060, 500)
 
     def update_weather(self, data: dict):
         temp = data.get("temp", "--")

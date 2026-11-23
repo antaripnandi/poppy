@@ -343,8 +343,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")  # "Notch" or "Pill"
         self._collapsed_w = app_cfg.get("collapsed_width", 240)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = max(app_cfg["open_width"], 480)
-        self._open_h = max(app_cfg["open_height"], 360)
+        self._open_w = max(app_cfg.get("open_width", 1040), 980)
+        self._open_h = max(app_cfg.get("open_height", 520), 480)
         self._corner_radius = app_cfg.get("corner_radius", 22)
         self._top_offset = app_cfg.get("top_offset", 0)
         self._display = app_cfg.get("display", "Primary")
@@ -650,7 +650,6 @@ class DynamicNotchWindow(QWidget):
             "Clipboard": 3,
             "Shelf": 4,
             "Apps": 5,
-            "Wallpaper": 6,
             "Power": 7
         })
         self._refresh_tab_names()
@@ -761,7 +760,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_apps.launched.connect(self._collapse_to_pill)
         self.tab_stack.addWidget(self.tab_apps)
 
-        # 6: Wallpaper Tab
+        # 6: Wallpaper Tab (Hidden/Legacy tab, not in active strip)
         self.tab_wallpaper = WallpaperTabView(self, accent=self._theme["accent"])
         self.tab_stack.addWidget(self.tab_wallpaper)
 
@@ -895,7 +894,7 @@ class DynamicNotchWindow(QWidget):
         self._refresh_peek_surface()
 
     def _refresh_tab_names(self):
-        canonical_tabs = ["Controls", "Today", "Stats", "Clipboard", "Shelf", "Apps", "Wallpaper", "Power"]
+        canonical_tabs = ["Controls", "Today", "Stats", "Clipboard", "Shelf", "Apps", "Power"]
         enabled = self.config.get("tabs", {}).get("enabled", canonical_tabs)
         migrated_enabled = []
         for name in enabled:
@@ -2405,8 +2404,8 @@ class DynamicNotchWindow(QWidget):
         self._style = app_cfg.get("style", "Notch")
         self._collapsed_w = app_cfg.get("collapsed_width", 240)
         self._collapsed_h = app_cfg.get("collapsed_height", 30)
-        self._open_w = max(app_cfg["open_width"], 480)
-        self._open_h = max(app_cfg["open_height"], 360)
+        self._open_w = max(app_cfg.get("open_width", 1040), 980)
+        self._open_h = max(app_cfg.get("open_height", 520), 480)
         self._corner_radius = app_cfg.get("corner_radius", 22)
         self._top_offset = app_cfg.get("top_offset", 0)
         self._display = app_cfg.get("display", "Primary")
@@ -2911,8 +2910,15 @@ class DynamicNotchWindow(QWidget):
             chrome_height = margins.top() + margins.bottom() + layout.spacing() * (layout.count() - 1)
             chrome_height += sum(layout.itemAt(i).minimumSize().height()
                                  for i in range(layout.count()) if layout.itemAt(i).widget() is not self.tab_stack)
-            preferred_height = min(max(self._open_h, 480), max_height)
-            w = min(max(self._open_w, 780, page.minimumSizeHint().width() + 28), max(1, screen.width() - 16))
+            preferred_height = min(max(self._open_h, 510), max_height)
+            min_tab_w = 980 if page in (
+                getattr(self, "tab_today", None),
+                getattr(self, "tab_stats", None),
+                getattr(self, "tab_controls", None),
+                getattr(self, "tab_apps", None),
+                getattr(self, "tab_power", None)
+            ) else 780
+            w = min(max(self._open_w, min_tab_w, page.minimumSizeHint().width() + 28), max(1, screen.width() - 16))
             home_height = 0
             if page is self.tab_home:
                 home_height = page.fit_height(preferred_height - chrome_height, w, max_height=max_height - chrome_height)

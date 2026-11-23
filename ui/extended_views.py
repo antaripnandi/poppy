@@ -2536,11 +2536,36 @@ class StatsTabView(QWidget):
         except Exception:
             return "-- / -- GB"
 
+    def _get_accurate_boot_or_wake_time(self) -> float:
+        cached = getattr(self, "_cached_boot_wake_time", None)
+        if cached is not None:
+            return cached
+        ts = None
+        try:
+            import subprocess
+            from datetime import datetime
+            cmd = "(Get-WinEvent -FilterHashtable @{LogName='System'; Id=@(1, 107, 12, 6005)} -MaxEvents 1).TimeCreated.ToString('o')"
+            out = subprocess.check_output(['powershell', '-NoProfile', '-Command', cmd], text=True, timeout=3).strip()
+            if out:
+                dt = datetime.fromisoformat(out)
+                ts = dt.timestamp()
+        except Exception:
+            pass
+        if ts is None:
+            try:
+                import psutil
+                ts = psutil.boot_time()
+            except Exception:
+                import time
+                ts = time.time()
+        self._cached_boot_wake_time = ts
+        return ts
+
     def _get_initial_uptime_str(self) -> str:
         try:
-            import psutil
             import time
-            up_secs = int(time.time() - psutil.boot_time())
+            ts = self._get_accurate_boot_or_wake_time()
+            up_secs = max(0, int(time.time() - ts))
             hrs = up_secs // 3600
             mins = (up_secs % 3600) // 60
             return f"{hrs} h {mins} m"
@@ -2549,12 +2574,12 @@ class StatsTabView(QWidget):
 
     def _get_boot_str(self) -> str:
         try:
-            import psutil
             from datetime import datetime
-            dt = datetime.fromtimestamp(psutil.boot_time())
-            return dt.strftime("Booted %b %d, %I:%M %p")
+            ts = self._get_accurate_boot_or_wake_time()
+            dt = datetime.fromtimestamp(ts)
+            return dt.strftime("Awoke %b %d, %I:%M %p")
         except Exception:
-            return "Booted recently"
+            return "Active recently"
 
     def _refresh_stats(self):
         if not self.isVisible():
@@ -2635,7 +2660,7 @@ class StatsTabView(QWidget):
             self._last_net_bytes = (net.bytes_recv, net.bytes_sent)
             self._last_net_time = curr_time
 
-            up_sec = int(time.time() - psutil.boot_time())
+            up_sec = max(0, int(time.time() - self._get_accurate_boot_or_wake_time()))
             up_h = up_sec // 3600
             up_m = (up_sec % 3600) // 60
             self.lbl_up_val.setText(f"{up_h} h {up_m} m")
