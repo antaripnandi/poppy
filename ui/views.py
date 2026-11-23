@@ -2629,7 +2629,23 @@ class ShelfTabView(QWidget):
                 QApplication.clipboard().setMimeData(mime)
 
     def _action_rename(self):
-        pass
+        if self._selected_card and hasattr(self._selected_card, "item"):
+            item = self._selected_card.item
+            path = getattr(item, "path", None)
+            if path and os.path.exists(path):
+                from PySide6.QtWidgets import QInputDialog
+                old_name = Path(path).name
+                new_name, ok = QInputDialog.getText(self, "Rename item", "New file name:", text=old_name)
+                if ok and new_name and new_name.strip() and new_name.strip() != old_name:
+                    parent_dir = Path(path).parent
+                    new_path = str(parent_dir / new_name.strip())
+                    try:
+                        os.rename(path, new_path)
+                        item.path = new_path
+                        item.name = new_name.strip()
+                        self.refresh_items()
+                    except Exception:
+                        pass
 
     def _action_pin(self):
         if self._selected_card and hasattr(self._selected_card, "item"):

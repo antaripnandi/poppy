@@ -690,7 +690,16 @@ class ClipboardTabView(QWidget):
 
     def _action_paste(self):
         if self._selected_clip:
-            QApplication.clipboard().setText(self._selected_clip.get("text", ""))
+            txt = self._selected_clip.get("text", "")
+            QApplication.clipboard().setText(txt)
+            try:
+                import ctypes
+                ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0x56, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0x56, 0, 2, 0)
+                ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)
+            except Exception:
+                pass
 
     def _action_copy(self):
         if self._selected_clip:
@@ -2258,20 +2267,42 @@ class StatsTabView(QWidget):
         apps = []
         try:
             import psutil
+            friendly_names = {
+                "chrome": "Google Chrome",
+                "code": "Visual Studio Code",
+                "msedge": "Microsoft Edge",
+                "explorer": "File Explorer",
+                "spotify": "Spotify",
+                "obs64": "OBS Studio",
+                "obs": "OBS Studio",
+                "discord": "Discord",
+                "steam": "Steam",
+                "devenv": "Visual Studio",
+                "python": "Python",
+                "powershell": "PowerShell",
+                "cmd": "Command Prompt",
+                "firefox": "Firefox",
+                "brave": "Brave Browser",
+                "slack": "Slack",
+                "notepad": "Notepad",
+                "calculator": "Calculator",
+                "taskmgr": "Task Manager",
+            }
             proc_dict = {}
             for p in psutil.process_iter(['name', 'memory_info', 'cpu_percent']):
                 try:
                     p_name = p.info['name']
-                    if not p_name or p_name.lower() in ("system idle process", "system", "registry"):
+                    if not p_name or p_name.lower() in ("system idle process", "system", "registry", "svchost.exe"):
                         continue
                     clean_name = p_name[:-4] if p_name.lower().endswith(".exe") else p_name
+                    display_name = friendly_names.get(clean_name.lower(), clean_name)
                     mem = p.info['memory_info'].rss if p.info['memory_info'] else 0
                     cpu = p.info['cpu_percent'] or 0.0
-                    if clean_name in proc_dict:
-                        proc_dict[clean_name]['mem'] += mem
-                        proc_dict[clean_name]['cpu'] += cpu
+                    if display_name in proc_dict:
+                        proc_dict[display_name]['mem'] += mem
+                        proc_dict[display_name]['cpu'] += cpu
                     else:
-                        proc_dict[clean_name] = {'mem': mem, 'cpu': cpu}
+                        proc_dict[display_name] = {'mem': mem, 'cpu': cpu}
                 except Exception:
                     pass
 
@@ -2390,6 +2421,29 @@ class StatsTabView(QWidget):
             import time
             cpu_pct = psutil.cpu_percent(interval=None)
             self.gauge_cpu._dial.set_value(cpu_pct)
+            if hasattr(self.gauge_cpu, "_chip1"):
+                freq = psutil.cpu_freq()
+                if freq and freq.current:
+                    ghz = freq.current / 1000.0 if freq.current > 100 else freq.current
+                    self.gauge_cpu._chip1.setText(f"{ghz:.1f} GHz")
+            if hasattr(self.gauge_cpu, "_chip2"):
+                self.gauge_cpu._chip2.setText(f"{len(psutil.pids())} proc")
+
+            try:
+                import pynvml
+                if not getattr(self, "_nvml_inited", False):
+                    pynvml.nvmlInit()
+                    self._nvml_inited = True
+                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                gpu_util = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+                gpu_mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                used_gb = gpu_mem.used / (1024 ** 3)
+                tot_gb = gpu_mem.total / (1024 ** 3)
+                self.gauge_gpu._dial.set_value(float(gpu_util))
+                if hasattr(self.gauge_gpu, "_chip1"):
+                    self.gauge_gpu._chip1.setText(f"{used_gb:.1f} / {tot_gb:.1f} GB")
+            except Exception:
+                pass
 
             mem = psutil.virtual_memory()
             ram_pct = mem.percent
@@ -2422,6 +2476,11 @@ class StatsTabView(QWidget):
             up_h = up_sec // 3600
             up_m = (up_sec % 3600) // 60
             self.lbl_up_val.setText(f"{up_h} h {up_m} m")
+
+            # Periodic refresh of top apps list
+            self._proc_refresh_tick = getattr(self, "_proc_refresh_tick", 0) + 1
+            if self._proc_refresh_tick % 2 == 0:
+                self._populate_top_apps()
         except Exception:
             pass
 

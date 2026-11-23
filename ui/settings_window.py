@@ -279,15 +279,14 @@ def _make_scroll_area(page_widget: QWidget) -> QScrollArea:
 
 
 ALL_AVAILABLE_TABS = [
-    ("Home", "Home dashboard, clocks, volume/brightness, notes, shelf & calc"),
-    ("Music", "Now playing media player, timeline scrubbing & synced lyrics"),
-    ("Calendar", "Interactive monthly calendar, reminders & agenda view"),
-    ("Clipboard", "Clipboard history manager with search, copy & pinned clips"),
-    ("Docs", "Document reader, quick preview & PDF converter utilities"),
-    ("Desktops", "Windows Virtual Desktops switcher & active workspace overview"),
-    ("Timer", "Pomodoro sprint focus tracker with short/long break cycles"),
-    ("Shelf", "Staging drop shelf for files, dragged assets & snips"),
-    ("Notes", "In-notch scratchpad with detachable desktop floating notes")
+    ("Controls", "Quick system toggles, volume capsule, and now playing controls"),
+    ("Today", "Stacked clock, live weather, weekly calendar, focus timer, and to-do list"),
+    ("Stats", "Real-time CPU, GPU, RAM telemetry, disk, network, and process monitor"),
+    ("Clipboard", "2-column clipboard history, quick emoji bar, search, and preview"),
+    ("Shelf", "Staging drop shelf, folder cards, and quick file pinning"),
+    ("Apps", "App launcher, quick tags, starred and recent applications"),
+    ("Wallpaper", "Desktop wallpaper switcher with curated presets"),
+    ("Power", "Battery telemetry, lock, sleep, restart, and shutdown actions")
 ]
 
 
@@ -652,7 +651,7 @@ class SettingsWindow(QWidget):
 
         # Default tab dropdown
         self.combo_default_tab = QComboBox()
-        self.combo_default_tab.addItem("Dashboard (Home)")
+        self.combo_default_tab.addItem("Dashboard (Today)")
         for tab_name, _ in ALL_AVAILABLE_TABS:
             self.combo_default_tab.addItem(tab_name)
 
@@ -1670,11 +1669,11 @@ class SettingsWindow(QWidget):
         # Always retain one usable tab.
         enabled_tabs = [name for name, chk in self._tab_checkboxes.items() if chk.isChecked()]
         if not enabled_tabs:
-            enabled_tabs = ["Home"]
+            enabled_tabs = ["Today"]
 
         sel_dtab_txt = self.combo_default_tab.currentText()
         if self.combo_default_tab.currentIndex() == 0:
-            saved_dtab = "Smart"
+            saved_dtab = "Today"
         else:
             saved_dtab = sel_dtab_txt
 

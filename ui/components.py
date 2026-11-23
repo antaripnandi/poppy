@@ -2428,8 +2428,11 @@ class PomodoroFocusWidget(QWidget):
         self.lbl_m = QLabel("05 min")
         for lbl in (self.lbl_h, self.lbl_m):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
             set_widget_style(lbl, "background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; color: #ffffff; font-size: 11px; font-weight: 600; padding: 4px 10px;")
             top_row.addWidget(lbl, 1)
+        self.lbl_h.mouseReleaseEvent = lambda e: self._increment_hours()
+        self.lbl_m.mouseReleaseEvent = lambda e: self._increment_minutes()
         right_col.addLayout(top_row)
 
         # Presets row: 1m, 5m, 10m, 15m, 20m
@@ -2505,6 +2508,20 @@ class PomodoroFocusWidget(QWidget):
 
         right_col.addLayout(act_row)
         layout.addLayout(right_col, 1)
+
+    def _increment_hours(self):
+        curr_m = self._total_sec // 60
+        new_m = ((curr_m // 60 + 1) % 4) * 60 + (curr_m % 60)
+        if new_m <= 0:
+            new_m = 25
+        self._select_preset(new_m)
+
+    def _increment_minutes(self):
+        curr_m = self._total_sec // 60
+        new_m = (curr_m + 5) if (curr_m % 60) < 55 else (curr_m // 60) * 60
+        if new_m <= 0:
+            new_m = 5
+        self._select_preset(new_m)
 
     def _select_preset(self, mins: int):
         self._active_preset = mins
@@ -2703,13 +2720,13 @@ class TodoChecklistWidget(QWidget):
             r_lay.setContentsMargins(6, 0, 6, 0)
             r_lay.setSpacing(10)
 
-            btn_chk = QPushButton("✓" if todo.get("done") else "○")
+            btn_chk = QPushButton("✓" if todo.get("done") else "")
             btn_chk.setFixedSize(22, 22)
             btn_chk.setCursor(Qt.CursorShape.PointingHandCursor)
             if todo.get("done"):
-                set_widget_style(btn_chk, f"background: {self._accent.name()}; color: #0e1117; font-size: 11px; font-weight: 700; border-radius: 11px; border: none;")
+                set_widget_style(btn_chk, f"QPushButton {{ background: {self._accent.name()}; border: 2px solid {self._accent.name()}; color: #0e1117; font-size: 11px; font-weight: 800; border-radius: 11px; }}")
             else:
-                set_widget_style(btn_chk, "background: transparent; color: rgba(255,255,255,0.4); font-size: 13px; border-radius: 11px; border: 1px solid rgba(255,255,255,0.25);")
+                set_widget_style(btn_chk, "QPushButton { background: transparent; border: 2px solid rgba(255, 255, 255, 0.35); border-radius: 11px; } QPushButton:hover { border-color: #f28c5a; }")
             btn_chk.clicked.connect(lambda _, idx=i: self._toggle_done(idx))
             r_lay.addWidget(btn_chk)
 
