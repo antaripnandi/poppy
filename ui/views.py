@@ -22,7 +22,9 @@ from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, curr
 from poppy.ui.components import (
     IconButton, CircularProgressRing, MetricLabel, SquircleTileButton,
     CardFrame, DraggableThumbnail, ClickableSlider, SpotifyLyricsWidget,
-    ScreenTimeHomeWidget, CapsuleSlider, ScrollArea, PlaybackSlider
+    ScreenTimeHomeWidget, CapsuleSlider, ScrollArea, PlaybackSlider,
+    ControlPillTile, StatRingGauge, WaveformSeekBar, StackedClockWidget,
+    WeekCalendarStrip, PomodoroFocusWidget, TodoChecklistWidget
 )
 from poppy.ui.icons import Icons
 from poppy.core.storage import data_path, write_text
@@ -882,6 +884,359 @@ class HomeTabView(QWidget):
             f"{city}\n{temp}{unit} · {cond}\nHigh: {h}{unit} · Low: {l}{unit}\nHumidity: {hum}%\n(Click to Refresh)"
             if city else text
         )
+
+
+class TodayTabView(QWidget):
+    """
+    Hitodama-grade Bento Today Dashboard View (Image 1).
+    3-column tactile Bento layout:
+    - Left Column:
+      - Card 1: Stacked Clock (09 over ··· over 41, AM • Tue 29)
+      - Card 2: Weather Card (Amber Sun, 32°C, Mostly clear)
+    - Center Column:
+      - Card 3: 'This week' horizontal day-picker calendar strip + Next event pill
+      - Card 4: Pomodoro Focus Timer with circular dial (05:00), preset pills, Start/Reset
+    - Right Column:
+      - Card 5: 'Today' To-Do checklist with 0/1 badge, interactive checkmarks,
+        and '+ Add a to-do...' input field with peach arrow submit button.
+    """
+    layout_changed = Signal()
+    tear_off_requested = Signal()
+    pin_requested = Signal(str)
+
+    def __init__(self, parent=None, accent="#f28c5a"):
+        super().__init__(parent)
+        self._accent = accent
+        self._init_ui()
+
+    def _init_ui(self):
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(16, 8, 16, 10)
+        main_layout.setSpacing(14)
+
+        # ---------------------------------------------------------
+        # Column 1 (Left): Stacked Clock + Weather Bento Card
+        # ---------------------------------------------------------
+        col1 = QVBoxLayout()
+        col1.setSpacing(10)
+
+        # Card 1: Stacked Clock Card
+        card_stacked_clock = CardFrame(self)
+        c1_lay = QVBoxLayout(card_stacked_clock)
+        c1_lay.setContentsMargins(14, 12, 14, 12)
+        c1_lay.setSpacing(0)
+        self.stacked_clock = StackedClockWidget(card_stacked_clock, accent=self._accent)
+        c1_lay.addWidget(self.stacked_clock)
+        col1.addWidget(card_stacked_clock, 3)
+
+        # Card 2: Weather Bento Card
+        card_weather = CardFrame(self)
+        card_weather.setFixedHeight(105)
+        w_lay = QVBoxLayout(card_weather)
+        w_lay.setContentsMargins(14, 10, 14, 10)
+        w_lay.setSpacing(3)
+
+        sun_icon = QLabel("☀")
+        set_widget_style(sun_icon, "font-size: 24px; color: #fbbf24; background: transparent;")
+        w_lay.addWidget(sun_icon)
+
+        self.lbl_hitodama_temp = QLabel("32°C")
+        set_widget_style(self.lbl_hitodama_temp, "font-size: 22px; font-weight: 700; color: #ffffff; background: transparent;")
+        w_lay.addWidget(self.lbl_hitodama_temp)
+
+        self.lbl_hitodama_cond = QLabel("Mostly clear")
+        set_widget_style(self.lbl_hitodama_cond, "font-size: 11.5px; font-weight: 500; color: rgba(255,255,255,0.6); background: transparent;")
+        w_lay.addWidget(self.lbl_hitodama_cond)
+        col1.addWidget(card_weather, 2)
+
+        col1_w = QWidget(self)
+        col1_w.setLayout(col1)
+        col1_w.setFixedWidth(190)
+        main_layout.addWidget(col1_w)
+
+        # ---------------------------------------------------------
+        # Column 2 (Center): This week strip + Pomodoro Focus Timer
+        # ---------------------------------------------------------
+        col2 = QVBoxLayout()
+        col2.setSpacing(10)
+
+        # Card 3: This week strip
+        card_week = CardFrame(self)
+        cw_lay = QVBoxLayout(card_week)
+        cw_lay.setContentsMargins(12, 10, 12, 12)
+        self.calendar_strip = WeekCalendarStrip(card_week, accent=self._accent)
+        cw_lay.addWidget(self.calendar_strip)
+        col2.addWidget(card_week)
+
+        # Card 4: Pomodoro Focus Timer
+        card_pomo = CardFrame(self)
+        cp_lay = QVBoxLayout(card_pomo)
+        cp_lay.setContentsMargins(12, 8, 12, 8)
+        self.pomodoro_widget = PomodoroFocusWidget(card_pomo, accent=self._accent)
+        cp_lay.addWidget(self.pomodoro_widget)
+        col2.addWidget(card_pomo)
+
+        col2_w = QWidget(self)
+        col2_w.setLayout(col2)
+        main_layout.addWidget(col2_w, 2)
+
+        # ---------------------------------------------------------
+        # Column 3 (Right): Today To-Do Checklist
+        # ---------------------------------------------------------
+        card_todo = CardFrame(self)
+        ct_lay = QVBoxLayout(card_todo)
+        ct_lay.setContentsMargins(8, 8, 8, 8)
+        self.todo_widget = TodoChecklistWidget(card_todo, accent=self._accent)
+        ct_lay.addWidget(self.todo_widget)
+        main_layout.addWidget(card_todo, 2)
+
+    def update_weather(self, data: dict):
+        temp = data.get("temp", 32)
+        cond = data.get("condition", "Mostly clear")
+        unit = data.get("unit", "°C")
+        if hasattr(self, "lbl_hitodama_temp"):
+            self.lbl_hitodama_temp.setText(f"{temp}{unit}")
+        if hasattr(self, "lbl_hitodama_cond"):
+            self.lbl_hitodama_cond.setText(cond)
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self.stacked_clock.set_accent(accent)
+        self.calendar_strip.set_accent(accent)
+        self.pomodoro_widget.set_accent(accent)
+        self.todo_widget.set_accent(accent)
+
+
+class ControlsTabView(QWidget):
+    """
+    Hitodama-grade Controls tab view.
+    Featuring:
+    - 2x3 tactile squircle control tiles:
+      Wi-Fi, Bluetooth, Audio, Power, Night Light, Dark mode with active peach glow
+    - Thick capsule volume slider (32px) with embedded speaker icon and percentage readout
+    - Dedicated Now Playing card with '< Speakers' output pill, album art thumbnail,
+      playback controls (prev, light-blue play pill, next), and waveform seek bar.
+    """
+    wifi_menu_requested = Signal()
+    bluetooth_menu_requested = Signal()
+    audio_device_menu_requested = Signal()
+    power_options_requested = Signal()
+    night_light_toggle_requested = Signal()
+    dark_mode_toggle_requested = Signal()
+    volume_changed = Signal(int)
+    play_pause_clicked = Signal()
+    prev_clicked = Signal()
+    next_clicked = Signal()
+    seek_requested = Signal(float)
+    layout_changed = Signal()
+
+    def __init__(self, parent=None, accent="#f28c5a"):
+        super().__init__(parent)
+        self._accent = accent
+        self._is_playing = False
+        self._init_ui()
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(16, 12, 16, 14)
+        main_layout.setSpacing(12)
+
+        # 1. 2x3 Tactile Control Tiles Grid
+        grid = QGridLayout()
+        grid.setSpacing(8)
+
+        # Row 0: Wi-Fi, Bluetooth, Audio
+        self.tile_wifi = ControlPillTile(Icons.WIFI, "Wi-Fi", "Home 5G", "Wi-Fi settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
+        self.tile_wifi.setChecked(True)
+        self.tile_wifi.menu_requested.connect(self.wifi_menu_requested.emit)
+        grid.addWidget(self.tile_wifi, 0, 0)
+
+        self.tile_bt = ControlPillTile(Icons.BLUETOOTH, "Bluetooth", "Off", "Bluetooth settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
+        self.tile_bt.setChecked(False)
+        self.tile_bt.menu_requested.connect(self.bluetooth_menu_requested.emit)
+        grid.addWidget(self.tile_bt, 0, 1)
+
+        self.tile_audio = ControlPillTile(Icons.VOLUME, "Audio", "Speakers", "Audio devices", toggle=True, has_menu=True, accent=self._accent, parent=self)
+        self.tile_audio.setChecked(True)
+        self.tile_audio.menu_requested.connect(self.audio_device_menu_requested.emit)
+        grid.addWidget(self.tile_audio, 0, 2)
+
+        # Row 1: Power, Night Light, Dark mode
+        self.tile_power = ControlPillTile(Icons.POWER, "Power", "Power options", "Power options", toggle=False, has_menu=False, accent=self._accent, parent=self)
+        self.tile_power.clicked.connect(self.power_options_requested.emit)
+        grid.addWidget(self.tile_power, 1, 0)
+
+        self.tile_night = ControlPillTile(Icons.SHIELD, "Night Light", "Off", "Night light settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
+        self.tile_night.setChecked(False)
+        self.tile_night.clicked.connect(self.night_light_toggle_requested.emit)
+        grid.addWidget(self.tile_night, 1, 1)
+
+        self.tile_dark = ControlPillTile(Icons.COLOR, "Dark mode", "On", "Dark mode toggle", toggle=True, has_menu=False, accent=self._accent, parent=self)
+        self.tile_dark.setChecked(True)
+        self.tile_dark.clicked.connect(self.dark_mode_toggle_requested.emit)
+        grid.addWidget(self.tile_dark, 1, 2)
+
+        for col in range(3):
+            grid.setColumnStretch(col, 1)
+        main_layout.addLayout(grid)
+
+        # 2. Volume Capsule Slider
+        vol_box = QWidget(self)
+        vol_lay = QHBoxLayout(vol_box)
+        vol_lay.setContentsMargins(0, 2, 0, 2)
+        vol_lay.setSpacing(12)
+
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False)
+        self.slider_vol.setFixedHeight(34)
+        self.slider_vol.set_accent(self._accent)
+        self.slider_vol.setValue(64)
+        self.slider_vol.valueChanged.connect(self.volume_changed.emit)
+        vol_lay.addWidget(self.slider_vol, 1)
+
+        self.lbl_vol_pct = QLabel("64%")
+        set_widget_style(self.lbl_vol_pct, "font-size: 13px; font-weight: 700; color: #ffffff; background: transparent; min-width: 38px;")
+        self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_pct.setText(f"{v}%"))
+        vol_lay.addWidget(self.lbl_vol_pct)
+        main_layout.addWidget(vol_box)
+
+        # 3. Dedicated Now Playing Card
+        self.card_player = CardFrame(self)
+        card_lay = QVBoxLayout(self.card_player)
+        card_lay.setContentsMargins(18, 14, 18, 14)
+        card_lay.setSpacing(10)
+
+        # Top Output Device Pill (< Speakers)
+        top_pill_row = QHBoxLayout()
+        self.btn_output_device = QPushButton("< Speakers")
+        self.btn_output = self.btn_output_device
+        self.btn_output_device.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.btn_output_device, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 9px;
+                color: rgba(255, 255, 255, 0.75);
+                font-size: 11px;
+                font-weight: 600;
+                padding: 4px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
+        """)
+        self.btn_output_device.clicked.connect(self.audio_device_menu_requested.emit)
+        top_pill_row.addWidget(self.btn_output_device)
+        top_pill_row.addStretch()
+        card_lay.addLayout(top_pill_row)
+
+        # Middle Media Info & Controls
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(14)
+
+        # Artwork
+        self.lbl_art = QLabel()
+        self.lbl_art.setFixedSize(54, 54)
+        self.lbl_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_widget_style(self.lbl_art, "background: rgba(255, 255, 255, 0.08); border-radius: 12px; color: rgba(255, 255, 255, 0.4); font-size: 20px;")
+        self.lbl_art.setText("♫")
+        mid_row.addWidget(self.lbl_art)
+
+        # Title & Artist
+        meta_box = QVBoxLayout()
+        meta_box.setSpacing(2)
+        meta_box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_title = QLabel("lofi beats to study and relax")
+        set_widget_style(self.lbl_title, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
+        self.lbl_artist = QLabel("lofi radio")
+        set_widget_style(self.lbl_artist, "font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.55); background: transparent;")
+        meta_box.addWidget(self.lbl_title)
+        meta_box.addWidget(self.lbl_artist)
+        mid_row.addLayout(meta_box, 1)
+
+        # Transport pills (Prev, Play/Pause, Next)
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(8)
+
+        self.btn_prev = QPushButton("◀◀")
+        self.btn_prev.setFixedSize(36, 36)
+        self.btn_prev.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.btn_prev, "QPushButton { background: rgba(255, 255, 255, 0.06); border-radius: 18px; color: #ffffff; font-size: 11px; border: none; } QPushButton:hover { background: rgba(255, 255, 255, 0.12); }")
+        self.btn_prev.clicked.connect(self.prev_clicked.emit)
+        ctrl_row.addWidget(self.btn_prev)
+
+        # Light blue play pill
+        self.btn_play = QPushButton("▶")
+        self.btn_play.setFixedSize(52, 36)
+        self.btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.btn_play, "QPushButton { background: #93c5fd; border-radius: 18px; color: #0e1117; font-size: 14px; font-weight: 800; border: none; } QPushButton:hover { background: #bfdbfe; }")
+        self.btn_play.clicked.connect(self.play_pause_clicked.emit)
+        ctrl_row.addWidget(self.btn_play)
+
+        self.btn_next = QPushButton("▶▶")
+        self.btn_next.setFixedSize(36, 36)
+        self.btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.btn_next, "QPushButton { background: rgba(255, 255, 255, 0.06); border-radius: 18px; color: #ffffff; font-size: 11px; border: none; } QPushButton:hover { background: rgba(255, 255, 255, 0.12); }")
+        self.btn_next.clicked.connect(self.next_clicked.emit)
+        ctrl_row.addWidget(self.btn_next)
+
+        mid_row.addLayout(ctrl_row)
+        card_lay.addLayout(mid_row)
+
+        # Bottom Waveform Seek Bar
+        seek_row = QHBoxLayout()
+        seek_row.setSpacing(10)
+        self.lbl_pos = QLabel("22:57")
+        set_widget_style(self.lbl_pos, "font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.5); background: transparent;")
+        seek_row.addWidget(self.lbl_pos)
+
+        self.waveform_bar = WaveformSeekBar(self, accent="#93c5fd")
+        self.waveform_bar.set_duration(3735)
+        self.waveform_bar.set_position(1377)
+        self.waveform_bar.seek_requested.connect(self.seek_requested.emit)
+        seek_row.addWidget(self.waveform_bar, 1)
+
+        self.lbl_dur = QLabel("62:15")
+        set_widget_style(self.lbl_dur, "font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.5); background: transparent;")
+        seek_row.addWidget(self.lbl_dur)
+
+        card_lay.addLayout(seek_row)
+        main_layout.addWidget(self.card_player)
+
+        # Stub for lyrics button for compatibility
+        self.btn_lyrics = QPushButton("Lyrics", self)
+        self.btn_lyrics.setCheckable(True)
+        self.btn_lyrics.setChecked(False)
+        self.btn_lyrics.hide()
+
+    def set_track(self, title: str, artist: str, art_pixmap: QPixmap = None):
+        self.lbl_title.setText(title or "Nothing playing")
+        self.lbl_artist.setText(artist or "Play music on Windows")
+        if art_pixmap and not art_pixmap.isNull():
+            self.lbl_art.setPixmap(art_pixmap.scaled(54, 54, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.lbl_art.setText("♫")
+
+    def set_playing(self, is_playing: bool):
+        self._is_playing = is_playing
+        self.btn_play.setText("⏸" if is_playing else "▶")
+
+    def set_timeline(self, pos_sec: float, dur_sec: float):
+        if dur_sec > 0:
+            self.waveform_bar.set_duration(dur_sec)
+            self.waveform_bar.set_position(pos_sec)
+            m_pos, s_pos = int(pos_sec) // 60, int(pos_sec) % 60
+            m_dur, s_dur = int(dur_sec) // 60, int(dur_sec) % 60
+            self.lbl_pos.setText(f"{m_pos:02d}:{s_pos:02d}")
+            self.lbl_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
+
+    def set_accent(self, accent: str):
+        self._accent = accent
+        self.slider_vol.set_accent(accent)
+        self.tile_wifi.set_accent(accent)
+        self.tile_audio.set_accent(accent)
+        self.tile_dark.set_accent(accent)
+
 
 class MusicTabView(QWidget):
     """Desktop media player and lyrics columns with real session switching."""

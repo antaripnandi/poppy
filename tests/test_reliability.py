@@ -291,14 +291,15 @@ def test_timer_buttons_and_explicit_shelf_navigation():
 
 def test_popout_reuses_live_view_and_returns_it():
     window = DynamicNotchWindow()
-    window.tab_stack.setCurrentIndex(6)
+    idx = window.tab_stack.indexOf(window.tab_timer)
+    window.tab_stack.setCurrentIndex(idx)
     window._pop_out_current_tab()
     dialog = window._floating_windows[0]
     assert window.tab_timer.window() is dialog
     window.tab_timer.btn_toggle.click()
     assert window.pomodoro.is_running
     dialog.close()
-    assert window.tab_stack.widget(6) is window.tab_timer
+    assert window.tab_stack.widget(idx) is window.tab_timer
     window.close()
 
 

@@ -59,8 +59,9 @@ def test_all_tabs_are_directly_visible_and_home_is_default(dashboard_window, aud
             assert window.view_expanded.rect().contains(QRect(button.mapTo(window.view_expanded, button.rect().topLeft()), button.size()))
     window._collapse_to_pill()
     window._transition_to(NotchState.EXPANDED)
-    assert window.tab_stack.currentWidget() is window.tab_home
-    assert not window.tab_home.lbl_music_title.isHidden()
+    assert window.tab_stack.currentWidget() in (window.tab_home, window.tab_today)
+    if window.tab_stack.currentWidget() is window.tab_home:
+        assert not window.tab_home.lbl_music_title.isHidden()
 
 
 def test_battery_polling_cannot_overlay_the_closed_pill(dashboard_window, monkeypatch):

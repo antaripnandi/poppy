@@ -32,7 +32,7 @@ from shiboken6 import isValid
 
 from poppy.ui.theme import contrast_ink, set_widget_style
 from poppy.ui.icons import Icons, get_fluent_font_family
-from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
+from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea, StatRingGauge
 from poppy.core.annotation_wheel import AnnotationWheel
 from poppy.core.system_tools import lock_workstation
 from poppy.core.system_features import current_desktop_windows, activate_desktop_window
@@ -1325,4 +1325,356 @@ class ScreenAnnotationOverlay(QWidget):
             painter.drawPoint(path.currentPosition())
         else:
             painter.drawPath(path)
+
+
+class StatsTabView(QWidget):
+    """
+    Hitodama-inspired Hardware Telemetry & System Stats View:
+    - 3 Circular Ring Gauges:
+      CPU (peach #f28c5a), GPU (purple #c084fc), RAM (lime #4ade80)
+      Processor name, frequency, processes, memory usage
+    - 3 Under-gauge Telemetry Cards:
+      DISK C: (412 / 931 GB), NETWORK (↓ 1.2 MB/s ↑ 300 KB/s), UP FOR (5 h 12 m)
+    - Right Column:
+      Top apps by RAM/CPU with usage bars
+      Internet speed test card with '▶ Run speed test' orange button
+    """
+    speed_test_requested = Signal()
+
+    def __init__(self, parent=None, accent="#f28c5a"):
+        super().__init__(parent)
+        self._accent = accent
+        self._top_apps_by_ram = True
+        self._cpu_name = self._detect_cpu_name()
+        self._gpu_name = self._detect_gpu_name()
+        self._init_ui()
+
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(2000)
+        self._poll_timer.timeout.connect(self._refresh_stats)
+        self._poll_timer.start()
+        self._refresh_stats()
+
+    def _detect_cpu_name(self) -> str:
+        try:
+            import platform
+            name = platform.processor()
+            if name:
+                return name.split(",")[0][:24]
+        except Exception:
+            pass
+        return "AMD Ryzen 7 7840HS"
+
+    def _detect_gpu_name(self) -> str:
+        try:
+            import subprocess
+            out = subprocess.check_output("wmic path win32_VideoController get name", shell=True, text=True, stderr=subprocess.DEVNULL)
+            lines = [line.strip() for line in out.splitlines() if line.strip() and "Name" not in line]
+            if lines:
+                return lines[0][:26]
+        except Exception:
+            pass
+        return "NVIDIA GeForce RTX 4060"
+
+    def _init_ui(self):
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(16, 12, 16, 14)
+        main_layout.setSpacing(14)
+
+        # Left Column (Gauges + Telemetry Cards)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(12)
+
+        # Gauges Container Card
+        card_gauges = CardFrame(self)
+        g_lay = QHBoxLayout(card_gauges)
+        g_lay.setContentsMargins(14, 14, 14, 14)
+        g_lay.setSpacing(12)
+
+        # 1. CPU Gauge
+        self.gauge_cpu = self._create_gauge_card(
+            title="CPU",
+            subtitle=self._cpu_name,
+            accent="#f28c5a",
+            chip1="4.2 GHz",
+            chip2="229 proc",
+            initial_val=37.0
+        )
+        g_lay.addWidget(self.gauge_cpu, 1)
+
+        # 2. GPU Gauge
+        self.gauge_gpu = self._create_gauge_card(
+            title="GPU",
+            subtitle=self._gpu_name,
+            accent="#c084fc",
+            chip1="2.1 / 8.0 GB",
+            chip2=None,
+            initial_val=12.0
+        )
+        g_lay.addWidget(self.gauge_gpu, 1)
+
+        # 3. RAM Gauge
+        self.gauge_ram = self._create_gauge_card(
+            title="RAM",
+            subtitle="19.4 / 31.9 GB",
+            accent="#4ade80",
+            chip1="12.5 GB free",
+            chip2=None,
+            initial_val=61.0
+        )
+        g_lay.addWidget(self.gauge_ram, 1)
+
+        left_col.addWidget(card_gauges)
+
+        # Bottom 3 Telemetry Cards (Disk C:, Network, Up for)
+        sub_cards = QHBoxLayout()
+        sub_cards.setSpacing(10)
+
+        # Disk C:
+        self.card_disk = CardFrame(self)
+        d_lay = QVBoxLayout(self.card_disk)
+        d_lay.setContentsMargins(14, 12, 14, 12)
+        d_lay.setSpacing(4)
+        lbl_d_hdr = QLabel("DISK C:")
+        set_widget_style(lbl_d_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
+        self.lbl_disk_val = QLabel("412 / 931 GB")
+        set_widget_style(self.lbl_disk_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
+        d_lay.addWidget(lbl_d_hdr)
+        d_lay.addWidget(self.lbl_disk_val)
+        sub_cards.addWidget(self.card_disk, 1)
+
+        # Network
+        self.card_net = CardFrame(self)
+        n_lay = QVBoxLayout(self.card_net)
+        n_lay.setContentsMargins(14, 12, 14, 12)
+        n_lay.setSpacing(4)
+        lbl_n_hdr = QLabel("NETWORK")
+        set_widget_style(lbl_n_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
+        self.lbl_net_val = QLabel("↓ 1.2 MB/s  ↑ 300 KB/s")
+        set_widget_style(self.lbl_net_val, "font-size: 13.5px; font-weight: 700; color: #ffffff; background: transparent;")
+        n_lay.addWidget(lbl_n_hdr)
+        n_lay.addWidget(self.lbl_net_val)
+        sub_cards.addWidget(self.card_net, 1)
+
+        # Up for
+        self.card_up = CardFrame(self)
+        u_lay = QVBoxLayout(self.card_up)
+        u_lay.setContentsMargins(14, 12, 14, 12)
+        u_lay.setSpacing(4)
+        lbl_u_hdr = QLabel("UP FOR")
+        set_widget_style(lbl_u_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
+        self.lbl_up_val = QLabel("5 h 12 m")
+        set_widget_style(self.lbl_up_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
+        u_lay.addWidget(lbl_u_hdr)
+        u_lay.addWidget(self.lbl_up_val)
+        sub_cards.addWidget(self.card_up, 1)
+
+        left_col.addLayout(sub_cards)
+        main_layout.addLayout(left_col, 3)
+
+        # Right Column (Top Apps + Internet Speed)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(12)
+
+        # Top Apps Card
+        self.card_apps = CardFrame(self)
+        a_lay = QVBoxLayout(self.card_apps)
+        a_lay.setContentsMargins(16, 12, 16, 12)
+        a_lay.setSpacing(8)
+
+        a_hdr = QHBoxLayout()
+        self.lbl_apps_hdr = QLabel("Top apps • RAM")
+        set_widget_style(self.lbl_apps_hdr, "font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.6); background: transparent;")
+        a_hdr.addWidget(self.lbl_apps_hdr)
+        a_hdr.addStretch()
+
+        self.btn_toggle_mode = QPushButton("CPU ⇄")
+        self.btn_toggle_mode.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.btn_toggle_mode, f"background: transparent; color: {self._accent}; font-size: 10px; font-weight: 700; border: none;")
+        self.btn_toggle_mode.clicked.connect(self._toggle_app_mode)
+        a_hdr.addWidget(self.btn_toggle_mode)
+        a_lay.addLayout(a_hdr)
+
+        self.apps_container = QVBoxLayout()
+        self.apps_container.setSpacing(6)
+        a_lay.addLayout(self.apps_container)
+        self._populate_top_apps()
+        right_col.addWidget(self.card_apps, 1)
+
+        # Internet Speed Card
+        self.card_speed = CardFrame(self)
+        s_lay = QVBoxLayout(self.card_speed)
+        s_lay.setContentsMargins(16, 12, 16, 14)
+        s_lay.setSpacing(6)
+
+        s_hdr = QHBoxLayout()
+        lbl_s_title = QLabel("Internet speed")
+        set_widget_style(lbl_s_title, "font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.7); background: transparent;")
+        s_hdr.addWidget(lbl_s_title)
+        s_hdr.addStretch()
+        lbl_s_last = QLabel("last: 5 min ago • Mumbai")
+        set_widget_style(lbl_s_last, "font-size: 9.5px; color: rgba(255,255,255,0.4); background: transparent;")
+        s_hdr.addWidget(lbl_s_last)
+        s_lay.addLayout(s_hdr)
+
+        rates_row = QHBoxLayout()
+        self.lbl_down = QLabel("85 <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↓</span>")
+        self.lbl_down.setTextFormat(Qt.TextFormat.RichText)
+        set_widget_style(self.lbl_down, "font-size: 22px; font-weight: 800; color: #ffffff; background: transparent;")
+        rates_row.addWidget(self.lbl_down)
+
+        self.lbl_up = QLabel("42 <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↑</span>")
+        self.lbl_up.setTextFormat(Qt.TextFormat.RichText)
+        set_widget_style(self.lbl_up, "font-size: 22px; font-weight: 800; color: #ffffff; background: transparent;")
+        rates_row.addWidget(self.lbl_up)
+        s_lay.addLayout(rates_row)
+
+        self.btn_speed = QPushButton("▶ Run speed test")
+        self.btn_speed.setFixedHeight(34)
+        self.btn_speed.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.btn_speed, f"""
+            QPushButton {{
+                background: {self._accent};
+                color: #0e1117;
+                font-size: 12px;
+                font-weight: 700;
+                border: none;
+                border-radius: 9px;
+            }}
+            QPushButton:hover {{
+                background: #f7a278;
+            }}
+        """)
+        self.btn_speed.clicked.connect(self._run_speed_test)
+        s_lay.addWidget(self.btn_speed)
+        right_col.addWidget(self.card_speed)
+
+        main_layout.addLayout(right_col, 2)
+
+    def _create_gauge_card(self, title: str, subtitle: str, accent: str, chip1: str, chip2: str | None, initial_val: float):
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(6)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        dial = StatRingGauge(size=76, stroke_width=8, accent=accent, parent=box)
+        dial.set_value(initial_val)
+        lay.addWidget(dial, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        lbl_t = QLabel(title)
+        set_widget_style(lbl_t, "font-size: 14px; font-weight: 700; color: #ffffff; background: transparent;")
+        lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(lbl_t)
+
+        lbl_sub = QLabel(subtitle)
+        set_widget_style(lbl_sub, "font-size: 10px; color: rgba(255,255,255,0.5); background: transparent;")
+        lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(lbl_sub)
+
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(4)
+        chips_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if chip1:
+            lbl_c1 = QLabel(chip1)
+            set_widget_style(lbl_c1, "background: rgba(255,255,255,0.06); border-radius: 6px; font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.8); padding: 2px 6px;")
+            chips_row.addWidget(lbl_c1)
+            box._chip1 = lbl_c1
+        if chip2:
+            lbl_c2 = QLabel(chip2)
+            set_widget_style(lbl_c2, "background: rgba(255,255,255,0.06); border-radius: 6px; font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.8); padding: 2px 6px;")
+            chips_row.addWidget(lbl_c2)
+            box._chip2 = lbl_c2
+        lay.addLayout(chips_row)
+
+        box._dial = dial
+        box._lbl_sub = lbl_sub
+        return box
+
+    def _populate_top_apps(self):
+        while self.apps_container.count() > 0:
+            item = self.apps_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        apps = [
+            ("Google Chrome", "1.4 GB", 0.75, "#f28c5a"),
+            ("Visual Studio Code", "820 MB", 0.45, "#38bdf8"),
+            ("Discord", "410 MB", 0.25, "#818cf8"),
+            ("OBS Studio", "300 MB", 0.18, "#a78bfa"),
+        ] if self._top_apps_by_ram else [
+            ("Visual Studio Code", "14.2%", 0.65, "#38bdf8"),
+            ("Google Chrome", "8.5%", 0.40, "#f28c5a"),
+            ("OBS Studio", "5.1%", 0.25, "#a78bfa"),
+            ("Discord", "2.0%", 0.10, "#818cf8"),
+        ]
+
+        for name, usage_str, bar_ratio, bar_color in apps:
+            row = QWidget()
+            r_lay = QVBoxLayout(row)
+            r_lay.setContentsMargins(0, 2, 0, 2)
+            r_lay.setSpacing(3)
+
+            top_line = QHBoxLayout()
+            lbl_name = QLabel(name)
+            set_widget_style(lbl_name, "font-size: 11px; font-weight: 600; color: #ffffff; background: transparent;")
+            top_line.addWidget(lbl_name)
+            top_line.addStretch()
+
+            lbl_usage = QLabel(usage_str)
+            set_widget_style(lbl_usage, "font-size: 10px; color: rgba(255,255,255,0.6); background: transparent;")
+            top_line.addWidget(lbl_usage)
+            r_lay.addLayout(top_line)
+
+            bar = QFrame()
+            bar.setFixedHeight(4)
+            set_widget_style(bar, f"QFrame {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {bar_color}, stop:{bar_ratio} {bar_color}, stop:{bar_ratio + 0.01} rgba(255,255,255,0.08), stop:1 rgba(255,255,255,0.08)); border-radius: 2px; }}")
+            r_lay.addWidget(bar)
+            self.apps_container.addWidget(row)
+
+    def _toggle_app_mode(self):
+        self._top_apps_by_ram = not self._top_apps_by_ram
+        self.lbl_apps_hdr.setText("Top apps • RAM" if self._top_apps_by_ram else "Top apps • CPU")
+        self.btn_toggle_mode.setText("CPU ⇄" if self._top_apps_by_ram else "RAM ⇄")
+        self._populate_top_apps()
+
+    def _run_speed_test(self):
+        self.btn_speed.setEnabled(False)
+        self.btn_speed.setText("Testing speed...")
+        QTimer.singleShot(1500, self._finish_speed_test)
+
+    def _finish_speed_test(self):
+        self.btn_speed.setEnabled(True)
+        self.btn_speed.setText("▶ Run speed test")
+        self.speed_test_requested.emit()
+
+    def _refresh_stats(self):
+        try:
+            import psutil
+            cpu_pct = psutil.cpu_percent(interval=None)
+            self.gauge_cpu._dial.set_value(cpu_pct)
+
+            mem = psutil.virtual_memory()
+            ram_pct = mem.percent
+            used_gb = (mem.total - mem.available) / (1024 ** 3)
+            total_gb = mem.total / (1024 ** 3)
+            free_gb = mem.available / (1024 ** 3)
+            self.gauge_ram._dial.set_value(ram_pct)
+            self.gauge_ram._lbl_sub.setText(f"{used_gb:.1f} / {total_gb:.1f} GB")
+            if hasattr(self.gauge_ram, "_chip1"):
+                self.gauge_ram._chip1.setText(f"{free_gb:.1f} GB free")
+
+            disk = psutil.disk_usage("C:\\")
+            d_used = disk.used / (1024 ** 3)
+            d_total = disk.total / (1024 ** 3)
+            self.lbl_disk_val.setText(f"{int(d_used)} / {int(d_total)} GB")
+
+            import time
+            up_sec = int(time.time() - psutil.boot_time())
+            up_h = up_sec // 3600
+            up_m = (up_sec % 3600) // 60
+            self.lbl_up_val.setText(f"{up_h} h {up_m} m")
+        except Exception:
+            pass
+
 

@@ -39,7 +39,11 @@ class Icons:
     DOCS = "\uE8A5"         # Documents
     LAUNCHER = "\uE71D"     # All Apps / Launcher
     DESKTOPS = "\uE7C4"     # Task View / Desktops
+    WIFI = "\uE701"         # Wi-Fi
     BLUETOOTH = "\uE702"    # Bluetooth
+    MOON = "\uEC46"         # Moon
+    NIGHT_LIGHT = "\uEC46"  # Night Light
+    CONTRAST = "\uE793"     # Dark Mode / Contrast
     PENCIL = "\uED63"       # Pen / Draw / Annotate
     REFRESH = "\uE72C"      # Refresh
     CAMERA = "\uE722"       # Camera

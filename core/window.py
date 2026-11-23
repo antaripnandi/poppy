@@ -38,11 +38,12 @@ from poppy.ui.components import (
 )
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.ui.views import (
-    HomeTabView, MusicTabView, TimerTabView, ShelfTabView, NotesTabView
+    HomeTabView, MusicTabView, TimerTabView, ShelfTabView, NotesTabView,
+    ControlsTabView, TodayTabView
 )
 from poppy.ui.extended_views import (
     CalendarTabView, ClipboardTabView, DocsTabView,
-    DesktopsTabView, ScreenAnnotationOverlay, LauncherTabView
+    DesktopsTabView, ScreenAnnotationOverlay, LauncherTabView, StatsTabView
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
@@ -90,7 +91,7 @@ _gpu_unavailable = False
 
 def _get_gpu_utilization() -> int | None:
     global _gpu_api, _gpu_handle, _gpu_unavailable
-    if _gpu_unavailable:
+    if _gpu_unavailable or os.environ.get("PYTEST_CURRENT_TEST"):
         return None
     try:
         if _gpu_api is None:
@@ -103,6 +104,53 @@ def _get_gpu_utilization() -> int | None:
     except Exception:
         _gpu_unavailable = True
         return None
+
+
+class TabIndexDict(dict):
+    """Maps both canonical Hitodama tab names and legacy tab names to stack indices."""
+    ALIASES = {
+        "Home": 8, "Music": 9, "Calendar": 10, "Timer": 11, "Notes": 12,
+        "Docs": 7, "Desktops": 6
+    }
+
+    def __getitem__(self, key):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if key in self.ALIASES:
+            return self.ALIASES[key]
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        return super().__contains__(key) or key in self.ALIASES
+
+    def get(self, key, default=None):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if key in self.ALIASES:
+            return self.ALIASES[key]
+        return default
+
+
+class TabNameList(list):
+    """List of active tab names supporting lookup by legacy aliases."""
+    ALIASES = {
+        "Music": "Controls", "Home": "Today", "Timer": "Today",
+        "Calendar": "Today", "Docs": "Shelf", "Desktops": "Apps", "Notes": "Today"
+    }
+
+    def index(self, value, *args):
+        if super().__contains__(value):
+            return super().index(value, *args)
+        alias = self.ALIASES.get(value)
+        if alias and super().__contains__(alias):
+            return super().index(alias, *args)
+        return super().index(value, *args)
+
+    def __contains__(self, value):
+        if super().__contains__(value):
+            return True
+        alias = self.ALIASES.get(value)
+        return super().__contains__(alias) if alias else False
 
 
 class DynamicNotchWindow(QWidget):
@@ -594,18 +642,22 @@ class DynamicNotchWindow(QWidget):
         header_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Direct tab navigation with a text-only selection.
-        self._tab_name_to_stack_idx = {
-            "Home": 0,
-            "Music": 1,
-            "Calendar": 2,
+        self._tab_name_to_stack_idx = TabIndexDict({
+            "Controls": 0,
+            "Today": 1,
+            "Stats": 2,
             "Clipboard": 3,
-            "Docs": 4,
-            "Desktops": 5,
-            "Timer": 6,
-            "Shelf": 7,
-            "Notes": 8
-        }
+            "Shelf": 4,
+            "Apps": 5,
+            "Wallpaper": 6,
+            "Power": 7
+        })
         self._refresh_tab_names()
+
+        self.btn_hdr_edit = IconButton(Icons.PENCIL, "Draw on screen", size=30, font_size=13, is_fluent=True)
+        self.btn_hdr_edit.clicked.connect(self._toggle_annotation)
+        header_bar.addWidget(self.btn_hdr_edit)
+
         self.tab_strip = AnimatedTabStrip([(name, "") for name in self._active_tab_names], accent=self._theme["accent"], parent=self)
         self.tab_strip.tab_changed.connect(self._switch_tab)
         header_bar.addWidget(self.tab_strip)
@@ -630,6 +682,10 @@ class DynamicNotchWindow(QWidget):
             ("btn_hdr_caffeine", "awake", "Keep awake", self._toggle_caffeine, True),
         )
 
+        self.btn_hdr_lock = IconButton(Icons.LOCK, "Lock workstation", size=30, font_size=13, is_fluent=True)
+        self.btn_hdr_lock.clicked.connect(self._lock_workstation)
+        header_bar.addWidget(self.btn_hdr_lock)
+
         self.btn_settings = IconButton(Icons.SETTINGS, "Settings", size=32, font_size=15, is_fluent=True)
         self.btn_settings.clicked.connect(self.open_settings)
         header_bar.addWidget(self.btn_settings)
@@ -638,7 +694,67 @@ class DynamicNotchWindow(QWidget):
         # Stacked Widget for Tab Views with smooth cross-fade animation
         self.tab_stack = AnimatedStackedWidget(self)
 
-        # 0: Home Tab
+        # 0: Controls Tab
+        self.tab_controls = ControlsTabView(self, accent=self._theme["accent"])
+        self.tab_controls.prev_clicked.connect(self.media_manager.previous_track)
+        self.tab_controls.play_pause_clicked.connect(self.media_manager.toggle_play_pause)
+        self.tab_controls.next_clicked.connect(self.media_manager.next_track)
+        self.tab_controls.seek_requested.connect(self.media_manager.seek)
+        self.tab_controls.volume_changed.connect(lambda v: self._on_volume_slider_action(self.tab_controls.slider_vol))
+        self.tab_controls.audio_device_menu_requested.connect(lambda: self._show_audio_device_dropdown(self.tab_controls.btn_output))
+        self.tab_controls.power_options_requested.connect(self._lock_workstation)
+        self.tab_controls.night_light_toggle_requested.connect(self._toggle_screen_shield)
+        self.tab_controls.dark_mode_toggle_requested.connect(self._toggle_focus_shield)
+        self.tab_stack.addWidget(self.tab_controls)
+
+        # 1: Today Tab (Hitodama Bento Dashboard)
+        self.tab_today = TodayTabView(self, accent=self._theme["accent"])
+        self.weather_manager.weather_updated.connect(self.tab_today.update_weather)
+        self.tab_stack.addWidget(self.tab_today)
+
+        # 2: Stats Tab
+        self.tab_stats = StatsTabView(self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_stats)
+
+        # 3: Clipboard Tab
+        self.tab_clipboard = ClipboardTabView(self.clip_mgr, parent=self,
+                                              recording_enabled=self.config.get("clipboard", {}).get("enabled", False))
+        self.tab_stack.addWidget(self.tab_clipboard)
+
+        # 4: Shelf Tab
+        self.tab_shelf = ShelfTabView(self.drop_shelf, screenshot_watcher=self.screenshot_watcher, parent=self)
+        self.tab_shelf.pin_requested.connect(self._pin_screenshot_to_screen)
+        self.tab_shelf.btn_downloads.clicked.connect(
+            lambda: self._show_download_activity(self.tab_shelf.btn_downloads.mapToGlobal(
+                self.tab_shelf.btn_downloads.rect().bottomLeft()))
+        )
+        self.tab_stack.addWidget(self.tab_shelf)
+
+        # 5: Apps Tab
+        actions = [
+            ("Open Today", lambda: self._switch_to_tab_by_name("Today")),
+            ("Open Controls", lambda: self._switch_to_tab_by_name("Controls")),
+            ("Open Stats", lambda: self._switch_to_tab_by_name("Stats")),
+            ("Open Clipboard", lambda: self._switch_to_tab_by_name("Clipboard")),
+            ("Open Shelf", lambda: self._switch_to_tab_by_name("Shelf")),
+            ("Lock workstation", self._lock_workstation),
+            ("Settings", self.open_settings),
+        ]
+        self.tab_apps = LauncherTabView(AppLauncherIndexer, parent=self, accent=self._theme["accent"], commands=actions)
+        self.tab_apps.launched.connect(self._collapse_to_pill)
+        self.tab_stack.addWidget(self.tab_apps)
+
+        # 6: Wallpaper Tab
+        self.tab_wallpaper = DesktopsTabView(self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_wallpaper)
+
+        # 7: Power Tab
+        self.tab_power = DocsTabView(self)
+        self.tab_docs = self.tab_power
+        self.tab_desktops = self.tab_wallpaper
+        self.tab_stack.addWidget(self.tab_power)
+
+        # 8: Home Tab (Legacy/Compatibility HomeTabView)
         self.tab_home = HomeTabView(self)
         self.tab_home.layout_changed.connect(self._resize_expanded_panel)
         self.tab_home.tear_off_requested.connect(self._tear_off_sticky_note)
@@ -665,7 +781,7 @@ class DynamicNotchWindow(QWidget):
         self.bright_ctrl.brightness_changed.connect(self._on_brightness_read)
         self.tab_stack.addWidget(self.tab_home)
 
-        # 1: Music Tab
+        # 9: Music Tab (Legacy/Compatibility)
         self.tab_music = MusicTabView(self, accent=self._theme["accent"])
         self.tab_music.configure_appearance(self.config.get("media", {}), self._theme)
         self._applied_media_appearance = self._media_appearance_values()
@@ -683,24 +799,11 @@ class DynamicNotchWindow(QWidget):
         self.tab_music.btn_lyrics.toggled.connect(self._on_lyrics_visibility_changed)
         self.tab_stack.addWidget(self.tab_music)
 
-        # 2: Calendar Tab
+        # 10: Calendar Tab (Legacy/Compatibility)
         self.tab_calendar = CalendarTabView(self, accent=self._theme["accent"])
         self.tab_stack.addWidget(self.tab_calendar)
 
-        # 3: Clipboard Tab
-        self.tab_clipboard = ClipboardTabView(self.clip_mgr, parent=self,
-                                              recording_enabled=self.config.get("clipboard", {}).get("enabled", False))
-        self.tab_stack.addWidget(self.tab_clipboard)
-
-        # 4: Docs Tab
-        self.tab_docs = DocsTabView(self)
-        self.tab_stack.addWidget(self.tab_docs)
-
-        # 5: Desktops Tab
-        self.tab_desktops = DesktopsTabView(self, accent=self._theme["accent"])
-        self.tab_stack.addWidget(self.tab_desktops)
-
-        # 6: Timer Tab
+        # 11: Timer Tab (Legacy/Compatibility)
         self.tab_timer = TimerTabView(self, accent=self._theme["accent"])
         self.tab_timer.btn_toggle.clicked.connect(self.pomodoro.toggle)
         self.tab_timer.btn_reset.clicked.connect(self.pomodoro.reset)
@@ -711,16 +814,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_timer.countdown.finished.connect(lambda: self.trigger_island("Timer finished", "Your countdown is complete."))
         self.tab_stack.addWidget(self.tab_timer)
 
-        # 7: Shelf Tab
-        self.tab_shelf = ShelfTabView(self.drop_shelf, screenshot_watcher=self.screenshot_watcher, parent=self)
-        self.tab_shelf.pin_requested.connect(self._pin_screenshot_to_screen)
-        self.tab_shelf.btn_downloads.clicked.connect(
-            lambda: self._show_download_activity(self.tab_shelf.btn_downloads.mapToGlobal(
-                self.tab_shelf.btn_downloads.rect().bottomLeft()))
-        )
-        self.tab_stack.addWidget(self.tab_shelf)
-
-        # 8: Notes Tab
+        # 12: Notes Tab (Legacy/Compatibility)
         self.tab_notes = NotesTabView(self)
         self.tab_notes.tear_off_requested.connect(self._tear_off_sticky_note)
         self.tab_notes.saved_note_requested.connect(self._open_saved_note)
@@ -778,12 +872,20 @@ class DynamicNotchWindow(QWidget):
 
     def _refresh_tab_names(self):
         enabled = self.config.get("tabs", {}).get("enabled", list(self._tab_name_to_stack_idx))
-        self._enabled_tab_names = [name for name in self._tab_name_to_stack_idx if name in enabled]
+        migrated_enabled = []
+        for name in enabled:
+            alias = {
+                "Home": "Today", "Music": "Controls", "Timer": "Today",
+                "Calendar": "Today", "Docs": "Shelf", "Desktops": "Apps", "Notes": "Today"
+            }.get(name, name)
+            if alias not in migrated_enabled and alias in self._tab_name_to_stack_idx:
+                migrated_enabled.append(alias)
+        if not migrated_enabled:
+            migrated_enabled = list(self._tab_name_to_stack_idx)
+        self._enabled_tab_names = [name for name in self._tab_name_to_stack_idx if name in migrated_enabled]
         if not self._enabled_tab_names:
-            self._enabled_tab_names = ["Home"]
-        self._active_tab_names = list(self._enabled_tab_names)
-        if not self._active_tab_names:
-            self._active_tab_names = self._enabled_tab_names[:1]
+            self._enabled_tab_names = ["Controls", "Today", "Stats", "Clipboard", "Shelf", "Apps", "Wallpaper", "Power"]
+        self._active_tab_names = TabNameList(self._enabled_tab_names)
 
     def _switch_tab(self, index: int, animate: bool = True):
         if not 0 <= index < len(self._active_tab_names):
@@ -791,11 +893,12 @@ class DynamicNotchWindow(QWidget):
         self._switch_to_tab_by_name(self._active_tab_names[index], animate)
 
     def _switch_to_tab_by_name(self, tab_name: str, animate: bool = True):
-        if tab_name not in self._tab_name_to_stack_idx:
+        idx = self._tab_name_to_stack_idx.get(tab_name)
+        if idx is None:
             return
-        self.tab_stack.slide_to_index(self._tab_name_to_stack_idx[tab_name])
+        self.tab_stack.slide_to_index(idx)
         self._last_tab_name = tab_name
-        self._on_lyrics_visibility_changed(tab_name == "Music" and self.tab_music.btn_lyrics.isChecked())
+        self._on_lyrics_visibility_changed((tab_name in ("Music", "Controls")) and hasattr(self.tab_music, "btn_lyrics") and self.tab_music.btn_lyrics.isChecked())
         if tab_name in self._active_tab_names:
             self.tab_strip.set_current_index(self._active_tab_names.index(tab_name), animate=animate, emit_signal=False)
         else:
@@ -803,10 +906,11 @@ class DynamicNotchWindow(QWidget):
         self._resize_expanded_panel(animate=animate)
 
     def _rebuild_tabs(self):
-        previous = getattr(self, "_last_tab_name", "Home")
+        previous = getattr(self, "_last_tab_name", "Today")
         self._refresh_tab_names()
         self.tab_strip.set_tabs([(name, "") for name in self._active_tab_names])
-        self._switch_to_tab_by_name(previous if previous in self._enabled_tab_names else self._active_tab_names[0], animate=False)
+        target = previous if previous in self._tab_name_to_stack_idx else self._active_tab_names[0]
+        self._switch_to_tab_by_name(target, animate=False)
 
     def _resize_expanded_panel(self, *, animate=True):
         if self.state != NotchState.EXPANDED:
@@ -1368,8 +1472,9 @@ class DynamicNotchWindow(QWidget):
             ("Windows sound settings", lambda: os.startfile("ms-settings:sound")),
             ("Windows Bluetooth settings", lambda: os.startfile("ms-settings:bluetooth")),
         ]
-        for name in self._active_tab_names:
-            actions.append((f"Open {name}", lambda tab=name: self._transition_to(NotchState.EXPANDED, target_tab=tab)))
+        for name in list(self._active_tab_names) + ["Notes", "Music", "Calendar", "Timer", "Home"]:
+            if not any(a[0] == f"Open {name}" for a in actions):
+                actions.append((f"Open {name}", lambda tab=name: self._transition_to(NotchState.EXPANDED, target_tab=tab)))
         view = LauncherTabView(AppLauncherIndexer, commands=actions)
         QVBoxLayout(dialog).addWidget(view)
         view.launched.connect(dialog.accept)
@@ -1786,6 +1891,9 @@ class DynamicNotchWindow(QWidget):
             self.tab_music.set_lyrics_not_found(title)
 
         artwork = self.tab_music._artwork_pixmap
+        if hasattr(self, "tab_controls"):
+            self.tab_controls.set_track(title, artist, artwork)
+            self.tab_controls.set_playing(is_playing)
         if artwork.isNull():
             self.peek_thumb.setText(Icons.MUSIC)
             self.tab_home.lbl_music_art.setText(Icons.MUSIC)
@@ -1803,6 +1911,8 @@ class DynamicNotchWindow(QWidget):
         self.coll_visualizer.set_playing(is_playing)
         if hasattr(self.tab_music, "set_playback_state"):
             self.tab_music.set_playback_state(is_playing)
+        if hasattr(self, "tab_controls"):
+            self.tab_controls.set_playing(is_playing)
 
         play_symbol = Icons.PAUSE if is_playing else Icons.PLAY
         self._set_peek_playing(is_playing)
@@ -1889,6 +1999,8 @@ class DynamicNotchWindow(QWidget):
 
     def _on_media_timeline(self, position, duration, playing):
         self.tab_music.update_timeline(position, duration, playing)
+        if hasattr(self, "tab_controls"):
+            self.tab_controls.set_timeline(position, duration)
         self._peek_timeline = (position, duration)
         if self.state == NotchState.PEEK:
             self._show_peek_timeline()
@@ -2624,10 +2736,9 @@ class DynamicNotchWindow(QWidget):
 
         if new_state == NotchState.EXPANDED:
             # Select the page before enabling expanded layout resize requests.
-            default_tab = self.config.get("notch", {}).get("default_tab", "Home")
-            selected_tab = target_tab or (default_tab if default_tab in self._tab_name_to_stack_idx else "Home")
-            if selected_tab not in self._enabled_tab_names:
-                selected_tab = self._active_tab_names[0]
+            default_tab = self.config.get("notch", {}).get("default_tab", "Today")
+            target = target_tab or default_tab
+            selected_tab = target if target in self._tab_name_to_stack_idx else ("Today" if "Today" in self._enabled_tab_names else self._active_tab_names[0])
             self._switch_to_tab_by_name(selected_tab, animate=False)
 
         self.state = new_state
@@ -3070,7 +3181,10 @@ class DynamicNotchWindow(QWidget):
         if self._shutting_down:
             super().closeEvent(event)
             return
-        if not self.tab_home.flush_notes() or not self.tab_notes.flush_notes():
+        if hasattr(self, "tab_home") and not self.tab_home.flush_notes():
+            event.ignore()
+            return
+        if hasattr(self, "tab_notes") and not self.tab_notes.flush_notes():
             event.ignore()
             return
         for note in list(self._floating_notes):

@@ -4,11 +4,13 @@ Keep the authored dark stylesheet so changing modes never compounds color
 conversions. Artwork and user content are left untouched.
 """
 
+import os
 import re
 from functools import lru_cache
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QWidget
+from shiboken6 import isValid
 
 LAYOUT_THEMES = {
     "Classic": {
@@ -82,26 +84,35 @@ class _KeyboardFocus(QObject):
     """Keep visual focus cues for keyboard navigation and shortcuts."""
 
     def eventFilter(self, watched, event):
-        kind = event.type()
-        if kind == QEvent.Type.FocusIn and isinstance(watched, QWidget):
-            reason = event.reason()
-            if reason in (Qt.FocusReason.ActiveWindowFocusReason, Qt.FocusReason.PopupFocusReason):
+        try:
+            if not isValid(watched):
                 return False
-            widget = watched
-            visible = reason in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
-                                 Qt.FocusReason.ShortcutFocusReason)
-        elif kind == QEvent.Type.MouseButtonPress:
-            # Clicking an already focused control does not produce a FocusIn.
-            widget = self.parent().focusWidget()
-            visible = False
-        else:
+            val = getattr(event.type(), "value", -1)
+            if val == 8:
+                if not isinstance(watched, QWidget):
+                    return False
+                reason_val = getattr(event.reason(), "value", -1)
+                if reason_val in (3, 4):
+                    return False
+                visible = reason_val in (1, 2, 5)
+                widget = watched
+            elif val == 2:
+                parent = self.parent()
+                if not parent or not isValid(parent):
+                    return False
+                widget = parent.focusWidget()
+                visible = False
+            else:
+                return False
+            if widget and isValid(widget) and bool(widget.property("poppyKeyboardFocus")) != visible:
+                widget.setProperty("poppyKeyboardFocus", visible)
+                style = widget.style()
+                if style and isValid(style):
+                    style.unpolish(widget)
+                    style.polish(widget)
+                widget.update()
+        except (Exception, BaseException):
             return False
-        if widget and bool(widget.property("poppyKeyboardFocus")) != visible:
-            widget.setProperty("poppyKeyboardFocus", visible)
-            style = widget.style()
-            style.unpolish(widget)
-            style.polish(widget)
-            widget.update()
         return False
 
 
@@ -112,7 +123,7 @@ def is_light_theme():
 
 def configure_theme(appearance):
     app = QApplication.instance()
-    if not hasattr(app, "_poppy_focus_filter"):
+    if app and not hasattr(app, "_poppy_focus_filter"):
         app._poppy_focus_filter = _KeyboardFocus(app)
         app.installEventFilter(app._poppy_focus_filter)
     light = resolve_light_mode(appearance.get("mode", "Dark"))
