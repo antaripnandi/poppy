@@ -2438,6 +2438,8 @@ class StatsTabView(QWidget):
             return "-- h -- m"
 
     def _refresh_stats(self):
+        if not self.isVisible():
+            return
         try:
             import psutil
             import time
@@ -2477,12 +2479,16 @@ class StatsTabView(QWidget):
             if hasattr(self.gauge_ram, "_chip1"):
                 self.gauge_ram._chip1.setText(f"{free_gb:.1f} GB free")
 
-            disk = psutil.disk_usage("C:\\")
-            d_used = disk.used / (1024 ** 3)
-            d_total = disk.total / (1024 ** 3)
-            self.lbl_disk_val.setText(f"{int(d_used)} / {int(d_total)} GB")
-
             curr_time = time.time()
+            if not hasattr(self, "_last_disk_time") or (curr_time - self._last_disk_time > 30.0):
+                self._last_disk_time = curr_time
+                try:
+                    disk = psutil.disk_usage("C:\\")
+                    d_used = disk.used / (1024 ** 3)
+                    d_total = disk.total / (1024 ** 3)
+                    self.lbl_disk_val.setText(f"{int(d_used)} / {int(d_total)} GB")
+                except Exception:
+                    pass
             net = psutil.net_io_counters()
             if hasattr(self, "_last_net_bytes") and hasattr(self, "_last_net_time"):
                 dt = max(0.5, curr_time - self._last_net_time)

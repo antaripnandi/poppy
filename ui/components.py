@@ -2183,8 +2183,12 @@ class StackedClockWidget(QWidget):
         self.setFixedHeight(170)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
-        self._timer.timeout.connect(self.update)
+        self._timer.timeout.connect(self._on_tick)
         self._timer.start()
+
+    def _on_tick(self):
+        if self.isVisible():
+            self.update()
 
     def set_accent(self, accent: str):
         c = QColor(accent)

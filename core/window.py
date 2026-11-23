@@ -1126,6 +1126,9 @@ class DynamicNotchWindow(QWidget):
     def _update_system_metrics(self, *, visible_only=False):
         if self._appearance.get("mode") == "System" and is_light_theme() != resolve_light_mode("System"):
             self._apply_live_appearance(self._appearance)
+        controls_visible = hasattr(self, "tab_controls") and self.tab_controls.isVisible()
+        if visible_only and not (self.tab_home.card_clock.isVisible() or controls_visible or self.view_peek.isVisible()):
+            return
         self._sync_system_controls()
         if self._brightness_flyout:
             self._brightness_flyout.refresh_volume()
@@ -1161,7 +1164,8 @@ class DynamicNotchWindow(QWidget):
     def _sync_system_controls(self, force: bool = False):
         """Synchronizes UI volume and brightness sliders with actual Windows hardware levels."""
         home_visible = self.tab_home.isVisible()
-        if not force and not (home_visible or self.tab_music.isVisible() or self.view_peek.isVisible()):
+        controls_visible = hasattr(self, "tab_controls") and self.tab_controls.isVisible()
+        if not force and not (home_visible or controls_visible or self.tab_music.isVisible() or self.view_peek.isVisible()):
             return
         try:
             # Volume sync
@@ -1172,7 +1176,7 @@ class DynamicNotchWindow(QWidget):
                     self._show_volume(*volume)
 
             # Brightness sync
-            if (force or home_visible) and not self.tab_home.slider_bright.isSliderDown():
+            if (force or home_visible or controls_visible) and not self.tab_home.slider_bright.isSliderDown():
                 self.bright_ctrl.request_brightness()
 
             # Mic mute sync
@@ -1180,36 +1184,65 @@ class DynamicNotchWindow(QWidget):
                 mic_muted = self.audio_ctrl.get_mic_mute()
                 self._update_mic_button_ui(mic_muted)
 
-            # Controls tab status sync
-            if hasattr(self, "tab_controls"):
-                try:
-                    import subprocess
-                    out = subprocess.check_output("netsh wlan show interfaces", shell=True, text=True, stderr=subprocess.DEVNULL)
-                    wifi_connected = False
-                    ssid = ""
-                    for line in out.splitlines():
-                        line = line.strip()
-                        if line.startswith("SSID") and not line.startswith("BSSID"):
-                            parts = line.split(":", 1)
-                            if len(parts) == 2 and parts[1].strip():
-                                ssid = parts[1].strip()
-                                wifi_connected = True
-                                break
-                    self.tab_controls.set_wifi_status(wifi_connected, ssid if wifi_connected else "Disconnected")
-                except Exception:
-                    pass
-
-                try:
-                    from poppy.core.system_features import AudioEndpointManager
-                    endpoints = AudioEndpointManager.get_output_endpoints()
-                    for ep in endpoints:
-                        if ep.get("default", False):
-                            self.tab_controls.set_audio_device_name(ep.get("name", "Audio Output"))
-                            break
-                except Exception:
-                    pass
+            # Controls tab status sync - fully non-blocking in background worker
+            if hasattr(self, "tab_controls") and (force or controls_visible):
+                import time
+                now = time.time()
+                if force or (now - getattr(self, "_last_controls_sync_time", 0) > 15.0):
+                    self._last_controls_sync_time = now
+                    self._async_sync_controls_status()
         except Exception:
             pass
+
+    def _async_sync_controls_status(self):
+        if getattr(self, "_controls_syncing", False):
+            return
+        self._controls_syncing = True
+
+        def _worker():
+            wifi_connected = False
+            ssid = ""
+            default_audio = "Audio Output"
+            try:
+                import subprocess
+                out = subprocess.check_output(
+                    "netsh wlan show interfaces",
+                    shell=True,
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2
+                )
+                for line in out.splitlines():
+                    line = line.strip()
+                    if line.startswith("SSID") and not line.startswith("BSSID"):
+                        parts = line.split(":", 1)
+                        if len(parts) == 2 and parts[1].strip():
+                            ssid = parts[1].strip()
+                            wifi_connected = True
+                            break
+            except Exception:
+                pass
+
+            try:
+                from poppy.core.system_features import AudioEndpointManager
+                endpoints = AudioEndpointManager.get_output_endpoints()
+                for ep in endpoints:
+                    if ep.get("default", False):
+                        default_audio = ep.get("name", "Audio Output")
+                        break
+            except Exception:
+                pass
+
+            def _apply():
+                self._controls_syncing = False
+                if hasattr(self, "tab_controls"):
+                    self.tab_controls.set_wifi_status(wifi_connected, ssid if wifi_connected else "Disconnected")
+                    self.tab_controls.set_audio_device_name(default_audio)
+
+            QTimer.singleShot(0, _apply)
+
+        import threading
+        threading.Thread(target=_worker, daemon=True, name="poppy-controls-sync").start()
 
     def _open_wifi_settings(self):
         self._show_wifi_flyout(getattr(self.tab_controls, "tile_wifi", None))
