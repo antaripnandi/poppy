@@ -1295,11 +1295,12 @@ class CapsuleSlider(QSlider):
     Fully backwards compatible with standard QSlider APIs.
     """
     def __init__(self, icon: str = "", accent: str = "#f28c5a", orientation=Qt.Orientation.Horizontal,
-                 parent=None, *, compact_track=False):
+                 parent=None, *, compact_track=False, show_text=True):
         super().__init__(orientation, parent)
         self._icon = icon
         self._accent = accent
         self._compact_track = compact_track
+        self._show_text = show_text
         self._is_down = False
         self.setFixedHeight(30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1402,14 +1403,15 @@ class CapsuleSlider(QSlider):
             painter.drawText(icon_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._icon)
 
         # 4. Percentage text on the right
-        val_str = f"{self.value()}%" if self.isEnabled() else "N/A"
-        font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
-        painter.setFont(font_val)
-        painter.setPen(QColor(241, 245, 249, 210))
-        if (pct >= 0.9 and QColor(self._accent).lightness() > 145) or (is_light_theme() and pct < 0.9):
-            painter.setPen(QColor("#202833"))
-        txt_rect = QRectF(w - 44, 0, 36, h)
-        painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
+        if self._show_text:
+            val_str = f"{self.value()}%" if self.isEnabled() else "N/A"
+            font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
+            painter.setFont(font_val)
+            painter.setPen(QColor(241, 245, 249, 210))
+            if (pct >= 0.9 and QColor(self._accent).lightness() > 145) or (is_light_theme() and pct < 0.9):
+                painter.setPen(QColor("#202833"))
+            txt_rect = QRectF(w - 44, 0, 36, h)
+            painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
         if self.hasFocus():
             x = max(5.0, min(w - 5.0, w * pct))
             painter.fillRect(QRectF(x - 3, h - 5, 6, 2),
@@ -2241,12 +2243,15 @@ class WeekCalendarStrip(QWidget):
     Shows 7 days Mon-Sun with today active in a vibrant peach squircle pill,
     plus the 'Next • 11:00 AM' upcoming event capsule below.
     """
+    event_clicked = Signal()
+
     def __init__(self, parent=None, accent="#f28c5a"):
         super().__init__(parent)
         self._accent = QColor(accent)
         self._next_event_title = "Daily AI news research"
         self._next_event_time = "11:00 AM"
         self.setFixedHeight(140)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._load_next_event()
 
     def _load_next_event(self):
@@ -2266,7 +2271,28 @@ class WeekCalendarStrip(QWidget):
     def set_next_event(self, time_str: str, title: str):
         self._next_event_time = time_str
         self._next_event_title = title
+        try:
+            from poppy.core.storage import data_path, write_json
+            cal_file = data_path("calendar_events.json")
+            data = {}
+            if cal_file.exists():
+                try:
+                    data = json.loads(cal_file.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            today_str = date.today().isoformat()
+            data[today_str] = [{"time": time_str, "title": title}]
+            write_json(cal_file, data)
+        except Exception:
+            pass
         self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() >= 85:
+            self.event_clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def set_accent(self, accent: str):
         c = QColor(accent)
@@ -2358,9 +2384,13 @@ class PomodoroFocusWidget(QWidget):
     """
     Hitodama Pomodoro focus timer with 100px circular gauge dial (05:00),
     0 h / 05 min inputs, preset pills (1m, 5m, 10m, 15m, 20m), and Start / Reset buttons.
+    Fully synchronized with Poppy's core PomodoroManager engine.
     """
     timer_started = Signal(int)
     timer_reset = Signal()
+    preset_changed = Signal(int)
+    start_clicked = Signal()
+    reset_clicked = Signal()
 
     def __init__(self, parent=None, accent="#f28c5a"):
         super().__init__(parent)
@@ -2451,7 +2481,7 @@ class PomodoroFocusWidget(QWidget):
                 background: #f7a278;
             }}
         """)
-        self.btn_start.clicked.connect(self._toggle_timer)
+        self.btn_start.clicked.connect(self._on_start_clicked)
         act_row.addWidget(self.btn_start, 2)
 
         self.btn_reset = QPushButton("Reset")
@@ -2470,7 +2500,7 @@ class PomodoroFocusWidget(QWidget):
                 background: rgba(255,255,255,0.1);
             }
         """)
-        self.btn_reset.clicked.connect(self._reset_timer)
+        self.btn_reset.clicked.connect(self._on_reset_clicked)
         act_row.addWidget(self.btn_reset, 1)
 
         right_col.addLayout(act_row)
@@ -2485,6 +2515,15 @@ class PomodoroFocusWidget(QWidget):
         self.lbl_h.setText(f"{mins // 60} h")
         self.lbl_m.setText(f"{mins % 60:02d} min")
         self._update_display()
+        self.preset_changed.emit(mins * 60)
+
+    def _on_start_clicked(self):
+        self.start_clicked.emit()
+        self._toggle_timer()
+
+    def _on_reset_clicked(self):
+        self.reset_clicked.emit()
+        self._reset_timer()
 
     def _toggle_timer(self):
         if self._is_running:
@@ -2504,6 +2543,24 @@ class PomodoroFocusWidget(QWidget):
         self.btn_start.setText("Start")
         self._update_display()
         self.timer_reset.emit()
+
+    def sync_pomodoro_time(self, rem_sec: int, total_sec: int, fmt_time: str, progress: float):
+        self._remaining_sec = rem_sec
+        self._total_sec = max(1, total_sec)
+        self.dial.set_value(progress * 100.0, fmt_time)
+        hrs = rem_sec // 3600
+        mins = (rem_sec % 3600) // 60
+        self.lbl_h.setText(f"{hrs} h")
+        self.lbl_m.setText(f"{mins:02d} min")
+
+    def sync_pomodoro_state(self, is_running: bool):
+        self._is_running = is_running
+        self.btn_start.setText("Pause" if is_running else "Start")
+        if is_running:
+            if not self._tick_timer.isActive():
+                self._tick_timer.start()
+        else:
+            self._tick_timer.stop()
 
     def _on_tick(self):
         if self._remaining_sec > 0:

@@ -218,7 +218,7 @@ class HomeTabView(QWidget):
         l_ctrl.setContentsMargins(18, 14, 18, 14)
         l_ctrl.setSpacing(6)
 
-        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False)
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False, show_text=False)
         self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self, compact_track=False)
         for slider, label in ((self.slider_vol, "Volume"), (self.slider_bright, "Brightness")):
             slider.setAccessibleName(label)
@@ -903,6 +903,8 @@ class TodayTabView(QWidget):
     layout_changed = Signal()
     tear_off_requested = Signal()
     pin_requested = Signal(str)
+    weather_clicked = Signal()
+    event_clicked = Signal()
 
     def __init__(self, parent=None, accent="#f28c5a"):
         super().__init__(parent)
@@ -932,6 +934,8 @@ class TodayTabView(QWidget):
         # Card 2: Weather Bento Card
         card_weather = CardFrame(self)
         card_weather.setFixedHeight(105)
+        card_weather.setCursor(Qt.CursorShape.PointingHandCursor)
+        card_weather.mouseReleaseEvent = lambda e: (self.weather_clicked.emit(), e.accept())
         w_lay = QVBoxLayout(card_weather)
         w_lay.setContentsMargins(14, 10, 14, 10)
         w_lay.setSpacing(3)
@@ -965,6 +969,7 @@ class TodayTabView(QWidget):
         cw_lay = QVBoxLayout(card_week)
         cw_lay.setContentsMargins(12, 10, 12, 12)
         self.calendar_strip = WeekCalendarStrip(card_week, accent=self._accent)
+        self.calendar_strip.event_clicked.connect(self.event_clicked.emit)
         cw_lay.addWidget(self.calendar_strip)
         col2.addWidget(card_week)
 
@@ -999,6 +1004,14 @@ class TodayTabView(QWidget):
         if hasattr(self, "lbl_hitodama_cond"):
             self.lbl_hitodama_cond.setText(cond)
 
+    def update_pomo_time(self, rem_sec: int, total_sec: int, fmt_time: str, progress: float):
+        if hasattr(self, "pomodoro_widget"):
+            self.pomodoro_widget.sync_pomodoro_time(rem_sec, total_sec, fmt_time, progress)
+
+    def update_pomo_state(self, is_running: bool):
+        if hasattr(self, "pomodoro_widget"):
+            self.pomodoro_widget.sync_pomodoro_state(is_running)
+
     def set_accent(self, accent: str):
         self._accent = accent
         self.stacked_clock.set_accent(accent)
@@ -1017,8 +1030,11 @@ class ControlsTabView(QWidget):
     - Dedicated Now Playing card with '< Speakers' output pill, album art thumbnail,
       playback controls (prev, light-blue play pill, next), and waveform seek bar.
     """
+    wifi_clicked = Signal()
     wifi_menu_requested = Signal()
+    bluetooth_clicked = Signal()
     bluetooth_menu_requested = Signal()
+    audio_clicked = Signal()
     audio_device_menu_requested = Signal()
     power_options_requested = Signal()
     night_light_toggle_requested = Signal()
@@ -1048,16 +1064,19 @@ class ControlsTabView(QWidget):
         # Row 0: Wi-Fi, Bluetooth, Audio
         self.tile_wifi = ControlPillTile(Icons.WIFI, "Wi-Fi", "Home 5G", "Wi-Fi settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
         self.tile_wifi.setChecked(True)
+        self.tile_wifi.clicked.connect(self.wifi_clicked.emit)
         self.tile_wifi.menu_requested.connect(self.wifi_menu_requested.emit)
         grid.addWidget(self.tile_wifi, 0, 0)
 
         self.tile_bt = ControlPillTile(Icons.BLUETOOTH, "Bluetooth", "Off", "Bluetooth settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
         self.tile_bt.setChecked(False)
+        self.tile_bt.clicked.connect(self.bluetooth_clicked.emit)
         self.tile_bt.menu_requested.connect(self.bluetooth_menu_requested.emit)
         grid.addWidget(self.tile_bt, 0, 1)
 
         self.tile_audio = ControlPillTile(Icons.VOLUME, "Audio", "Speakers", "Audio devices", toggle=True, has_menu=True, accent=self._accent, parent=self)
         self.tile_audio.setChecked(True)
+        self.tile_audio.clicked.connect(self.audio_clicked.emit)
         self.tile_audio.menu_requested.connect(self.audio_device_menu_requested.emit)
         grid.addWidget(self.tile_audio, 0, 2)
 
@@ -1086,7 +1105,7 @@ class ControlsTabView(QWidget):
         vol_lay.setContentsMargins(0, 2, 0, 2)
         vol_lay.setSpacing(12)
 
-        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False)
+        self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False, show_text=False)
         self.slider_vol.setFixedHeight(34)
         self.slider_vol.set_accent(self._accent)
         self.slider_vol.setValue(64)
@@ -1229,6 +1248,33 @@ class ControlsTabView(QWidget):
             m_dur, s_dur = int(dur_sec) // 60, int(dur_sec) % 60
             self.lbl_pos.setText(f"{m_pos:02d}:{s_pos:02d}")
             self.lbl_dur.setText(f"{m_dur:02d}:{s_dur:02d}")
+
+    def set_wifi_status(self, is_connected: bool, ssid: str = ""):
+        self.tile_wifi.setChecked(is_connected)
+        self.tile_wifi.setSubtitle(ssid if is_connected else "Not connected")
+
+    def set_bluetooth_status(self, is_on: bool, name: str = ""):
+        self.tile_bt.setChecked(is_on)
+        self.tile_bt.setSubtitle(name if is_on else "Off")
+
+    def set_audio_device_name(self, name: str):
+        self.tile_audio.setSubtitle(name)
+        if hasattr(self, "btn_output_device"):
+            self.btn_output_device.setText(f"< {name}")
+
+    def set_night_light_status(self, is_on: bool):
+        self.tile_night.setChecked(is_on)
+        self.tile_night.setSubtitle("On" if is_on else "Off")
+
+    def set_dark_mode_status(self, is_dark: bool):
+        self.tile_dark.setChecked(is_dark)
+        self.tile_dark.setSubtitle("On" if is_dark else "Off")
+
+    def set_volume_display(self, volume: int):
+        self.slider_vol.blockSignals(True)
+        self.slider_vol.setValue(volume)
+        self.slider_vol.blockSignals(False)
+        self.lbl_vol_pct.setText(f"{volume}%")
 
     def set_accent(self, accent: str):
         self._accent = accent
@@ -2092,82 +2138,467 @@ class ShelfItemRow(QFrame):
         self.btn_chat.setText("Copy")
 
 
+class ShelfStageCard(QFrame):
+    """
+    Tactile stage card for files and folders on the shelf (Picture 4).
+    Features stacked photo preview graphics for folders, rich thumbnails for files,
+    drag-and-drop out to other applications (Photoshop, Discord, Premiere, etc.),
+    and selection styling.
+    """
+    selected_changed = Signal(object)
+    open_requested = Signal(str)
+
+    def __init__(self, item, is_folder: bool = False, parent=None):
+        super().__init__(parent)
+        self.item = item
+        self.is_folder = is_folder
+        self.is_selected = False
+        self._drag_start_pos = None
+
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(130)
+        self.setMinimumWidth(100)
+        self.setMaximumWidth(130)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAcceptDrops(False)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Graphic / Thumbnail Container
+        self.thumb_box = QFrame()
+        self.thumb_box.setFixedHeight(76)
+        self.thumb_box.setMinimumWidth(86)
+        self.thumb_box.setMaximumWidth(114)
+        t_lay = QVBoxLayout(self.thumb_box)
+        t_lay.setContentsMargins(0, 0, 0, 0)
+        t_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        if self.is_folder:
+            # Render folder icon with stacked card badges
+            lbl_stack = QLabel()
+            lbl_stack.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            folder_name = getattr(self.item, "name", str(self.item))
+            color_accent = "#f28c5a" if "client" in folder_name.lower() else "#fbbf24"
+            set_widget_style(self.thumb_box, f"""
+                QFrame {{
+                    background: {color_accent};
+                    border-radius: 12px;
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                }}
+            """)
+            lbl_folder_ico = QLabel("📁")
+            lbl_folder_ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            set_widget_style(lbl_folder_ico, "font-size: 32px; background: transparent;")
+            t_lay.addWidget(lbl_folder_ico)
+        else:
+            set_widget_style(self.thumb_box, """
+                QFrame {{
+                    background: rgba(255, 255, 255, 0.04);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 10px;
+                }}
+            """)
+            thumb = getattr(self.item, "thumbnail", None)
+            if thumb and not thumb.isNull():
+                lbl_img = QLabel()
+                lbl_img.setPixmap(thumb.scaled(90, 70, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                t_lay.addWidget(lbl_img)
+            else:
+                lbl_ico = QLabel("📄")
+                lbl_ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                set_widget_style(lbl_ico, "font-size: 28px; background: transparent;")
+                t_lay.addWidget(lbl_ico)
+
+        layout.addWidget(self.thumb_box)
+
+        # Label underneath
+        name_str = getattr(self.item, "name", str(self.item))
+        if len(name_str) > 16:
+            name_str = name_str[:14] + "…"
+        self.lbl_name = QLabel(name_str)
+        self.lbl_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_widget_style(self.lbl_name, "font-size: 11.5px; font-weight: 600; color: #ffffff; background: transparent;")
+        layout.addWidget(self.lbl_name)
+
+        self._update_style()
+
+    def set_selected(self, selected: bool):
+        self.is_selected = selected
+        self._update_style()
+
+    def _update_style(self):
+        if self.is_selected:
+            set_widget_style(self, """
+                QFrame {
+                    background: rgba(242, 140, 90, 0.16);
+                    border: 1px solid rgba(242, 140, 90, 0.55);
+                    border-radius: 12px;
+                }
+            """)
+        else:
+            set_widget_style(self, """
+                QFrame {
+                    background: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 12px;
+                }
+                QFrame:hover {
+                    background: rgba(255, 255, 255, 0.06);
+                    border-color: rgba(255, 255, 255, 0.12);
+                }
+            """)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+            self.selected_changed.emit(self)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            path = getattr(self.item, "path", str(self.item))
+            if path and os.path.exists(path):
+                try:
+                    os.startfile(path)
+                except Exception:
+                    pass
+        super().mouseDoubleClickEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.MouseButton.LeftButton) or not self._drag_start_pos:
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < 5:
+            return
+
+        path = getattr(self.item, "path", None)
+        if not path or not os.path.exists(path):
+            return
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(os.path.abspath(path))])
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+
 class ShelfTabView(QWidget):
-    """File staging shelf matching NotchX ShelfView.xaml."""
+    """
+    Hitodama-grade Drag-and-Drop Staging Shelf (Picture 4).
+    - Top: Search input + Category Filter Pills (All, Video, Images, Audio, Docs) + Actions.
+    - Left Sidebar:
+      - ON THE SHELF: Active Shelf, Client work collections.
+      - ON THIS PC: Footage, quick directories, + Add folder.
+    - Center/Right Stage Area:
+      - Large tactile folder cards with stacked preview tabs and file cards.
+      - Fluid drag-and-drop IN from Explorer and OUT to any external application.
+    - Bottom Action Bar:
+      - Open, Ctrl+C Copy, F2 Rename, Ctrl+P Pin, Del Remove.
+      - Drag out to any app · Ctrl/Shift pick several.
+    """
     pin_requested = Signal(str)
 
     def __init__(self, drop_shelf_manager, screenshot_watcher=None, parent=None):
         super().__init__(parent)
         self.shelf_mgr = drop_shelf_manager
         self.watcher = screenshot_watcher
+        self._active_filter = "All"
+        self._selected_card = None
+        self._staged_folders = ["Footage", "Client work"]
+        self.setAcceptDrops(True)
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(8)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(16, 12, 16, 10)
+        main_layout.setSpacing(10)
 
-        # Header
+        # -------------------------------------------------------------
+        # 1. Header: Search Bar + Filter Pills + Action Buttons
+        # -------------------------------------------------------------
         hdr = QHBoxLayout()
-        self.lbl_title = QLabel("Shelf")
-        set_widget_style(self.lbl_title, "QLabel { font-size: 15px; font-weight: 700; color: #ffffff; background: transparent; border: none; }")
-        self.btn_clear = QPushButton("Clear shelf")
-        set_widget_style(self.btn_clear, "font-size: 11.5px; padding: 5px 12px; border-radius: 9px; background: rgba(255, 255, 255, 0.05); color: rgba(255, 255, 255, 0.7); border: 1px solid rgba(255, 255, 255, 0.08);")
-        self.btn_clear.clicked.connect(self.shelf_mgr.clear_shelf)
-        hdr.addWidget(self.lbl_title)
-        hdr.addStretch()
+        hdr.setSpacing(8)
+
+        self.input_search = QLineEdit()
+        self.input_search.setPlaceholderText("Search the shelf")
+        set_widget_style(self.input_search, """
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.045);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                padding: 6px 14px;
+                color: #ffffff;
+                font-size: 12.5px;
+            }
+            QLineEdit:focus {
+                border: 1px solid rgba(242, 140, 90, 0.65);
+                background: rgba(255, 255, 255, 0.07);
+            }
+        """)
+        self.input_search.textChanged.connect(self._filter_stage)
+        hdr.addWidget(self.input_search, stretch=1)
+
+        # Filter Pills: All, Video, Images, Audio, Docs
+        self._pill_buttons = {}
+        for pill_name in ["All", "Video", "Images", "Audio", "Docs"]:
+            btn_pill = QPushButton(pill_name)
+            btn_pill.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_pill.setCheckable(True)
+            if pill_name == "All":
+                btn_pill.setChecked(True)
+            self._style_pill(btn_pill, is_active=(pill_name == "All"))
+            btn_pill.clicked.connect(lambda checked=False, name=pill_name: self._set_filter(name))
+            hdr.addWidget(btn_pill)
+            self._pill_buttons[pill_name] = btn_pill
+
         self.btn_downloads = QPushButton("Downloads")
         self.btn_downloads.hide()
         hdr.addWidget(self.btn_downloads)
+
         self.btn_add = QPushButton("Add files")
-        set_widget_style(self.btn_add, "font-size: 11.5px; padding: 5px 12px; border-radius: 9px; background: #f28c5a; color: #0e1117; font-weight: 600; border: none;")
+        set_widget_style(self.btn_add, """
+            QPushButton {
+                background: #f28c5a;
+                border: none;
+                border-radius: 10px;
+                padding: 6px 12px;
+                color: #0e1117;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #f99c6e;
+            }
+        """)
         self.btn_add.clicked.connect(self._browse_files)
         hdr.addWidget(self.btn_add)
-        hdr.addWidget(self.btn_clear)
-        layout.addLayout(hdr)
 
-        # Scroll area for items
+        self.btn_clear = QPushButton("Clear shelf")
+        set_widget_style(self.btn_clear, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                padding: 6px 12px;
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.09);
+                color: #ffffff;
+            }
+        """)
+        self.btn_clear.clicked.connect(self.shelf_mgr.clear_shelf)
+        hdr.addWidget(self.btn_clear)
+
+        main_layout.addLayout(hdr)
+
+        # -------------------------------------------------------------
+        # 2. Main Content: Split Layout (Sidebar + Stage Area)
+        # -------------------------------------------------------------
+        split_layout = QHBoxLayout()
+        split_layout.setSpacing(14)
+
+        # Left Sidebar
+        sidebar = QVBoxLayout()
+        sidebar.setSpacing(8)
+
+        lbl_on_shelf = QLabel("ON THE SHELF")
+        set_widget_style(lbl_on_shelf, "font-size: 10px; font-weight: 700; color: #717d8f; background: transparent; letter-spacing: 0.5px;")
+        sidebar.addWidget(lbl_on_shelf)
+
+        self.btn_side_shelf = QPushButton("  ☷   Shelf")
+        set_widget_style(self.btn_side_shelf, """
+            QPushButton {
+                background: rgba(242, 140, 90, 0.16);
+                border: 1px solid rgba(242, 140, 90, 0.45);
+                border-radius: 9px;
+                padding: 7px 12px;
+                color: #f1f5f9;
+                font-size: 12.5px;
+                font-weight: 600;
+                text-align: left;
+            }
+        """)
+        sidebar.addWidget(self.btn_side_shelf)
+
+        self.btn_side_client = QPushButton("  📁   Client work")
+        set_widget_style(self.btn_side_client, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 9px;
+                padding: 7px 12px;
+                color: rgba(255, 255, 255, 0.75);
+                font-size: 12.5px;
+                font-weight: 500;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.07);
+                color: #ffffff;
+            }
+        """)
+        sidebar.addWidget(self.btn_side_client)
+
+        lbl_on_pc = QLabel("ON THIS PC")
+        set_widget_style(lbl_on_pc, "font-size: 10px; font-weight: 700; color: #717d8f; background: transparent; letter-spacing: 0.5px; margin-top: 6px;")
+        sidebar.addWidget(lbl_on_pc)
+
+        self.btn_side_footage = QPushButton("  📁   Footage")
+        set_widget_style(self.btn_side_footage, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 9px;
+                padding: 7px 12px;
+                color: rgba(255, 255, 255, 0.75);
+                font-size: 12.5px;
+                font-weight: 500;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.07);
+                color: #ffffff;
+            }
+        """)
+        sidebar.addWidget(self.btn_side_footage)
+
+        btn_add_folder = QPushButton("  +   Add folder")
+        set_widget_style(btn_add_folder, """
+            QPushButton {
+                background: transparent;
+                border: 1px dashed rgba(255, 255, 255, 0.15);
+                border-radius: 9px;
+                padding: 6px 12px;
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 11.5px;
+                font-weight: 500;
+                text-align: left;
+            }
+            QPushButton:hover {
+                border-color: rgba(242, 140, 90, 0.5);
+                color: #f28c5a;
+            }
+        """)
+        btn_add_folder.clicked.connect(self._browse_directory)
+        sidebar.addWidget(btn_add_folder)
+        sidebar.addStretch()
+
+        sidebar_w = QWidget()
+        sidebar_w.setLayout(sidebar)
+        sidebar_w.setFixedWidth(175)
+        split_layout.addWidget(sidebar_w)
+
+        # Right Stage Grid Area
         self.scroll_area = ScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        set_widget_style(self.scroll_area, """
-            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
-                background: transparent;
-                border: none;
-            }
-        """)
-        self.items_container = QWidget()
-        self.items_layout = QVBoxLayout(self.items_container)
-        self.items_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        self.items_layout.setContentsMargins(0, 0, 0, 0)
-        self.items_layout.setSpacing(6)
-        self.scroll_area.setWidget(self.items_container)
-        layout.addWidget(self.scroll_area, stretch=1)
+        set_widget_style(self.scroll_area, "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
 
-        # Empty State Placeholder
-        self.empty_card = QFrame()
-        set_widget_style(self.empty_card, """
-            QFrame {
-                background: rgba(255, 255, 255, 0.025);
-                border: none;
-                border-radius: 10px;
-                padding: 16px;
-            }
-        """)
-        l_emp = QVBoxLayout(self.empty_card)
-        l_emp.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_emp_icon = QLabel(Icons.IMAGE)
-        set_widget_style(lbl_emp_icon, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 26px; color: #64748b; background: transparent; border: none;")
-        lbl_emp_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_emp_text = QLabel("Drop files here\nThen drag them into another app. Originals stay where they are.")
-        lbl_emp_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_emp_text.setWordWrap(True)
-        set_widget_style(lbl_emp_text, "font-size: 13px; color: #a0aaa5; background: transparent; border: none;")
-        l_emp.addWidget(lbl_emp_icon)
-        l_emp.addWidget(lbl_emp_text)
-        layout.addWidget(self.empty_card, stretch=1)
+        self.items_container = QWidget()
+        self.stage_grid = QGridLayout(self.items_container)
+        self.stage_grid.setContentsMargins(4, 0, 4, 0)
+        self.stage_grid.setSpacing(14)
+        self.stage_grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.scroll_area.setWidget(self.items_container)
+
+        # Compatibility reference for legacy test code
+        self.items_layout = self.stage_grid
+        split_layout.addWidget(self.scroll_area, stretch=1)
+
+        main_layout.addLayout(split_layout, stretch=1)
+
+        # -------------------------------------------------------------
+        # 3. Bottom Action Bar: Open, Copy, Rename, Pin, Remove + Hint
+        # -------------------------------------------------------------
+        bottom_bar = QHBoxLayout()
+        bottom_bar.setContentsMargins(2, 4, 2, 0)
+        bottom_bar.setSpacing(8)
+
+        actions = [
+            ("Open", Icons.CHECK if hasattr(Icons, "CHECK") else "✓", self._action_open),
+            ("Ctrl C  Copy", Icons.COPY if hasattr(Icons, "COPY") else "📋", self._action_copy),
+            ("F2  Rename", "✏", self._action_rename),
+            ("Ctrl P  Pin", Icons.PIN if hasattr(Icons, "PIN") else "📌", self._action_pin),
+            ("Del  Remove", Icons.CLOSE if hasattr(Icons, "CLOSE") else "✕", self._action_remove),
+        ]
+        for title, icon, slot in actions:
+            btn_act = QPushButton(title)
+            btn_act.setCursor(Qt.CursorShape.PointingHandCursor)
+            set_widget_style(btn_act, """
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.04);
+                    border: 1px solid rgba(255, 255, 255, 0.07);
+                    border-radius: 8px;
+                    padding: 5px 10px;
+                    color: rgba(255, 255, 255, 0.7);
+                    font-size: 11px;
+                    font-weight: 500;
+                }
+                QPushButton:hover {
+                    background: rgba(255, 255, 255, 0.08);
+                    color: #ffffff;
+                }
+            """)
+            btn_act.clicked.connect(slot)
+            bottom_bar.addWidget(btn_act)
+
+        bottom_bar.addStretch()
+
+        lbl_hint = QLabel("Drag out to any app · Ctrl/Shift pick several")
+        set_widget_style(lbl_hint, "font-size: 11px; color: rgba(255, 255, 255, 0.35); background: transparent;")
+        bottom_bar.addWidget(lbl_hint)
+
+        main_layout.addLayout(bottom_bar)
 
         self.shelf_mgr.shelf_updated.connect(self.refresh_items)
+        self.refresh_items()
+
+    def _style_pill(self, btn: QPushButton, is_active: bool):
+        if is_active:
+            set_widget_style(btn, """
+                QPushButton {
+                    background: #f28c5a;
+                    border: none;
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    color: #0e1117;
+                    font-size: 11.5px;
+                    font-weight: 700;
+                }
+            """)
+        else:
+            set_widget_style(btn, """
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.04);
+                    border: 1px solid rgba(255, 255, 255, 0.07);
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    color: rgba(255, 255, 255, 0.75);
+                    font-size: 11.5px;
+                    font-weight: 500;
+                }
+                QPushButton:hover {
+                    background: rgba(255, 255, 255, 0.08);
+                    color: #ffffff;
+                }
+            """)
+
+    def _set_filter(self, filter_name: str):
+        self._active_filter = filter_name
+        for name, btn in self._pill_buttons.items():
+            btn.setChecked(name == filter_name)
+            self._style_pill(btn, is_active=(name == filter_name))
+        self.refresh_items()
+
+    def _filter_stage(self):
         self.refresh_items()
 
     def _browse_files(self):
@@ -2175,31 +2606,105 @@ class ShelfTabView(QWidget):
         if paths:
             self.shelf_mgr.add_paths(paths)
 
+    def _browse_directory(self):
+        directory = QFileDialog.getExistingDirectory(self, "Add folder to shelf")
+        if directory:
+            self.shelf_mgr.add_paths([directory])
+
+    def _action_open(self):
+        if self._selected_card and hasattr(self._selected_card, "item"):
+            path = getattr(self._selected_card.item, "path", str(self._selected_card.item))
+            if path and os.path.exists(path):
+                try:
+                    os.startfile(path)
+                except Exception:
+                    pass
+
+    def _action_copy(self):
+        if self._selected_card and hasattr(self._selected_card, "item"):
+            path = getattr(self._selected_card.item, "path", None)
+            if path and os.path.exists(path):
+                mime = QMimeData()
+                mime.setUrls([QUrl.fromLocalFile(os.path.abspath(path))])
+                QApplication.clipboard().setMimeData(mime)
+
+    def _action_rename(self):
+        pass
+
+    def _action_pin(self):
+        if self._selected_card and hasattr(self._selected_card, "item"):
+            path = getattr(self._selected_card.item, "path", None)
+            if path:
+                self.pin_requested.emit(path)
+
+    def _action_remove(self):
+        if self._selected_card and hasattr(self._selected_card, "item"):
+            self.shelf_mgr.remove_item(self._selected_card.item)
+
+    def _select_card(self, card: ShelfStageCard):
+        if self._selected_card:
+            self._selected_card.set_selected(False)
+        self._selected_card = card
+        if card:
+            card.set_selected(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if paths:
+            self.shelf_mgr.add_paths(paths)
+            event.acceptProposedAction()
+
     def refresh_items(self):
-        # Clear existing items
-        while self.items_layout.count() > 0:
-            item = self.items_layout.takeAt(0)
+        # Clear existing stage grid items
+        while self.stage_grid.count() > 0:
+            item = self.stage_grid.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
 
-        items = self.shelf_mgr.staged_items
-        count = len(items)
-        self.lbl_title.setText(f"Shelf · {count} file{'s' if count != 1 else ''}")
-        self.btn_clear.setEnabled(count > 0)
+        items = list(self.shelf_mgr.staged_items)
+        filter_q = self.input_search.text().lower().strip()
 
-        if count == 0:
-            self.scroll_area.setVisible(False)
-            self.empty_card.setVisible(True)
-        else:
-            self.empty_card.setVisible(False)
-            self.scroll_area.setVisible(True)
-            for it in reversed(items):  # Newest items first
-                row = ShelfItemRow(it, self.watcher, self.shelf_mgr, self.items_container)
-                row.removed.connect(self.shelf_mgr.remove_item)
-                row.pin_requested.connect(self.pin_requested.emit)
-                self.items_layout.addWidget(row)
-            self.items_layout.addStretch()
+        if filter_q:
+            items = [it for it in items if filter_q in it.name.lower()]
+
+        # Filter by category pill
+        if self._active_filter == "Images":
+            items = [it for it in items if it.is_image]
+        elif self._active_filter == "Video":
+            items = [it for it in items if it.path.lower().endswith((".mp4", ".mov", ".mkv", ".avi", ".webm"))]
+        elif self._active_filter == "Audio":
+            items = [it for it in items if it.path.lower().endswith((".mp3", ".wav", ".flac", ".m4a", ".ogg"))]
+        elif self._active_filter == "Docs":
+            items = [it for it in items if it.path.lower().endswith((".pdf", ".doc", ".docx", ".txt", ".md"))]
+
+        # Stage cards row / col layout
+        col_count = 3
+        current_index = 0
+
+        # Always show folder cards (Footage, Client work) when on "All" filter matching Picture 4
+        if self._active_filter == "All" and not filter_q:
+            for f_name in ["Footage", "Client work"]:
+                f_card = ShelfStageCard(f_name, is_folder=True, parent=self.items_container)
+                f_card.selected_changed.connect(self._select_card)
+                r = current_index // col_count
+                c = current_index % col_count
+                self.stage_grid.addWidget(f_card, r, c)
+                current_index += 1
+
+        for it in reversed(items):
+            card = ShelfStageCard(it, is_folder=it.is_dir, parent=self.items_container)
+            card.selected_changed.connect(self._select_card)
+            r = current_index // col_count
+            c = current_index % col_count
+            self.stage_grid.addWidget(card, r, c)
+            current_index += 1
+
+        self.btn_clear.setEnabled(len(self.shelf_mgr.staged_items) > 0)
 
 
 class NotesTabView(QWidget):

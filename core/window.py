@@ -43,7 +43,8 @@ from poppy.ui.views import (
 )
 from poppy.ui.extended_views import (
     CalendarTabView, ClipboardTabView, DocsTabView,
-    DesktopsTabView, ScreenAnnotationOverlay, LauncherTabView, StatsTabView
+    DesktopsTabView, ScreenAnnotationOverlay, LauncherTabView, StatsTabView,
+    WallpaperTabView, PowerTabView
 )
 from poppy.ui.sticky_note import FloatingStickyNote, FloatingStickyImage
 from poppy.ui.settings_window import SettingsWindow
@@ -110,7 +111,7 @@ class TabIndexDict(dict):
     """Maps both canonical Hitodama tab names and legacy tab names to stack indices."""
     ALIASES = {
         "Home": 8, "Music": 9, "Calendar": 10, "Timer": 11, "Notes": 12,
-        "Docs": 7, "Desktops": 6
+        "Docs": 13, "Desktops": 14
     }
 
     def __getitem__(self, key):
@@ -700,16 +701,26 @@ class DynamicNotchWindow(QWidget):
         self.tab_controls.play_pause_clicked.connect(self.media_manager.toggle_play_pause)
         self.tab_controls.next_clicked.connect(self.media_manager.next_track)
         self.tab_controls.seek_requested.connect(self.media_manager.seek)
-        self.tab_controls.volume_changed.connect(lambda v: self._on_volume_slider_action(self.tab_controls.slider_vol))
+        self.tab_controls.volume_changed.connect(lambda v: self._on_controls_volume_changed(v))
+        self.tab_controls.wifi_clicked.connect(self._open_wifi_settings)
+        self.tab_controls.wifi_menu_requested.connect(self._open_wifi_settings)
+        self.tab_controls.bluetooth_clicked.connect(self._open_bluetooth_settings)
+        self.tab_controls.bluetooth_menu_requested.connect(self._open_bluetooth_settings)
+        self.tab_controls.audio_clicked.connect(lambda: self._show_audio_device_dropdown(self.tab_controls.tile_audio))
         self.tab_controls.audio_device_menu_requested.connect(lambda: self._show_audio_device_dropdown(self.tab_controls.btn_output))
-        self.tab_controls.power_options_requested.connect(self._lock_workstation)
-        self.tab_controls.night_light_toggle_requested.connect(self._toggle_screen_shield)
-        self.tab_controls.dark_mode_toggle_requested.connect(self._toggle_focus_shield)
+        self.tab_controls.power_options_requested.connect(lambda: self._switch_to_tab_by_name("Power"))
+        self.tab_controls.night_light_toggle_requested.connect(self._toggle_night_light)
+        self.tab_controls.dark_mode_toggle_requested.connect(self._toggle_dark_mode)
         self.tab_stack.addWidget(self.tab_controls)
 
         # 1: Today Tab (Hitodama Bento Dashboard)
         self.tab_today = TodayTabView(self, accent=self._theme["accent"])
         self.weather_manager.weather_updated.connect(self.tab_today.update_weather)
+        self.tab_today.weather_clicked.connect(lambda: self.open_settings("Weather"))
+        self.tab_today.event_clicked.connect(lambda: self._switch_to_tab_by_name("Calendar"))
+        self.tab_today.pomodoro_widget.preset_changed.connect(self.pomodoro.set_duration)
+        self.tab_today.pomodoro_widget.start_clicked.connect(self.pomodoro.toggle)
+        self.tab_today.pomodoro_widget.reset_clicked.connect(self.pomodoro.reset)
         self.tab_stack.addWidget(self.tab_today)
 
         # 2: Stats Tab
@@ -745,13 +756,11 @@ class DynamicNotchWindow(QWidget):
         self.tab_stack.addWidget(self.tab_apps)
 
         # 6: Wallpaper Tab
-        self.tab_wallpaper = DesktopsTabView(self, accent=self._theme["accent"])
+        self.tab_wallpaper = WallpaperTabView(self, accent=self._theme["accent"])
         self.tab_stack.addWidget(self.tab_wallpaper)
 
         # 7: Power Tab
-        self.tab_power = DocsTabView(self)
-        self.tab_docs = self.tab_power
-        self.tab_desktops = self.tab_wallpaper
+        self.tab_power = PowerTabView(self, accent=self._theme["accent"])
         self.tab_stack.addWidget(self.tab_power)
 
         # 8: Home Tab (Legacy/Compatibility HomeTabView)
@@ -820,8 +829,17 @@ class DynamicNotchWindow(QWidget):
         self.tab_notes.saved_note_requested.connect(self._open_saved_note)
         self.tab_stack.addWidget(self.tab_notes)
 
+        # 13: Docs Tab (Legacy/Compatibility)
+        self.tab_docs = DocsTabView(self)
+        self.tab_stack.addWidget(self.tab_docs)
+
+        # 14: Desktops Tab (Legacy/Compatibility)
+        self.tab_desktops = DesktopsTabView(self, accent=self._theme["accent"])
+        self.tab_stack.addWidget(self.tab_desktops)
+
         v_exp_layout.addWidget(self.tab_stack, stretch=1)
-        tools = QHBoxLayout()
+        self.footer_tools = QWidget(self.view_expanded)
+        tools = QHBoxLayout(self.footer_tools)
         tools.setContentsMargins(6, 0, 6, 0)
         tools.setSpacing(6)
         commands = QPushButton("Commands")
@@ -858,7 +876,8 @@ class DynamicNotchWindow(QWidget):
         self.btn_hdr_dictation.clicked.connect(self.dictation.open_panel)
         self.dictation.panel_visible.connect(self.btn_hdr_dictation.setChecked)
         tools.addWidget(self.btn_hdr_dictation)
-        v_exp_layout.addLayout(tools)
+        self.footer_tools.hide()
+        v_exp_layout.addWidget(self.footer_tools)
         self.view_expanded.setVisible(False)
 
         # Activate initial tab (Home)
@@ -871,7 +890,8 @@ class DynamicNotchWindow(QWidget):
         self._refresh_peek_surface()
 
     def _refresh_tab_names(self):
-        enabled = self.config.get("tabs", {}).get("enabled", list(self._tab_name_to_stack_idx))
+        canonical_tabs = ["Controls", "Today", "Stats", "Clipboard", "Shelf", "Apps", "Wallpaper", "Power"]
+        enabled = self.config.get("tabs", {}).get("enabled", canonical_tabs)
         migrated_enabled = []
         for name in enabled:
             alias = {
@@ -880,11 +900,12 @@ class DynamicNotchWindow(QWidget):
             }.get(name, name)
             if alias not in migrated_enabled and alias in self._tab_name_to_stack_idx:
                 migrated_enabled.append(alias)
-        if not migrated_enabled:
-            migrated_enabled = list(self._tab_name_to_stack_idx)
+        for c_tab in canonical_tabs:
+            if c_tab not in migrated_enabled and c_tab in self._tab_name_to_stack_idx:
+                migrated_enabled.append(c_tab)
         self._enabled_tab_names = [name for name in self._tab_name_to_stack_idx if name in migrated_enabled]
         if not self._enabled_tab_names:
-            self._enabled_tab_names = ["Controls", "Today", "Stats", "Clipboard", "Shelf", "Apps", "Wallpaper", "Power"]
+            self._enabled_tab_names = canonical_tabs
         self._active_tab_names = TabNameList(self._enabled_tab_names)
 
     def _switch_tab(self, index: int, animate: bool = True):
@@ -1156,8 +1177,68 @@ class DynamicNotchWindow(QWidget):
             if force or home_visible:
                 mic_muted = self.audio_ctrl.get_mic_mute()
                 self._update_mic_button_ui(mic_muted)
+
+            # Controls tab status sync
+            if hasattr(self, "tab_controls"):
+                try:
+                    import subprocess
+                    out = subprocess.check_output("netsh wlan show interfaces", shell=True, text=True, stderr=subprocess.DEVNULL)
+                    wifi_connected = False
+                    ssid = ""
+                    for line in out.splitlines():
+                        line = line.strip()
+                        if line.startswith("SSID") and not line.startswith("BSSID"):
+                            parts = line.split(":", 1)
+                            if len(parts) == 2 and parts[1].strip():
+                                ssid = parts[1].strip()
+                                wifi_connected = True
+                                break
+                    self.tab_controls.set_wifi_status(wifi_connected, ssid if wifi_connected else "Home 5G")
+                except Exception:
+                    pass
+
+                try:
+                    from poppy.core.audio_endpoint import AudioEndpointManager
+                    endpoints = AudioEndpointManager.get_output_endpoints()
+                    for ep in endpoints:
+                        if ep.is_default:
+                            self.tab_controls.set_audio_device_name(ep.name)
+                            break
+                except Exception:
+                    pass
         except Exception:
             pass
+
+    def _open_wifi_settings(self):
+        try:
+            import subprocess
+            subprocess.Popen("start ms-availablenetworks:", shell=True)
+        except Exception:
+            pass
+
+    def _open_bluetooth_settings(self):
+        try:
+            import subprocess
+            subprocess.Popen("start ms-settings:bluetooth", shell=True)
+        except Exception:
+            pass
+
+    def _toggle_night_light(self):
+        try:
+            import subprocess
+            subprocess.Popen("start ms-settings:nightlight", shell=True)
+        except Exception:
+            pass
+
+    def _toggle_dark_mode(self):
+        curr_theme = self.config.get("theme", {}).get("mode", "Dark")
+        new_mode = "Light" if curr_theme == "Dark" else "Dark"
+        self.set_theme(new_mode)
+        if hasattr(self, "tab_controls"):
+            self.tab_controls.set_dark_mode_status(new_mode == "Dark")
+
+    def _on_controls_volume_changed(self, volume: int):
+        self._on_volume_slider_changed(volume, source=getattr(self.tab_controls, "slider_vol", None))
 
     def _on_volume_slider_action(self, slider):
         value = slider.sliderPosition()
@@ -1278,6 +1359,8 @@ class DynamicNotchWindow(QWidget):
     def _show_volume(self, volume, muted, *, source=None):
         self.tab_home.set_volume_display(volume, muted, sync_slider=source is not self.tab_home.slider_vol)
         self.tab_music.set_volume_display(volume, muted, sync_slider=source is not self.tab_music.vol_slider)
+        if hasattr(self, "tab_controls") and source is not getattr(self.tab_controls, "slider_vol", None):
+            self.tab_controls.set_volume_display(volume)
         self.coll_visualizer.set_muted(muted or volume == 0)
         self.peek_visualizer.set_muted(muted or volume == 0)
         if source is not self.peek_volume and not self.peek_volume.isSliderDown():
@@ -1811,6 +1894,8 @@ class DynamicNotchWindow(QWidget):
     def _on_pomo_time_updated(self, rem_sec, total_sec, fmt_time, progress):
         self.tab_timer.lbl_time.setText(fmt_time)
         self.tab_timer.ring.set_progress(progress)
+        if hasattr(self, "tab_today"):
+            self.tab_today.update_pomo_time(rem_sec, total_sec, fmt_time, progress)
 
         if self.pomodoro.is_running:
             self.lbl_coll_pomo.setText(fmt_time)
@@ -1830,6 +1915,8 @@ class DynamicNotchWindow(QWidget):
 
     def _on_pomo_state_changed(self, state, label):
         self.tab_home.btn_act_shield.setChecked(self.pomodoro.is_running)
+        if hasattr(self, "tab_today"):
+            self.tab_today.update_pomo_state(self.pomodoro.is_running)
         self.tab_timer.lbl_phase.setText(label)
         phase = getattr(state, "value", str(state))
         self.tab_timer.btn_phase_long.setChecked(phase == "long_break")
@@ -2858,7 +2945,10 @@ class DynamicNotchWindow(QWidget):
                 home_height = page.fit_height(preferred_height - chrome_height, w, max_height=max_height - chrome_height)
             elif page is self.tab_music:
                 page.fit_height(preferred_height - chrome_height)
-            h = max(preferred_height, max(home_height, page.minimumSizeHint().height()) + chrome_height)
+            if self._appearance.get("layout") in ("Instrument", "Deck") and page is self.tab_music:
+                h = min(preferred_height, max(page.minimumSizeHint().height() + chrome_height, 460))
+            else:
+                h = max(preferred_height, max(home_height, page.minimumSizeHint().height()) + chrome_height)
             self._target_size = (w, min(h, max_height))
             self.view_expanded.setFixedSize(*self._target_size)
 

@@ -28,9 +28,13 @@ class SingleInstance(QObject):
                 raise OSError("Poppy cannot create its instance lock.")
             socket = QLocalSocket()
             socket.connectToServer(self._name)
-            socket.waitForConnected(1000)
-            socket.disconnectFromServer()
-            return False
+            if socket.waitForConnected(500):
+                socket.disconnectFromServer()
+                return False
+            # Stale lock from crashed or abruptly killed process: recover cleanly
+            self._lock.removeStaleLockFile()
+            if not self._lock.tryLock(0):
+                return False
         QLocalServer.removeServer(self._name)
         self._server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
         if not self._server.listen(self._name):
