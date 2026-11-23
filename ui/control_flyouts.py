@@ -233,8 +233,8 @@ class WifiFlyoutMenu(QMenu):
             r_lay.setContentsMargins(6, 4, 6, 4)
             r_lay.setSpacing(8)
 
-            lbl_icon = QLabel("📶")
-            set_widget_style(lbl_icon, "color: rgba(255, 255, 255, 0.7); font-size: 12px; background: transparent; border: none;")
+            lbl_icon = QLabel(Icons.WIFI)
+            set_widget_style(lbl_icon, "color: rgba(255, 255, 255, 0.7); font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 13px; background: transparent; border: none;")
             r_lay.addWidget(lbl_icon)
 
             lbl_name = QLabel(n_ssid)
@@ -405,8 +405,8 @@ class BluetoothFlyoutMenu(QMenu):
             r_lay.setContentsMargins(6, 4, 6, 4)
             r_lay.setSpacing(8)
 
-            lbl_icon = QLabel("🎧" if "head" in name.lower() or "audio" in name.lower() else "🖱" if "mouse" in name.lower() else "⌨" if "key" in name.lower() else "📱")
-            set_widget_style(lbl_icon, "color: rgba(255, 255, 255, 0.7); font-size: 12px; background: transparent;")
+            lbl_icon = QLabel(Icons.SPEAKER if any(k in name.lower() for k in ["head", "audio", "sound"]) else Icons.BLUETOOTH)
+            set_widget_style(lbl_icon, "color: rgba(255, 255, 255, 0.7); font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 13px; background: transparent;")
             r_lay.addWidget(lbl_icon)
 
             lbl_name = QLabel(name)
@@ -518,8 +518,8 @@ class AudioDeviceFlyoutMenu(QMenu):
             r_lay.setContentsMargins(10, 4, 10, 4)
             r_lay.setSpacing(10)
 
-            lbl_icon = QLabel("🎧" if "headphone" in name.lower() or "headset" in name.lower() else "🔊")
-            set_widget_style(lbl_icon, "font-size: 13px; background: transparent;")
+            lbl_icon = QLabel(Icons.SPEAKER if any(k in name.lower() for k in ["headphone", "headset", "ear"]) else Icons.VOLUME)
+            set_widget_style(lbl_icon, "color: rgba(255, 255, 255, 0.75); font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 13px; background: transparent;")
             r_lay.addWidget(lbl_icon)
 
             lbl_name = QLabel(name)

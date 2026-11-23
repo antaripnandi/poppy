@@ -683,6 +683,10 @@ class DynamicNotchWindow(QWidget):
             ("btn_hdr_caffeine", "awake", "Keep awake", self._toggle_caffeine, True),
         )
 
+        self.btn_hdr_dictation_top = IconButton(Icons.MIC, "Voice typing (Ctrl+Shift+D)", size=30, font_size=13, is_fluent=True)
+        self.btn_hdr_dictation_top.clicked.connect(self.dictation.open_panel)
+        header_bar.addWidget(self.btn_hdr_dictation_top)
+
         self.btn_hdr_lock = IconButton(Icons.LOCK, "Lock workstation", size=30, font_size=13, is_fluent=True)
         self.btn_hdr_lock.clicked.connect(self._lock_workstation)
         header_bar.addWidget(self.btn_hdr_lock)
@@ -878,7 +882,6 @@ class DynamicNotchWindow(QWidget):
         self.btn_hdr_dictation.clicked.connect(self.dictation.open_panel)
         self.dictation.panel_visible.connect(self.btn_hdr_dictation.setChecked)
         tools.addWidget(self.btn_hdr_dictation)
-        self.footer_tools.hide()
         v_exp_layout.addWidget(self.footer_tools)
         self.view_expanded.setVisible(False)
 

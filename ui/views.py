@@ -1207,25 +1207,25 @@ class ControlsTabView(QWidget):
         ctrl_row = QHBoxLayout()
         ctrl_row.setSpacing(8)
 
-        self.btn_prev = QPushButton("◀◀")
+        self.btn_prev = QPushButton(Icons.PREV)
         self.btn_prev.setFixedSize(36, 36)
         self.btn_prev.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_prev, "QPushButton { background: rgba(255, 255, 255, 0.06); border-radius: 18px; color: #ffffff; font-size: 11px; border: none; } QPushButton:hover { background: rgba(255, 255, 255, 0.12); }")
+        set_widget_style(self.btn_prev, "QPushButton { background: rgba(255, 255, 255, 0.06); border-radius: 18px; color: #ffffff; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 13px; border: none; } QPushButton:hover { background: rgba(255, 255, 255, 0.12); }")
         self.btn_prev.clicked.connect(self.prev_clicked.emit)
         ctrl_row.addWidget(self.btn_prev)
 
         # Light blue play pill
-        self.btn_play = QPushButton("▶")
+        self.btn_play = QPushButton(Icons.PLAY)
         self.btn_play.setFixedSize(52, 36)
         self.btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_play, "QPushButton { background: #93c5fd; border-radius: 18px; color: #0e1117; font-size: 14px; font-weight: 800; border: none; } QPushButton:hover { background: #bfdbfe; }")
+        set_widget_style(self.btn_play, "QPushButton { background: #93c5fd; border-radius: 18px; color: #0e1117; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 15px; font-weight: 800; border: none; } QPushButton:hover { background: #bfdbfe; }")
         self.btn_play.clicked.connect(self.play_pause_clicked.emit)
         ctrl_row.addWidget(self.btn_play)
 
-        self.btn_next = QPushButton("▶▶")
+        self.btn_next = QPushButton(Icons.NEXT)
         self.btn_next.setFixedSize(36, 36)
         self.btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_next, "QPushButton { background: rgba(255, 255, 255, 0.06); border-radius: 18px; color: #ffffff; font-size: 11px; border: none; } QPushButton:hover { background: rgba(255, 255, 255, 0.12); }")
+        set_widget_style(self.btn_next, "QPushButton { background: rgba(255, 255, 255, 0.06); border-radius: 18px; color: #ffffff; font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 13px; border: none; } QPushButton:hover { background: rgba(255, 255, 255, 0.12); }")
         self.btn_next.clicked.connect(self.next_clicked.emit)
         ctrl_row.addWidget(self.btn_next)
 
@@ -1268,7 +1268,7 @@ class ControlsTabView(QWidget):
 
     def set_playing(self, is_playing: bool):
         self._is_playing = is_playing
-        self.btn_play.setText("⏸" if is_playing else "▶")
+        self.btn_play.setText(Icons.PAUSE if is_playing else Icons.PLAY)
 
     def set_timeline(self, pos_sec: float, dur_sec: float):
         if dur_sec > 0:
@@ -2231,9 +2231,9 @@ class ShelfStageCard(QFrame):
                     border: 1px solid rgba(255, 255, 255, 0.2);
                 }}
             """)
-            lbl_folder_ico = QLabel("📁")
+            lbl_folder_ico = QLabel(Icons.FOLDER)
             lbl_folder_ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            set_widget_style(lbl_folder_ico, "font-size: 32px; background: transparent;")
+            set_widget_style(lbl_folder_ico, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 28px; color: #f28c5a; background: transparent;")
             t_lay.addWidget(lbl_folder_ico)
         else:
             set_widget_style(self.thumb_box, """
@@ -2250,9 +2250,9 @@ class ShelfStageCard(QFrame):
                 lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 t_lay.addWidget(lbl_img)
             else:
-                lbl_ico = QLabel("📄")
+                lbl_ico = QLabel(Icons.DOCS)
                 lbl_ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                set_widget_style(lbl_ico, "font-size: 28px; background: transparent;")
+                set_widget_style(lbl_ico, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 24px; color: rgba(255, 255, 255, 0.6); background: transparent;")
                 t_lay.addWidget(lbl_ico)
 
         layout.addWidget(self.thumb_box)
@@ -2453,7 +2453,7 @@ class ShelfTabView(QWidget):
         set_widget_style(lbl_on_shelf, "font-size: 10px; font-weight: 700; color: #717d8f; background: transparent; letter-spacing: 0.5px;")
         sidebar.addWidget(lbl_on_shelf)
 
-        self.btn_side_shelf = QPushButton("  ☷   Shelf")
+        self.btn_side_shelf = QPushButton("Shelf")
         set_widget_style(self.btn_side_shelf, """
             QPushButton {
                 background: rgba(242, 140, 90, 0.16);
@@ -2472,7 +2472,7 @@ class ShelfTabView(QWidget):
         set_widget_style(lbl_on_pc, "font-size: 10px; font-weight: 700; color: #717d8f; background: transparent; letter-spacing: 0.5px; margin-top: 6px;")
         sidebar.addWidget(lbl_on_pc)
 
-        self.btn_side_dl = QPushButton("  📥   Downloads")
+        self.btn_side_dl = QPushButton("Downloads")
         set_widget_style(self.btn_side_dl, """
             QPushButton {
                 background: rgba(255, 255, 255, 0.03);
@@ -2492,7 +2492,7 @@ class ShelfTabView(QWidget):
         self.btn_side_dl.clicked.connect(lambda: os.startfile(os.path.expanduser("~/Downloads")))
         sidebar.addWidget(self.btn_side_dl)
 
-        self.btn_side_docs = QPushButton("  📄   Documents")
+        self.btn_side_docs = QPushButton("Documents")
         set_widget_style(self.btn_side_docs, """
             QPushButton {
                 background: rgba(255, 255, 255, 0.03);
@@ -2512,7 +2512,7 @@ class ShelfTabView(QWidget):
         self.btn_side_docs.clicked.connect(lambda: os.startfile(os.path.expanduser("~/Documents")))
         sidebar.addWidget(self.btn_side_docs)
 
-        btn_add_folder = QPushButton("  +   Add folder")
+        btn_add_folder = QPushButton("+ Add folder")
         set_widget_style(btn_add_folder, """
             QPushButton {
                 background: transparent;

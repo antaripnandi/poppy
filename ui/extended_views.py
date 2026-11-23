@@ -787,9 +787,9 @@ class ClipboardTabView(QWidget):
             # Icon Badge (Link, Code, Image, or Text)
             is_link = txt.startswith(("http://", "https://"))
             is_code = any(txt.strip().startswith(kw) for kw in ["#include", "import ", "def ", "class ", "const ", "npm ", "function", "let ", "var "]) or "\n" in txt and "{" in txt
-            badge_icon = "🔗" if is_link else ("</>" if is_code else "📄")
+            badge_icon = Icons.LINK if is_link else (Icons.CODE if is_code else Icons.DOCS)
             lbl_icon = QLabel(badge_icon)
-            set_widget_style(lbl_icon, "font-size: 13px; color: #f28c5a; background: rgba(242, 140, 90, 0.12); border-radius: 6px; padding: 4px; min-width: 22px; text-align: center;")
+            set_widget_style(lbl_icon, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 13px; color: #f28c5a; background: rgba(242, 140, 90, 0.12); border-radius: 6px; padding: 4px; min-width: 22px; text-align: center;")
             lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             r_l.addWidget(lbl_icon)
 
@@ -1249,9 +1249,9 @@ class LauncherTabView(QWidget):
         # 2. Quick Tag Pills (Terminal, Explorer, Settings)
         # -------------------------------------------------------------
         quick_tags = [
-            ("⚡ Terminal", lambda: subprocess.Popen(["cmd", "/c", "start", "wt"], shell=True)),
-            ("⚡ Explorer", lambda: subprocess.Popen(["cmd", "/c", "start", "explorer"], shell=True)),
-            ("⚡ Settings", lambda: subprocess.Popen(["cmd", "/c", "start", "ms-settings:"], shell=True)),
+            ("Terminal", lambda: subprocess.Popen(["cmd", "/c", "start", "wt"], shell=True)),
+            ("Explorer", lambda: subprocess.Popen(["cmd", "/c", "start", "explorer"], shell=True)),
+            ("Settings", lambda: subprocess.Popen(["cmd", "/c", "start", "ms-settings:"], shell=True)),
         ]
         tag_bar = QHBoxLayout()
         tag_bar.setSpacing(8)
@@ -1373,15 +1373,15 @@ class LauncherTabView(QWidget):
 
         # Build list of base entries
         builtin_defaults = [
-            {"name": "Visual Studio Code", "cmd": "code", "type": "Application", "icon": "💻"},
-            {"name": "Discord", "cmd": "discord", "type": "Application", "icon": "💬"},
-            {"name": "Google Chrome", "cmd": "chrome", "type": "Application", "icon": "🌐"},
-            {"name": "Steam", "cmd": "steam", "type": "Application", "icon": "🎮"},
-            {"name": "File Explorer", "cmd": "explorer", "type": "Application", "icon": "📁"},
-            {"name": "Calculator", "cmd": "calc", "type": "Application", "icon": "🧮"},
-            {"name": "CapCut", "cmd": "capcut", "type": "Application", "icon": "🎬"},
-            {"name": "Epic Games Launcher", "cmd": "epicgames", "type": "Application", "icon": "🕹"},
-            {"name": "Minecraft", "cmd": "minecraft", "type": "Game", "icon": "⛏"},
+            {"name": "Visual Studio Code", "cmd": "code", "type": "Application", "icon": Icons.CODE},
+            {"name": "Discord", "cmd": "discord", "type": "Application", "icon": Icons.APPS},
+            {"name": "Google Chrome", "cmd": "chrome", "type": "Application", "icon": Icons.NETWORK},
+            {"name": "Steam", "cmd": "steam", "type": "Application", "icon": Icons.APPS},
+            {"name": "File Explorer", "cmd": "explorer", "type": "Application", "icon": Icons.FOLDER},
+            {"name": "Calculator", "cmd": "calc", "type": "Application", "icon": Icons.CALCULATOR},
+            {"name": "CapCut", "cmd": "capcut", "type": "Application", "icon": Icons.VIDEO},
+            {"name": "Epic Games Launcher", "cmd": "epicgames", "type": "Application", "icon": Icons.APPS},
+            {"name": "Minecraft", "cmd": "minecraft", "type": "Game", "icon": Icons.APPS},
         ]
 
         entries = list(self.commands)
@@ -1490,9 +1490,9 @@ class LauncherTabView(QWidget):
         r_lay.setSpacing(10)
 
         # Icon
-        icon_str = entry.get("icon", "📦")
+        icon_str = entry.get("icon", Icons.APPS)
         lbl_icon = QLabel(icon_str)
-        set_widget_style(lbl_icon, "font-size: 16px; background: transparent;")
+        set_widget_style(lbl_icon, "font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 15px; color: #f28c5a; background: transparent;")
         r_lay.addWidget(lbl_icon)
 
         # Title
@@ -2181,15 +2181,12 @@ class StatsTabView(QWidget):
 
         d_hdr = QHBoxLayout()
         d_hdr.setSpacing(6)
-        lbl_d_icon = QLabel("🖴")
-        set_widget_style(lbl_d_icon, "font-size: 11px; color: #f28c5a; background: transparent;")
-        d_hdr.addWidget(lbl_d_icon)
         lbl_d_title = QLabel("DISK C:")
         set_widget_style(lbl_d_title, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent; letter-spacing: 0.5px;")
         d_hdr.addWidget(lbl_d_title)
         d_hdr.addStretch()
         self.lbl_disk_pct = QLabel("56%")
-        set_widget_style(self.lbl_disk_pct, "font-size: 9.5px; font-weight: 700; color: #f28c5a; background: rgba(242,140,90,0.12); border-radius: 4px; padding: 2px 6px;")
+        set_widget_style(self.lbl_disk_pct, "font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.5); background: transparent; border: none;")
         d_hdr.addWidget(self.lbl_disk_pct)
         d_lay.addLayout(d_hdr)
 
@@ -2198,11 +2195,11 @@ class StatsTabView(QWidget):
         d_lay.addWidget(self.lbl_disk_val)
 
         self.bar_disk = StorageUsageBar(parent=self.card_disk, accent=self._accent)
-        self.bar_disk.setFixedHeight(6)
+        self.bar_disk.setFixedHeight(4)
         d_lay.addWidget(self.bar_disk)
 
-        self.lbl_disk_sub = QLabel("Local Disk · NTFS")
-        set_widget_style(self.lbl_disk_sub, "font-size: 10px; color: rgba(255,255,255,0.4); background: transparent;")
+        self.lbl_disk_sub = QLabel("415 GB free")
+        set_widget_style(self.lbl_disk_sub, "font-size: 10px; color: rgba(255,255,255,0.45); background: transparent;")
         d_lay.addWidget(self.lbl_disk_sub)
         d_lay.addStretch()
 
@@ -2216,15 +2213,12 @@ class StatsTabView(QWidget):
 
         n_hdr = QHBoxLayout()
         n_hdr.setSpacing(6)
-        lbl_n_icon = QLabel("🌐")
-        set_widget_style(lbl_n_icon, "font-size: 11px; color: #38bdf8; background: transparent;")
-        n_hdr.addWidget(lbl_n_icon)
         lbl_n_title = QLabel("NETWORK")
         set_widget_style(lbl_n_title, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent; letter-spacing: 0.5px;")
         n_hdr.addWidget(lbl_n_title)
         n_hdr.addStretch()
         self.lbl_net_status = QLabel("● Active")
-        set_widget_style(self.lbl_net_status, "font-size: 9.5px; font-weight: 700; color: #10b981; background: rgba(16,185,129,0.12); border-radius: 4px; padding: 2px 6px;")
+        set_widget_style(self.lbl_net_status, "font-size: 10px; font-weight: 500; color: #10b981; background: transparent; border: none;")
         n_hdr.addWidget(self.lbl_net_status)
         n_lay.addLayout(n_hdr)
 
@@ -2232,19 +2226,11 @@ class StatsTabView(QWidget):
         set_widget_style(self.lbl_net_val, "font-size: 14px; font-weight: 700; color: #ffffff; background: transparent;")
         n_lay.addWidget(self.lbl_net_val)
 
-        flow_row = QHBoxLayout()
-        flow_row.setSpacing(8)
         self.lbl_net_down = QLabel("↓ 0 KB/s")
-        set_widget_style(self.lbl_net_down, "font-size: 10px; font-weight: 600; color: #38bdf8; background: transparent;")
         self.lbl_net_up = QLabel("↑ 0 KB/s")
-        set_widget_style(self.lbl_net_up, "font-size: 10px; font-weight: 600; color: #c084fc; background: transparent;")
-        flow_row.addWidget(self.lbl_net_down)
-        flow_row.addWidget(self.lbl_net_up)
-        flow_row.addStretch()
-        n_lay.addLayout(flow_row)
 
-        self.lbl_net_sub = QLabel("Live Throughput · Wi-Fi")
-        set_widget_style(self.lbl_net_sub, "font-size: 10px; color: rgba(255,255,255,0.4); background: transparent;")
+        self.lbl_net_sub = QLabel("Wi-Fi")
+        set_widget_style(self.lbl_net_sub, "font-size: 10px; color: rgba(255,255,255,0.45); background: transparent;")
         n_lay.addWidget(self.lbl_net_sub)
         n_lay.addStretch()
 
@@ -2258,15 +2244,12 @@ class StatsTabView(QWidget):
 
         u_hdr = QHBoxLayout()
         u_hdr.setSpacing(6)
-        lbl_u_icon = QLabel("⏱")
-        set_widget_style(lbl_u_icon, "font-size: 11px; color: #4ade80; background: transparent;")
-        u_hdr.addWidget(lbl_u_icon)
         lbl_u_title = QLabel("UP FOR")
         set_widget_style(lbl_u_title, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent; letter-spacing: 0.5px;")
         u_hdr.addWidget(lbl_u_title)
         u_hdr.addStretch()
         self.lbl_up_status = QLabel("● Stable")
-        set_widget_style(self.lbl_up_status, "font-size: 9.5px; font-weight: 700; color: #4ade80; background: rgba(74,222,128,0.12); border-radius: 4px; padding: 2px 6px;")
+        set_widget_style(self.lbl_up_status, "font-size: 10px; font-weight: 500; color: #4ade80; background: transparent; border: none;")
         u_hdr.addWidget(self.lbl_up_status)
         u_lay.addLayout(u_hdr)
 
@@ -2278,9 +2261,7 @@ class StatsTabView(QWidget):
         set_widget_style(self.lbl_up_boot, "font-size: 10.5px; font-weight: 600; color: rgba(255,255,255,0.7); background: transparent;")
         u_lay.addWidget(self.lbl_up_boot)
 
-        self.lbl_up_sub = QLabel("System Uptime · AC Online")
-        set_widget_style(self.lbl_up_sub, "font-size: 10px; color: rgba(255,255,255,0.4); background: transparent;")
-        u_lay.addWidget(self.lbl_up_sub)
+        self.lbl_up_sub = QLabel("")
         u_lay.addStretch()
 
         sub_lay.addWidget(self.card_up, 1)
@@ -2316,7 +2297,7 @@ class StatsTabView(QWidget):
         rates_row.addWidget(self.lbl_up)
         s_lay.addLayout(rates_row)
 
-        self.btn_speed = QPushButton("▶ Run speed test")
+        self.btn_speed = QPushButton("Run speed test")
         self.btn_speed.setFixedHeight(30)
         self.btn_speed.setCursor(Qt.CursorShape.PointingHandCursor)
         set_widget_style(self.btn_speed, f"""
@@ -2366,16 +2347,20 @@ class StatsTabView(QWidget):
         lay.addWidget(lbl_sub)
 
         chips_row = QHBoxLayout()
-        chips_row.setSpacing(4)
+        chips_row.setSpacing(6)
         chips_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if chip1:
             lbl_c1 = QLabel(chip1)
-            set_widget_style(lbl_c1, "background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-size: 9.5px; font-weight: 600; color: rgba(255,255,255,0.85); padding: 2px 6px;")
+            set_widget_style(lbl_c1, "background: transparent; border: none; font-size: 10px; font-weight: 500; color: rgba(255,255,255,0.45); padding: 0;")
             chips_row.addWidget(lbl_c1)
             box._chip1 = lbl_c1
+        if chip1 and chip2:
+            lbl_dot = QLabel("·")
+            set_widget_style(lbl_dot, "background: transparent; border: none; font-size: 10px; color: rgba(255,255,255,0.25); padding: 0;")
+            chips_row.addWidget(lbl_dot)
         if chip2:
             lbl_c2 = QLabel(chip2)
-            set_widget_style(lbl_c2, "background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-size: 9.5px; font-weight: 600; color: rgba(255,255,255,0.85); padding: 2px 6px;")
+            set_widget_style(lbl_c2, "background: transparent; border: none; font-size: 10px; font-weight: 500; color: rgba(255,255,255,0.45); padding: 0;")
             chips_row.addWidget(lbl_c2)
             box._chip2 = lbl_c2
         lay.addLayout(chips_row)
@@ -2533,7 +2518,7 @@ class StatsTabView(QWidget):
 
     def _apply_speed_result(self, speed_mbps: float):
         self.btn_speed.setEnabled(True)
-        self.btn_speed.setText("▶ Run speed test")
+        self.btn_speed.setText("Run speed test")
         self.lbl_down.setText(f"{int(speed_mbps)} <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↓</span>")
         up_est = max(10, int(speed_mbps * 0.45))
         self.lbl_up.setText(f"{up_est} <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↑</span>")
@@ -2632,7 +2617,7 @@ class StatsTabView(QWidget):
                     if hasattr(self, "bar_disk"):
                         self.bar_disk.set_ratio(pct / 100.0)
                     if hasattr(self, "lbl_disk_sub"):
-                        self.lbl_disk_sub.setText(f"{int(d_free)} GB free · Local Disk")
+                        self.lbl_disk_sub.setText(f"{int(d_free)} GB free")
                 except Exception:
                     pass
             net = psutil.net_io_counters()
@@ -2832,8 +2817,8 @@ class PowerTabView(QWidget):
         b_lay.setContentsMargins(16, 12, 16, 12)
         b_lay.setSpacing(12)
 
-        lbl_bat_icon = QLabel("⚡")
-        set_widget_style(lbl_bat_icon, f"font-size: 24px; color: {self._accent}; background: transparent;")
+        lbl_bat_icon = QLabel(Icons.POWER)
+        set_widget_style(lbl_bat_icon, f"font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', 'Segoe UI'; font-size: 22px; color: {self._accent}; background: transparent;")
         b_lay.addWidget(lbl_bat_icon)
 
         v_bat = QVBoxLayout()
