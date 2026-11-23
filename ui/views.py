@@ -944,11 +944,11 @@ class TodayTabView(QWidget):
         set_widget_style(sun_icon, "font-size: 24px; color: #fbbf24; background: transparent;")
         w_lay.addWidget(sun_icon)
 
-        self.lbl_hitodama_temp = QLabel("32°C")
+        self.lbl_hitodama_temp = QLabel("--°C")
         set_widget_style(self.lbl_hitodama_temp, "font-size: 22px; font-weight: 700; color: #ffffff; background: transparent;")
         w_lay.addWidget(self.lbl_hitodama_temp)
 
-        self.lbl_hitodama_cond = QLabel("Mostly clear")
+        self.lbl_hitodama_cond = QLabel("Updating...")
         set_widget_style(self.lbl_hitodama_cond, "font-size: 11.5px; font-weight: 500; color: rgba(255,255,255,0.6); background: transparent;")
         w_lay.addWidget(self.lbl_hitodama_cond)
         col1.addWidget(card_weather, 2)
@@ -996,11 +996,11 @@ class TodayTabView(QWidget):
         main_layout.addWidget(card_todo, 2)
 
     def update_weather(self, data: dict):
-        temp = data.get("temp", 32)
-        cond = data.get("condition", "Mostly clear")
+        temp = data.get("temp", "--")
+        cond = data.get("condition", "Updating...")
         unit = data.get("unit", "°C")
         if hasattr(self, "lbl_hitodama_temp"):
-            self.lbl_hitodama_temp.setText(f"{temp}{unit}")
+            self.lbl_hitodama_temp.setText(f"{temp}{unit}" if temp != "--" else "--°C")
         if hasattr(self, "lbl_hitodama_cond"):
             self.lbl_hitodama_cond.setText(cond)
 
@@ -1038,8 +1038,10 @@ class ControlsTabView(QWidget):
     audio_device_menu_requested = Signal()
     power_options_requested = Signal()
     night_light_toggle_requested = Signal()
+    night_light_menu_requested = Signal()
     dark_mode_toggle_requested = Signal()
     volume_changed = Signal(int)
+    brightness_changed = Signal(int)
     play_pause_clicked = Signal()
     prev_clicked = Signal()
     next_clicked = Signal()
@@ -1062,13 +1064,13 @@ class ControlsTabView(QWidget):
         grid.setSpacing(8)
 
         # Row 0: Wi-Fi, Bluetooth, Audio
-        self.tile_wifi = ControlPillTile(Icons.WIFI, "Wi-Fi", "Home 5G", "Wi-Fi settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
+        self.tile_wifi = ControlPillTile(Icons.WIFI, "Wi-Fi", "Scanning...", "Wi-Fi networks", toggle=True, has_menu=True, accent=self._accent, parent=self)
         self.tile_wifi.setChecked(True)
         self.tile_wifi.clicked.connect(self.wifi_clicked.emit)
         self.tile_wifi.menu_requested.connect(self.wifi_menu_requested.emit)
         grid.addWidget(self.tile_wifi, 0, 0)
 
-        self.tile_bt = ControlPillTile(Icons.BLUETOOTH, "Bluetooth", "Off", "Bluetooth settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
+        self.tile_bt = ControlPillTile(Icons.BLUETOOTH, "Bluetooth", "Off", "Bluetooth devices", toggle=True, has_menu=True, accent=self._accent, parent=self)
         self.tile_bt.setChecked(False)
         self.tile_bt.clicked.connect(self.bluetooth_clicked.emit)
         self.tile_bt.menu_requested.connect(self.bluetooth_menu_requested.emit)
@@ -1088,6 +1090,7 @@ class ControlsTabView(QWidget):
         self.tile_night = ControlPillTile(Icons.SHIELD, "Night Light", "Off", "Night light settings", toggle=True, has_menu=True, accent=self._accent, parent=self)
         self.tile_night.setChecked(False)
         self.tile_night.clicked.connect(self.night_light_toggle_requested.emit)
+        self.tile_night.menu_requested.connect(self.night_light_menu_requested.emit)
         grid.addWidget(self.tile_night, 1, 1)
 
         self.tile_dark = ControlPillTile(Icons.COLOR, "Dark mode", "On", "Dark mode toggle", toggle=True, has_menu=False, accent=self._accent, parent=self)
@@ -1099,34 +1102,61 @@ class ControlsTabView(QWidget):
             grid.setColumnStretch(col, 1)
         main_layout.addLayout(grid)
 
-        # 2. Volume Capsule Slider
-        vol_box = QWidget(self)
+        # 2. Dual Sliders: Volume & Brightness
+        sliders_box = QWidget(self)
+        sliders_lay = QVBoxLayout(sliders_box)
+        sliders_lay.setContentsMargins(0, 0, 0, 0)
+        sliders_lay.setSpacing(6)
+
+        # Volume Capsule Slider
+        vol_box = QWidget(sliders_box)
         vol_lay = QHBoxLayout(vol_box)
-        vol_lay.setContentsMargins(0, 2, 0, 2)
+        vol_lay.setContentsMargins(0, 0, 0, 0)
         vol_lay.setSpacing(12)
 
         self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=False, show_text=False)
-        self.slider_vol.setFixedHeight(34)
+        self.slider_vol.setFixedHeight(32)
         self.slider_vol.set_accent(self._accent)
-        self.slider_vol.setValue(64)
+        self.slider_vol.setValue(100)
         self.slider_vol.valueChanged.connect(self.volume_changed.emit)
         vol_lay.addWidget(self.slider_vol, 1)
 
-        self.lbl_vol_pct = QLabel("64%")
-        set_widget_style(self.lbl_vol_pct, "font-size: 13px; font-weight: 700; color: #ffffff; background: transparent; min-width: 38px;")
+        self.lbl_vol_pct = QLabel("100%")
+        set_widget_style(self.lbl_vol_pct, "font-size: 12.5px; font-weight: 700; color: #ffffff; background: transparent; min-width: 38px;")
         self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_pct.setText(f"{v}%"))
         vol_lay.addWidget(self.lbl_vol_pct)
-        main_layout.addWidget(vol_box)
+        sliders_lay.addWidget(vol_box)
+
+        # Brightness Capsule Slider
+        bright_box = QWidget(sliders_box)
+        bright_lay = QHBoxLayout(bright_box)
+        bright_lay.setContentsMargins(0, 0, 0, 0)
+        bright_lay.setSpacing(12)
+
+        self.slider_bright = CapsuleSlider(icon=Icons.BRIGHTNESS, parent=self, compact_track=False, show_text=False)
+        self.slider_bright.setFixedHeight(32)
+        self.slider_bright.set_accent(self._accent)
+        self.slider_bright.setValue(100)
+        self.slider_bright.valueChanged.connect(self.brightness_changed.emit)
+        bright_lay.addWidget(self.slider_bright, 1)
+
+        self.lbl_bright_pct = QLabel("100%")
+        set_widget_style(self.lbl_bright_pct, "font-size: 12.5px; font-weight: 700; color: #ffffff; background: transparent; min-width: 38px;")
+        self.slider_bright.valueChanged.connect(lambda v: self.lbl_bright_pct.setText(f"{v}%"))
+        bright_lay.addWidget(self.lbl_bright_pct)
+        sliders_lay.addWidget(bright_box)
+
+        main_layout.addWidget(sliders_box)
 
         # 3. Dedicated Now Playing Card
         self.card_player = CardFrame(self)
         card_lay = QVBoxLayout(self.card_player)
-        card_lay.setContentsMargins(18, 14, 18, 14)
-        card_lay.setSpacing(10)
+        card_lay.setContentsMargins(18, 12, 18, 12)
+        card_lay.setSpacing(8)
 
         # Top Output Device Pill (< Speakers)
         top_pill_row = QHBoxLayout()
-        self.btn_output_device = QPushButton("< Speakers")
+        self.btn_output_device = QPushButton("< Audio Output")
         self.btn_output = self.btn_output_device
         self.btn_output_device.setCursor(Qt.CursorShape.PointingHandCursor)
         set_widget_style(self.btn_output_device, """
@@ -1165,9 +1195,9 @@ class ControlsTabView(QWidget):
         meta_box = QVBoxLayout()
         meta_box.setSpacing(2)
         meta_box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_title = QLabel("lofi beats to study and relax")
+        self.lbl_title = QLabel("Nothing playing")
         set_widget_style(self.lbl_title, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
-        self.lbl_artist = QLabel("lofi radio")
+        self.lbl_artist = QLabel("Play audio or video in any app")
         set_widget_style(self.lbl_artist, "font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.55); background: transparent;")
         meta_box.addWidget(self.lbl_title)
         meta_box.addWidget(self.lbl_artist)
@@ -1205,17 +1235,17 @@ class ControlsTabView(QWidget):
         # Bottom Waveform Seek Bar
         seek_row = QHBoxLayout()
         seek_row.setSpacing(10)
-        self.lbl_pos = QLabel("22:57")
+        self.lbl_pos = QLabel("00:00")
         set_widget_style(self.lbl_pos, "font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.5); background: transparent;")
         seek_row.addWidget(self.lbl_pos)
 
         self.waveform_bar = WaveformSeekBar(self, accent="#93c5fd")
-        self.waveform_bar.set_duration(3735)
-        self.waveform_bar.set_position(1377)
+        self.waveform_bar.set_duration(100)
+        self.waveform_bar.set_position(0)
         self.waveform_bar.seek_requested.connect(self.seek_requested.emit)
         seek_row.addWidget(self.waveform_bar, 1)
 
-        self.lbl_dur = QLabel("62:15")
+        self.lbl_dur = QLabel("00:00")
         set_widget_style(self.lbl_dur, "font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.5); background: transparent;")
         seek_row.addWidget(self.lbl_dur)
 
@@ -1276,11 +1306,21 @@ class ControlsTabView(QWidget):
         self.slider_vol.blockSignals(False)
         self.lbl_vol_pct.setText(f"{volume}%")
 
+    def set_brightness_display(self, bright: int):
+        self.slider_bright.blockSignals(True)
+        self.slider_bright.setValue(bright)
+        self.slider_bright.blockSignals(False)
+        self.lbl_bright_pct.setText(f"{bright}%")
+
     def set_accent(self, accent: str):
         self._accent = accent
         self.slider_vol.set_accent(accent)
+        self.slider_bright.set_accent(accent)
         self.tile_wifi.set_accent(accent)
+        self.tile_bt.set_accent(accent)
         self.tile_audio.set_accent(accent)
+        self.tile_power.set_accent(accent)
+        self.tile_night.set_accent(accent)
         self.tile_dark.set_accent(accent)
 
 
@@ -2309,7 +2349,7 @@ class ShelfTabView(QWidget):
         self.watcher = screenshot_watcher
         self._active_filter = "All"
         self._selected_card = None
-        self._staged_folders = ["Footage", "Client work"]
+        self._staged_folders = []
         self.setAcceptDrops(True)
         self._init_ui()
 
@@ -2428,31 +2468,12 @@ class ShelfTabView(QWidget):
         """)
         sidebar.addWidget(self.btn_side_shelf)
 
-        self.btn_side_client = QPushButton("  📁   Client work")
-        set_widget_style(self.btn_side_client, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 9px;
-                padding: 7px 12px;
-                color: rgba(255, 255, 255, 0.75);
-                font-size: 12.5px;
-                font-weight: 500;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.07);
-                color: #ffffff;
-            }
-        """)
-        sidebar.addWidget(self.btn_side_client)
-
         lbl_on_pc = QLabel("ON THIS PC")
         set_widget_style(lbl_on_pc, "font-size: 10px; font-weight: 700; color: #717d8f; background: transparent; letter-spacing: 0.5px; margin-top: 6px;")
         sidebar.addWidget(lbl_on_pc)
 
-        self.btn_side_footage = QPushButton("  📁   Footage")
-        set_widget_style(self.btn_side_footage, """
+        self.btn_side_dl = QPushButton("  📥   Downloads")
+        set_widget_style(self.btn_side_dl, """
             QPushButton {
                 background: rgba(255, 255, 255, 0.03);
                 border: 1px solid rgba(255, 255, 255, 0.06);
@@ -2468,7 +2489,28 @@ class ShelfTabView(QWidget):
                 color: #ffffff;
             }
         """)
-        sidebar.addWidget(self.btn_side_footage)
+        self.btn_side_dl.clicked.connect(lambda: os.startfile(os.path.expanduser("~/Downloads")))
+        sidebar.addWidget(self.btn_side_dl)
+
+        self.btn_side_docs = QPushButton("  📄   Documents")
+        set_widget_style(self.btn_side_docs, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 9px;
+                padding: 7px 12px;
+                color: rgba(255, 255, 255, 0.75);
+                font-size: 12.5px;
+                font-weight: 500;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.07);
+                color: #ffffff;
+            }
+        """)
+        self.btn_side_docs.clicked.connect(lambda: os.startfile(os.path.expanduser("~/Documents")))
+        sidebar.addWidget(self.btn_side_docs)
 
         btn_add_folder = QPushButton("  +   Add folder")
         set_widget_style(btn_add_folder, """
@@ -2702,15 +2744,11 @@ class ShelfTabView(QWidget):
         col_count = 3
         current_index = 0
 
-        # Always show folder cards (Footage, Client work) when on "All" filter matching Picture 4
-        if self._active_filter == "All" and not filter_q:
-            for f_name in ["Footage", "Client work"]:
-                f_card = ShelfStageCard(f_name, is_folder=True, parent=self.items_container)
-                f_card.selected_changed.connect(self._select_card)
-                r = current_index // col_count
-                c = current_index % col_count
-                self.stage_grid.addWidget(f_card, r, c)
-                current_index += 1
+        if not items:
+            lbl_empty = QLabel("Shelf is empty.\nDrag and drop files or folders here to stage them.")
+            lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            set_widget_style(lbl_empty, "color: rgba(255, 255, 255, 0.4); font-size: 12px; padding: 40px 0;")
+            self.stage_grid.addWidget(lbl_empty, 0, 0, 1, col_count)
 
         for it in reversed(items):
             card = ShelfStageCard(it, is_folder=it.is_dir, parent=self.items_container)

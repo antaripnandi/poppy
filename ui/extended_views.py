@@ -1176,7 +1176,7 @@ class LauncherTabView(QWidget):
                 return json.loads(self._starred_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        return ["Visual Studio Code", "Discord"]
+        return []
 
     def _save_starred(self):
         try:
@@ -1190,7 +1190,7 @@ class LauncherTabView(QWidget):
                 return json.loads(self._recent_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        return ["Google Chrome", "Steam", "File Explorer"]
+        return []
 
     def _save_recent(self):
         try:
@@ -1246,11 +1246,12 @@ class LauncherTabView(QWidget):
         layout.addLayout(hdr)
 
         # -------------------------------------------------------------
-        # 2. Quick Tag Pills (⚡ gmail, ⚡ Gta 5)
+        # 2. Quick Tag Pills (Terminal, Explorer, Settings)
         # -------------------------------------------------------------
         quick_tags = [
-            ("⚡ gmail", lambda: subprocess.Popen(["cmd", "/c", "start", "https://mail.google.com"], shell=True)),
-            ("⚡ Gta 5", lambda: subprocess.Popen(["cmd", "/c", "start", "steam://rungameid/271590"], shell=True)),
+            ("⚡ Terminal", lambda: subprocess.Popen(["cmd", "/c", "start", "wt"], shell=True)),
+            ("⚡ Explorer", lambda: subprocess.Popen(["cmd", "/c", "start", "explorer"], shell=True)),
+            ("⚡ Settings", lambda: subprocess.Popen(["cmd", "/c", "start", "ms-settings:"], shell=True)),
         ]
         tag_bar = QHBoxLayout()
         tag_bar.setSpacing(8)
@@ -2104,7 +2105,7 @@ class StatsTabView(QWidget):
         d_lay.setSpacing(4)
         lbl_d_hdr = QLabel("DISK C:")
         set_widget_style(lbl_d_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
-        self.lbl_disk_val = QLabel("412 / 931 GB")
+        self.lbl_disk_val = QLabel(self._get_initial_disk_str())
         set_widget_style(self.lbl_disk_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
         d_lay.addWidget(lbl_d_hdr)
         d_lay.addWidget(self.lbl_disk_val)
@@ -2117,7 +2118,7 @@ class StatsTabView(QWidget):
         n_lay.setSpacing(4)
         lbl_n_hdr = QLabel("NETWORK")
         set_widget_style(lbl_n_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
-        self.lbl_net_val = QLabel("↓ 1.2 MB/s  ↑ 300 KB/s")
+        self.lbl_net_val = QLabel("↓ 0.0 KB/s  ↑ 0.0 KB/s")
         set_widget_style(self.lbl_net_val, "font-size: 13.5px; font-weight: 700; color: #ffffff; background: transparent;")
         n_lay.addWidget(lbl_n_hdr)
         n_lay.addWidget(self.lbl_net_val)
@@ -2130,7 +2131,7 @@ class StatsTabView(QWidget):
         u_lay.setSpacing(4)
         lbl_u_hdr = QLabel("UP FOR")
         set_widget_style(lbl_u_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
-        self.lbl_up_val = QLabel("5 h 12 m")
+        self.lbl_up_val = QLabel(self._get_initial_uptime_str())
         set_widget_style(self.lbl_up_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
         u_lay.addWidget(lbl_u_hdr)
         u_lay.addWidget(self.lbl_up_val)
@@ -2179,18 +2180,18 @@ class StatsTabView(QWidget):
         set_widget_style(lbl_s_title, "font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.7); background: transparent;")
         s_hdr.addWidget(lbl_s_title)
         s_hdr.addStretch()
-        lbl_s_last = QLabel("last: 5 min ago • Mumbai")
-        set_widget_style(lbl_s_last, "font-size: 9.5px; color: rgba(255,255,255,0.4); background: transparent;")
-        s_hdr.addWidget(lbl_s_last)
+        self.lbl_s_last = QLabel("Not tested yet")
+        set_widget_style(self.lbl_s_last, "font-size: 9.5px; color: rgba(255,255,255,0.4); background: transparent;")
+        s_hdr.addWidget(self.lbl_s_last)
         s_lay.addLayout(s_hdr)
 
         rates_row = QHBoxLayout()
-        self.lbl_down = QLabel("85 <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↓</span>")
+        self.lbl_down = QLabel("-- <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↓</span>")
         self.lbl_down.setTextFormat(Qt.TextFormat.RichText)
         set_widget_style(self.lbl_down, "font-size: 22px; font-weight: 800; color: #ffffff; background: transparent;")
         rates_row.addWidget(self.lbl_down)
 
-        self.lbl_up = QLabel("42 <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↑</span>")
+        self.lbl_up = QLabel("-- <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↑</span>")
         self.lbl_up.setTextFormat(Qt.TextFormat.RichText)
         set_widget_style(self.lbl_up, "font-size: 22px; font-weight: 800; color: #ffffff; background: transparent;")
         rates_row.addWidget(self.lbl_up)
@@ -2414,6 +2415,27 @@ class StatsTabView(QWidget):
         if hasattr(self, "lbl_s_last"):
             self.lbl_s_last.setText("last: just now • Local")
         self.speed_test_requested.emit()
+
+    def _get_initial_disk_str(self) -> str:
+        try:
+            import psutil
+            usage = psutil.disk_usage("C:\\")
+            used_gb = usage.used / (1024 ** 3)
+            tot_gb = usage.total / (1024 ** 3)
+            return f"{used_gb:.0f} / {tot_gb:.0f} GB"
+        except Exception:
+            return "-- / -- GB"
+
+    def _get_initial_uptime_str(self) -> str:
+        try:
+            import psutil
+            import time
+            up_secs = int(time.time() - psutil.boot_time())
+            hrs = up_secs // 3600
+            mins = (up_secs % 3600) // 60
+            return f"{hrs} h {mins} m"
+        except Exception:
+            return "-- h -- m"
 
     def _refresh_stats(self):
         try:

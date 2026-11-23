@@ -702,14 +702,16 @@ class DynamicNotchWindow(QWidget):
         self.tab_controls.next_clicked.connect(self.media_manager.next_track)
         self.tab_controls.seek_requested.connect(self.media_manager.seek)
         self.tab_controls.volume_changed.connect(lambda v: self._on_controls_volume_changed(v))
-        self.tab_controls.wifi_clicked.connect(self._open_wifi_settings)
-        self.tab_controls.wifi_menu_requested.connect(self._open_wifi_settings)
-        self.tab_controls.bluetooth_clicked.connect(self._open_bluetooth_settings)
-        self.tab_controls.bluetooth_menu_requested.connect(self._open_bluetooth_settings)
+        self.tab_controls.brightness_changed.connect(self._on_brightness_slider_changed)
+        self.tab_controls.wifi_clicked.connect(lambda: self._show_wifi_flyout(self.tab_controls.tile_wifi))
+        self.tab_controls.wifi_menu_requested.connect(lambda: self._show_wifi_flyout(self.tab_controls.tile_wifi))
+        self.tab_controls.bluetooth_clicked.connect(lambda: self._show_bluetooth_flyout(self.tab_controls.tile_bt))
+        self.tab_controls.bluetooth_menu_requested.connect(lambda: self._show_bluetooth_flyout(self.tab_controls.tile_bt))
         self.tab_controls.audio_clicked.connect(lambda: self._show_audio_device_dropdown(self.tab_controls.tile_audio))
         self.tab_controls.audio_device_menu_requested.connect(lambda: self._show_audio_device_dropdown(self.tab_controls.btn_output))
         self.tab_controls.power_options_requested.connect(lambda: self._switch_to_tab_by_name("Power"))
         self.tab_controls.night_light_toggle_requested.connect(self._toggle_night_light)
+        self.tab_controls.night_light_menu_requested.connect(lambda: self._show_night_light_flyout(self.tab_controls.tile_night))
         self.tab_controls.dark_mode_toggle_requested.connect(self._toggle_dark_mode)
         self.tab_stack.addWidget(self.tab_controls)
 
@@ -1193,16 +1195,16 @@ class DynamicNotchWindow(QWidget):
                                 ssid = parts[1].strip()
                                 wifi_connected = True
                                 break
-                    self.tab_controls.set_wifi_status(wifi_connected, ssid if wifi_connected else "Home 5G")
+                    self.tab_controls.set_wifi_status(wifi_connected, ssid if wifi_connected else "Disconnected")
                 except Exception:
                     pass
 
                 try:
-                    from poppy.core.audio_endpoint import AudioEndpointManager
+                    from poppy.core.system_features import AudioEndpointManager
                     endpoints = AudioEndpointManager.get_output_endpoints()
                     for ep in endpoints:
-                        if ep.is_default:
-                            self.tab_controls.set_audio_device_name(ep.name)
+                        if ep.get("default", False):
+                            self.tab_controls.set_audio_device_name(ep.get("name", "Audio Output"))
                             break
                 except Exception:
                     pass
@@ -1210,18 +1212,10 @@ class DynamicNotchWindow(QWidget):
             pass
 
     def _open_wifi_settings(self):
-        try:
-            import subprocess
-            subprocess.Popen("start ms-availablenetworks:", shell=True)
-        except Exception:
-            pass
+        self._show_wifi_flyout(getattr(self.tab_controls, "tile_wifi", None))
 
     def _open_bluetooth_settings(self):
-        try:
-            import subprocess
-            subprocess.Popen("start ms-settings:bluetooth", shell=True)
-        except Exception:
-            pass
+        self._show_bluetooth_flyout(getattr(self.tab_controls, "tile_bt", None))
 
     def _toggle_night_light(self):
         try:
@@ -1425,6 +1419,8 @@ class DynamicNotchWindow(QWidget):
         self._brightness_level = value
         self.bright_ctrl.set_brightness(value)
         self.tab_home.set_brightness_display(value)
+        if hasattr(self, "tab_controls"):
+            self.tab_controls.set_brightness_display(value)
 
     def _step_brightness(self, step):
         if (self._brightness_level is not None and self.pill_level.isVisible()
@@ -1452,6 +1448,8 @@ class DynamicNotchWindow(QWidget):
         slider.setToolTip("Brightness" if value is not None else "Brightness control is unavailable on this display.")
         if value is not None and not slider.isSliderDown():
             self.tab_home.set_brightness_display(value)
+            if hasattr(self, "tab_controls"):
+                self.tab_controls.set_brightness_display(value)
             if step:
                 self._apply_brightness_step(value, step)
             elif (value != previous and self.pill_level.isVisible()
@@ -1642,119 +1640,58 @@ class DynamicNotchWindow(QWidget):
             act = menu.addAction("No active media sessions")
             act.setEnabled(False)
 
-    def _show_audio_device_dropdown(self, anchor=None):
-        menu = QMenu(self)
-        set_widget_style(menu, """
-            QMenu {
-                background-color: #181d27;
-                border: none;
-                border-radius: 8px;
-                padding: 4px;
-                color: #f1f5f9;
-                font-size: 11px;
-            }
-            QMenu::item {
-                padding: 6px 18px 6px 10px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: rgba(255, 255, 255, 0.1);
-                color: #ffffff;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(255, 255, 255, 0.08);
-                margin: 4px 6px;
-            }
-        """)
-        self._add_audio_endpoint_actions(menu)
-        btn = anchor or self.tab_home.btn_audio_drop
-        pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
-        try:
-            menu.exec(pos)
-        finally:
-            menu.deleteLater()
+    def _show_wifi_flyout(self, anchor=None):
+        if not hasattr(self, "_flyout_wifi"):
+            from poppy.ui.control_flyouts import WifiFlyoutMenu
+            self._flyout_wifi = WifiFlyoutMenu(self, accent=self._theme["accent"])
+            self._flyout_wifi.network_selected.connect(lambda ssid: self.tab_controls.set_wifi_status(True, ssid))
+        self._flyout_wifi.refresh()
+        btn = anchor or getattr(self.tab_controls, "tile_wifi", None)
+        if btn:
+            pos = btn.mapToGlobal(QPoint(0, btn.height() + 4))
+            self._flyout_wifi.exec(pos)
 
-    def _add_audio_endpoint_actions(self, menu):
-        menu.clear()
-        endpoints = AudioEndpointManager.get_output_endpoints()
-        for ep in endpoints:
-            name = ep["name"]
-            action = menu.addAction(name)
-            action.setEnabled(bool(ep.get("id")))
-            action.setCheckable(True)
-            action.setChecked(ep.get("default", False))
-            action.triggered.connect(lambda checked=False, device=ep: self._on_audio_endpoint_selected(device))
-
-        if not endpoints:
-            act = menu.addAction("No active audio endpoints")
-            act.setEnabled(False)
-
-        menu.addSeparator()
-        act_settings = menu.addAction("Sound Settings...")
-        act_settings.triggered.connect(lambda: os.startfile("ms-settings:sound"))
-
-    def _on_audio_endpoint_selected(self, device: dict):
-        try:
-            AudioEndpointManager.set_default_output(device["id"])
-        except (OSError, ValueError) as error:
-            QMessageBox.warning(self, "Could not switch sound output", f"{error}\nChoose an output in Windows Sound Settings.")
-            return
-        self.tab_home.btn_audio_drop.setToolTip(f"Sound output: {device['name']}")
-        self.tab_music.btn_output.setToolTip(f"Sound output: {device['name']}")
-        self._sync_system_controls(force=True)
+    def _show_bluetooth_flyout(self, anchor=None):
+        if not hasattr(self, "_flyout_bt"):
+            from poppy.ui.control_flyouts import BluetoothFlyoutMenu
+            self._flyout_bt = BluetoothFlyoutMenu(self, accent=self._theme["accent"])
+        self._flyout_bt.refresh()
+        btn = anchor or getattr(self.tab_controls, "tile_bt", None) or getattr(self.tab_home, "btn_act_bt", None)
+        if btn:
+            pos = btn.mapToGlobal(QPoint(0, btn.height() + 4))
+            self._flyout_bt.exec(pos)
 
     def _show_bluetooth_dropdown(self):
-        menu = QMenu(self)
-        set_widget_style(menu, """
-            QMenu {
-                background-color: #181d27;
-                border: none;
-                border-radius: 8px;
-                padding: 4px;
-                color: #f1f5f9;
-                font-size: 11px;
-            }
-            QMenu::item {
-                padding: 6px 18px 6px 10px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: rgba(255, 255, 255, 0.1);
-                color: #ffffff;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(255, 255, 255, 0.08);
-                margin: 4px 6px;
-            }
-        """)
-        status = menu.addAction("Looking for Bluetooth devices…")
-        status.setEnabled(False)
-        separator = menu.addSeparator()
-        act_bt = menu.addAction("Bluetooth & Devices Settings...")
-        act_bt.triggered.connect(lambda: os.startfile("ms-settings:bluetooth"))
+        self._show_bluetooth_flyout(getattr(self.tab_home, "btn_act_bt", None))
 
-        def show_devices(devices):
-            if not devices:
-                status.setText("No paired Bluetooth devices detected")
-                return
-            menu.removeAction(status)
-            for device in devices:
-                connection = "Connected" if device.get("connected") else "Paired"
-                action = QAction(f"{device.get('name', 'Device')} ({connection})", menu)
-                action.triggered.connect(lambda: os.startfile("ms-settings:bluetooth"))
-                menu.insertAction(separator, action)
+    def _show_audio_device_dropdown(self, anchor=None):
+        if not hasattr(self, "_flyout_audio"):
+            from poppy.ui.control_flyouts import AudioDeviceFlyoutMenu
+            self._flyout_audio = AudioDeviceFlyoutMenu(self, accent=self._theme["accent"])
+            self._flyout_audio.device_changed.connect(self._on_flyout_audio_changed)
+        self._flyout_audio.refresh()
+        btn = anchor or getattr(self.tab_controls, "tile_audio", None) or getattr(self.tab_home, "btn_audio_drop", None)
+        if btn:
+            pos = btn.mapToGlobal(QPoint(0, btn.height() + 4))
+            self._flyout_audio.exec(pos)
 
-        btn = self.tab_home.btn_act_bt
-        pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
-        self.bt_manager.devices_updated.connect(show_devices)
-        try:
-            self.bt_manager.refresh()
-            menu.exec(pos)
-        finally:
-            self.bt_manager.devices_updated.disconnect(show_devices)
-            menu.deleteLater()
+    def _on_flyout_audio_changed(self, name: str):
+        if hasattr(self, "tab_controls"):
+            self.tab_controls.set_audio_device_name(name)
+        if hasattr(self, "tab_home"):
+            self.tab_home.btn_audio_drop.setToolTip(f"Sound output: {name}")
+        if hasattr(self, "tab_music"):
+            self.tab_music.btn_output.setToolTip(f"Sound output: {name}")
+        self._sync_system_controls(force=True)
+
+    def _show_night_light_flyout(self, anchor=None):
+        if not hasattr(self, "_flyout_night"):
+            from poppy.ui.control_flyouts import NightLightFlyoutMenu
+            self._flyout_night = NightLightFlyoutMenu(self, accent=self._theme["accent"])
+        btn = anchor or getattr(self.tab_controls, "tile_night", None)
+        if btn:
+            pos = btn.mapToGlobal(QPoint(0, btn.height() + 4))
+            self._flyout_night.exec(pos)
 
     def _on_camera_status_changed(self, active: bool):
         if hasattr(self, 'lbl_cam_dot'):

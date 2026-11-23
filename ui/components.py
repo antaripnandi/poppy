@@ -923,6 +923,8 @@ class ControlPillTile(QPushButton):
             self._subtitle = subtitle
             self.update()
 
+    setSubtitle = set_subtitle
+
     def set_icon(self, icon_glyph: str):
         if self._icon_glyph != icon_glyph:
             self._icon_glyph = icon_glyph
@@ -945,7 +947,6 @@ class ControlPillTile(QPushButton):
     def mouseReleaseEvent(self, event):
         if (
             self._has_menu
-            and self.isCheckable()
             and event.button() == Qt.MouseButton.LeftButton
             and event.position().x() >= self.width() - 26
         ):
@@ -2248,8 +2249,8 @@ class WeekCalendarStrip(QWidget):
     def __init__(self, parent=None, accent="#f28c5a"):
         super().__init__(parent)
         self._accent = QColor(accent)
-        self._next_event_title = "Daily AI news research"
-        self._next_event_time = "11:00 AM"
+        self._next_event_title = ""
+        self._next_event_time = ""
         self.setFixedHeight(140)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._load_next_event()
@@ -2263,8 +2264,8 @@ class WeekCalendarStrip(QWidget):
                 today_str = date.today().isoformat()
                 today_events = data.get(today_str, [])
                 if today_events:
-                    self._next_event_title = today_events[0].get("title", self._next_event_title)
-                    self._next_event_time = today_events[0].get("time", self._next_event_time)
+                    self._next_event_title = today_events[0].get("title", "")
+                    self._next_event_time = today_events[0].get("time", "")
         except Exception:
             pass
 
@@ -2367,17 +2368,30 @@ class WeekCalendarStrip(QWidget):
         painter.setBrush(QBrush(QColor("#f43f5e")))
         painter.drawRoundedRect(QRectF(22.0, event_y + 9.0, 3.5, 22.0), 1.75, 1.75)
 
-        # Next • 11:00 AM
-        font_time = QFont("Segoe UI", 10, QFont.Weight.Bold)
-        painter.setFont(font_time)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(QRectF(32.0, event_y + 5.0, w - 60.0, 16.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"Next • {self._next_event_time}")
+        if self._next_event_title:
+            # Next • 11:00 AM
+            font_time = QFont("Segoe UI", 10, QFont.Weight.Bold)
+            painter.setFont(font_time)
+            painter.setPen(QColor("#ffffff"))
+            time_label = f"Next • {self._next_event_time}" if self._next_event_time else "Next event"
+            painter.drawText(QRectF(32.0, event_y + 5.0, w - 60.0, 16.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time_label)
 
-        # Title
-        font_ev = QFont("Segoe UI", 10, QFont.Weight.Normal)
-        painter.setFont(font_ev)
-        painter.setPen(QColor(255, 255, 255, 140))
-        painter.drawText(QRectF(32.0, event_y + 21.0, w - 60.0, 15.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._next_event_title)
+            # Title
+            font_ev = QFont("Segoe UI", 10, QFont.Weight.Normal)
+            painter.setFont(font_ev)
+            painter.setPen(QColor(255, 255, 255, 140))
+            painter.drawText(QRectF(32.0, event_y + 21.0, w - 60.0, 15.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._next_event_title)
+        else:
+            # Empty / Prompt state
+            font_time = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+            painter.setFont(font_time)
+            painter.setPen(QColor(255, 255, 255, 180))
+            painter.drawText(QRectF(32.0, event_y + 5.0, w - 60.0, 16.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "No upcoming events scheduled")
+
+            font_ev = QFont("Segoe UI", 9.5, QFont.Weight.Normal)
+            painter.setFont(font_ev)
+            painter.setPen(QColor(255, 255, 255, 100))
+            painter.drawText(QRectF(32.0, event_y + 21.0, w - 60.0, 15.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Click to view or schedule in Calendar")
 
 
 class PomodoroFocusWidget(QWidget):
@@ -2615,7 +2629,7 @@ class TodoChecklistWidget(QWidget):
                 return json.loads(self._store_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        return [{"text": "Buy Hitodama!", "done": False}]
+        return []
 
     def _save_todos(self):
         try:
@@ -2746,6 +2760,12 @@ class TodoChecklistWidget(QWidget):
             r_lay.addWidget(btn_del)
 
             self.items_layout.addWidget(row)
+
+        if not self._todos:
+            lbl_empty = QLabel("No tasks for today.\nAdd one below!")
+            lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            set_widget_style(lbl_empty, "color: rgba(255, 255, 255, 0.4); font-size: 11.5px; padding: 20px 0;")
+            self.items_layout.addWidget(lbl_empty)
 
         total = len(self._todos)
         self.lbl_badge.setText(f"{done_count}/{total}")
