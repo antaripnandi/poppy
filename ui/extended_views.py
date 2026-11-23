@@ -1978,6 +1978,45 @@ class ScreenAnnotationOverlay(QWidget):
             painter.drawPath(path)
 
 
+# =====================================================================
+# 5. Stats Tab View (Hitodama)
+# =====================================================================
+
+class StorageUsageBar(QWidget):
+    """Sleek anti-aliased capsule storage usage progress bar."""
+    def __init__(self, parent=None, accent="#f28c5a"):
+        super().__init__(parent)
+        self._ratio = 0.5
+        self._accent = QColor(accent)
+        self.setFixedHeight(6)
+
+    def set_ratio(self, ratio: float):
+        self._ratio = max(0.0, min(1.0, float(ratio)))
+        self.update()
+
+    def set_accent(self, accent: str):
+        c = QColor(accent)
+        if c.isValid():
+            self._accent = c
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self.rect()
+        h = r.height()
+        radius = h / 2.0
+        # Background track
+        painter.setBrush(QColor(255, 255, 255, 22))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(r, radius, radius)
+        # Progress fill
+        fill_w = max(int(h), int(r.width() * self._ratio))
+        fill_rect = QRect(r.x(), r.y(), fill_w, h)
+        painter.setBrush(self._accent)
+        painter.drawRoundedRect(fill_rect, radius, radius)
+
+
 class StatsTabView(QWidget):
     """
     Hitodama-inspired Hardware Telemetry & System Stats View:
@@ -1985,7 +2024,7 @@ class StatsTabView(QWidget):
       CPU (peach #f28c5a), GPU (purple #c084fc), RAM (lime #4ade80)
       Processor name, frequency, processes, memory usage
     - 3 Under-gauge Telemetry Cards:
-      DISK C: (412 / 931 GB), NETWORK (↓ 1.2 MB/s ↑ 300 KB/s), UP FOR (5 h 12 m)
+      DISK C: (412 / 931 GB with progress bar), NETWORK (↓ 1.2 MB/s ↑ 300 KB/s), UP FOR (5 h 12 m with boot time)
     - Right Column:
       Top apps by RAM/CPU with usage bars
       Internet speed test card with '▶ Run speed test' orange button
@@ -2009,142 +2048,97 @@ class StatsTabView(QWidget):
     def _detect_cpu_name(self) -> str:
         try:
             import winreg
+            import re
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
             name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
             if name and name.strip():
                 clean = name.strip()
-                if len(clean) > 28:
-                    clean = clean[:28]
-                return clean
+                clean = re.sub(r"\s+(w/|with)\s+Radeon.*", "", clean, flags=re.IGNORECASE)
+                clean = re.sub(r"\s+Processor.*", "", clean, flags=re.IGNORECASE)
+                clean = re.sub(r"\s+Graphics.*", "", clean, flags=re.IGNORECASE)
+                clean = re.sub(r"\s+\d+-Core.*", "", clean, flags=re.IGNORECASE)
+                clean = re.sub(r"\s+CPU.*", "", clean, flags=re.IGNORECASE)
+                return clean.strip()
         except Exception:
             pass
         try:
             import platform
             name = platform.processor()
             if name:
-                return name.split(",")[0][:24]
+                return name.split(",")[0].strip()
         except Exception:
             pass
-        return "AMD Ryzen 7 7840HS"
+        return "AMD Ryzen 7 260"
 
     def _detect_gpu_name(self) -> str:
         try:
             import winreg
-            for idx in ["0000", "0001", "0002"]:
+            import re
+            for idx in ["0000", "0001", "0002", "0003"]:
                 try:
                     key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SYSTEM\CurrentControlSet\Control\Class\{{4d36e968-e325-11ce-bfc1-08002be10318}}\{idx}")
                     desc, _ = winreg.QueryValueEx(key, "DriverDesc")
                     if desc and any(k in desc for k in ["NVIDIA", "GeForce", "Radeon", "Intel", "RTX", "GTX"]):
-                        if len(desc) > 28:
-                            desc = desc[:28]
-                        return desc
+                        clean = desc.strip()
+                        clean = re.sub(r"^NVIDIA\s+", "", clean)
+                        return clean.strip()
                 except Exception:
                     continue
         except Exception:
             pass
-        return "NVIDIA GeForce RTX 4060"
+        return "GeForce RTX 5050 Laptop GPU"
 
     def _init_ui(self):
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(16, 12, 16, 14)
-        main_layout.setSpacing(14)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(16, 12, 16, 14)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(12)
 
-        # Left Column (Gauges + Telemetry Cards)
-        left_col = QVBoxLayout()
-        left_col.setSpacing(12)
+        # -------------------------------------------------------------
+        # Row 0: Top Cards (Gauges on Left, Top Apps on Right)
+        # -------------------------------------------------------------
+        # 1. Left: Gauges Container Card
+        self.card_gauges = CardFrame(self)
+        g_lay = QHBoxLayout(self.card_gauges)
+        g_lay.setContentsMargins(16, 14, 16, 14)
+        g_lay.setSpacing(14)
 
-        # Gauges Container Card
-        card_gauges = CardFrame(self)
-        g_lay = QHBoxLayout(card_gauges)
-        g_lay.setContentsMargins(14, 14, 14, 14)
-        g_lay.setSpacing(12)
-
-        # 1. CPU Gauge
+        # CPU Gauge
         self.gauge_cpu = self._create_gauge_card(
             title="CPU",
             subtitle=self._cpu_name,
             accent="#f28c5a",
-            chip1="4.2 GHz",
-            chip2="229 proc",
-            initial_val=37.0
+            chip1="3.8 GHz",
+            chip2="331 proc",
+            initial_val=7.0
         )
         g_lay.addWidget(self.gauge_cpu, 1)
 
-        # 2. GPU Gauge
+        # GPU Gauge
         self.gauge_gpu = self._create_gauge_card(
             title="GPU",
             subtitle=self._gpu_name,
             accent="#c084fc",
-            chip1="2.1 / 8.0 GB",
-            chip2=None,
-            initial_val=12.0
+            chip1="0.3 / 8.0 GB",
+            chip2="0% load",
+            initial_val=0.0
         )
         g_lay.addWidget(self.gauge_gpu, 1)
 
-        # 3. RAM Gauge
+        # RAM Gauge
         self.gauge_ram = self._create_gauge_card(
             title="RAM",
-            subtitle="19.4 / 31.9 GB",
+            subtitle="15.5 / 23.1 GB",
             accent="#4ade80",
-            chip1="12.5 GB free",
-            chip2=None,
-            initial_val=61.0
+            chip1="7.7 GB free",
+            chip2="67% used",
+            initial_val=67.0
         )
         g_lay.addWidget(self.gauge_ram, 1)
 
-        left_col.addWidget(card_gauges)
+        grid.addWidget(self.card_gauges, 0, 0)
 
-        # Bottom 3 Telemetry Cards (Disk C:, Network, Up for)
-        sub_cards = QHBoxLayout()
-        sub_cards.setSpacing(10)
-
-        # Disk C:
-        self.card_disk = CardFrame(self)
-        d_lay = QVBoxLayout(self.card_disk)
-        d_lay.setContentsMargins(14, 12, 14, 12)
-        d_lay.setSpacing(4)
-        lbl_d_hdr = QLabel("DISK C:")
-        set_widget_style(lbl_d_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
-        self.lbl_disk_val = QLabel(self._get_initial_disk_str())
-        set_widget_style(self.lbl_disk_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
-        d_lay.addWidget(lbl_d_hdr)
-        d_lay.addWidget(self.lbl_disk_val)
-        sub_cards.addWidget(self.card_disk, 1)
-
-        # Network
-        self.card_net = CardFrame(self)
-        n_lay = QVBoxLayout(self.card_net)
-        n_lay.setContentsMargins(14, 12, 14, 12)
-        n_lay.setSpacing(4)
-        lbl_n_hdr = QLabel("NETWORK")
-        set_widget_style(lbl_n_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
-        self.lbl_net_val = QLabel("↓ 0.0 KB/s  ↑ 0.0 KB/s")
-        set_widget_style(self.lbl_net_val, "font-size: 13.5px; font-weight: 700; color: #ffffff; background: transparent;")
-        n_lay.addWidget(lbl_n_hdr)
-        n_lay.addWidget(self.lbl_net_val)
-        sub_cards.addWidget(self.card_net, 1)
-
-        # Up for
-        self.card_up = CardFrame(self)
-        u_lay = QVBoxLayout(self.card_up)
-        u_lay.setContentsMargins(14, 12, 14, 12)
-        u_lay.setSpacing(4)
-        lbl_u_hdr = QLabel("UP FOR")
-        set_widget_style(lbl_u_hdr, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent;")
-        self.lbl_up_val = QLabel(self._get_initial_uptime_str())
-        set_widget_style(self.lbl_up_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
-        u_lay.addWidget(lbl_u_hdr)
-        u_lay.addWidget(self.lbl_up_val)
-        sub_cards.addWidget(self.card_up, 1)
-
-        left_col.addLayout(sub_cards)
-        main_layout.addLayout(left_col, 3)
-
-        # Right Column (Top Apps + Internet Speed)
-        right_col = QVBoxLayout()
-        right_col.setSpacing(12)
-
-        # Top Apps Card
+        # 2. Right: Top Apps Card
         self.card_apps = CardFrame(self)
         a_lay = QVBoxLayout(self.card_apps)
         a_lay.setContentsMargins(16, 12, 16, 12)
@@ -2167,12 +2161,136 @@ class StatsTabView(QWidget):
         self.apps_container.setSpacing(6)
         a_lay.addLayout(self.apps_container)
         self._populate_top_apps()
-        right_col.addWidget(self.card_apps, 1)
 
-        # Internet Speed Card
+        grid.addWidget(self.card_apps, 0, 1)
+
+        # -------------------------------------------------------------
+        # Row 1: Bottom Cards (Telemetry Sub-cards on Left, Speed on Right)
+        # -------------------------------------------------------------
+        # 3. Left: Telemetry Box containing 3 cards (Disk C:, Network, Up for)
+        self.sub_cards_box = QWidget(self)
+        sub_lay = QHBoxLayout(self.sub_cards_box)
+        sub_lay.setContentsMargins(0, 0, 0, 0)
+        sub_lay.setSpacing(10)
+
+        # Disk C: Card
+        self.card_disk = CardFrame(self.sub_cards_box)
+        d_lay = QVBoxLayout(self.card_disk)
+        d_lay.setContentsMargins(14, 12, 14, 12)
+        d_lay.setSpacing(6)
+
+        d_hdr = QHBoxLayout()
+        d_hdr.setSpacing(6)
+        lbl_d_icon = QLabel("🖴")
+        set_widget_style(lbl_d_icon, "font-size: 11px; color: #f28c5a; background: transparent;")
+        d_hdr.addWidget(lbl_d_icon)
+        lbl_d_title = QLabel("DISK C:")
+        set_widget_style(lbl_d_title, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent; letter-spacing: 0.5px;")
+        d_hdr.addWidget(lbl_d_title)
+        d_hdr.addStretch()
+        self.lbl_disk_pct = QLabel("56%")
+        set_widget_style(self.lbl_disk_pct, "font-size: 9.5px; font-weight: 700; color: #f28c5a; background: rgba(242,140,90,0.12); border-radius: 4px; padding: 2px 6px;")
+        d_hdr.addWidget(self.lbl_disk_pct)
+        d_lay.addLayout(d_hdr)
+
+        self.lbl_disk_val = QLabel(self._get_initial_disk_str())
+        set_widget_style(self.lbl_disk_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
+        d_lay.addWidget(self.lbl_disk_val)
+
+        self.bar_disk = StorageUsageBar(parent=self.card_disk, accent=self._accent)
+        self.bar_disk.setFixedHeight(6)
+        d_lay.addWidget(self.bar_disk)
+
+        self.lbl_disk_sub = QLabel("Local Disk · NTFS")
+        set_widget_style(self.lbl_disk_sub, "font-size: 10px; color: rgba(255,255,255,0.4); background: transparent;")
+        d_lay.addWidget(self.lbl_disk_sub)
+        d_lay.addStretch()
+
+        sub_lay.addWidget(self.card_disk, 1)
+
+        # Network Card
+        self.card_net = CardFrame(self.sub_cards_box)
+        n_lay = QVBoxLayout(self.card_net)
+        n_lay.setContentsMargins(14, 12, 14, 12)
+        n_lay.setSpacing(6)
+
+        n_hdr = QHBoxLayout()
+        n_hdr.setSpacing(6)
+        lbl_n_icon = QLabel("🌐")
+        set_widget_style(lbl_n_icon, "font-size: 11px; color: #38bdf8; background: transparent;")
+        n_hdr.addWidget(lbl_n_icon)
+        lbl_n_title = QLabel("NETWORK")
+        set_widget_style(lbl_n_title, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent; letter-spacing: 0.5px;")
+        n_hdr.addWidget(lbl_n_title)
+        n_hdr.addStretch()
+        self.lbl_net_status = QLabel("● Active")
+        set_widget_style(self.lbl_net_status, "font-size: 9.5px; font-weight: 700; color: #10b981; background: rgba(16,185,129,0.12); border-radius: 4px; padding: 2px 6px;")
+        n_hdr.addWidget(self.lbl_net_status)
+        n_lay.addLayout(n_hdr)
+
+        self.lbl_net_val = QLabel("↓ 0.0 KB/s  ↑ 0.0 KB/s")
+        set_widget_style(self.lbl_net_val, "font-size: 14px; font-weight: 700; color: #ffffff; background: transparent;")
+        n_lay.addWidget(self.lbl_net_val)
+
+        flow_row = QHBoxLayout()
+        flow_row.setSpacing(8)
+        self.lbl_net_down = QLabel("↓ 0 KB/s")
+        set_widget_style(self.lbl_net_down, "font-size: 10px; font-weight: 600; color: #38bdf8; background: transparent;")
+        self.lbl_net_up = QLabel("↑ 0 KB/s")
+        set_widget_style(self.lbl_net_up, "font-size: 10px; font-weight: 600; color: #c084fc; background: transparent;")
+        flow_row.addWidget(self.lbl_net_down)
+        flow_row.addWidget(self.lbl_net_up)
+        flow_row.addStretch()
+        n_lay.addLayout(flow_row)
+
+        self.lbl_net_sub = QLabel("Live Throughput · Wi-Fi")
+        set_widget_style(self.lbl_net_sub, "font-size: 10px; color: rgba(255,255,255,0.4); background: transparent;")
+        n_lay.addWidget(self.lbl_net_sub)
+        n_lay.addStretch()
+
+        sub_lay.addWidget(self.card_net, 1)
+
+        # Up for Card
+        self.card_up = CardFrame(self.sub_cards_box)
+        u_lay = QVBoxLayout(self.card_up)
+        u_lay.setContentsMargins(14, 12, 14, 12)
+        u_lay.setSpacing(6)
+
+        u_hdr = QHBoxLayout()
+        u_hdr.setSpacing(6)
+        lbl_u_icon = QLabel("⏱")
+        set_widget_style(lbl_u_icon, "font-size: 11px; color: #4ade80; background: transparent;")
+        u_hdr.addWidget(lbl_u_icon)
+        lbl_u_title = QLabel("UP FOR")
+        set_widget_style(lbl_u_title, "font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45); background: transparent; letter-spacing: 0.5px;")
+        u_hdr.addWidget(lbl_u_title)
+        u_hdr.addStretch()
+        self.lbl_up_status = QLabel("● Stable")
+        set_widget_style(self.lbl_up_status, "font-size: 9.5px; font-weight: 700; color: #4ade80; background: rgba(74,222,128,0.12); border-radius: 4px; padding: 2px 6px;")
+        u_hdr.addWidget(self.lbl_up_status)
+        u_lay.addLayout(u_hdr)
+
+        self.lbl_up_val = QLabel(self._get_initial_uptime_str())
+        set_widget_style(self.lbl_up_val, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
+        u_lay.addWidget(self.lbl_up_val)
+
+        self.lbl_up_boot = QLabel(self._get_boot_str())
+        set_widget_style(self.lbl_up_boot, "font-size: 10.5px; font-weight: 600; color: rgba(255,255,255,0.7); background: transparent;")
+        u_lay.addWidget(self.lbl_up_boot)
+
+        self.lbl_up_sub = QLabel("System Uptime · AC Online")
+        set_widget_style(self.lbl_up_sub, "font-size: 10px; color: rgba(255,255,255,0.4); background: transparent;")
+        u_lay.addWidget(self.lbl_up_sub)
+        u_lay.addStretch()
+
+        sub_lay.addWidget(self.card_up, 1)
+
+        grid.addWidget(self.sub_cards_box, 1, 0)
+
+        # 4. Right: Speed Test Card
         self.card_speed = CardFrame(self)
         s_lay = QVBoxLayout(self.card_speed)
-        s_lay.setContentsMargins(16, 12, 16, 14)
+        s_lay.setContentsMargins(16, 12, 16, 12)
         s_lay.setSpacing(6)
 
         s_hdr = QHBoxLayout()
@@ -2186,28 +2304,29 @@ class StatsTabView(QWidget):
         s_lay.addLayout(s_hdr)
 
         rates_row = QHBoxLayout()
+        rates_row.setSpacing(12)
         self.lbl_down = QLabel("-- <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↓</span>")
         self.lbl_down.setTextFormat(Qt.TextFormat.RichText)
-        set_widget_style(self.lbl_down, "font-size: 22px; font-weight: 800; color: #ffffff; background: transparent;")
+        set_widget_style(self.lbl_down, "font-size: 19px; font-weight: 800; color: #38bdf8; background: transparent;")
         rates_row.addWidget(self.lbl_down)
 
         self.lbl_up = QLabel("-- <span style='font-size: 10px; font-weight: normal; color: rgba(255,255,255,0.6);'>Mbps ↑</span>")
         self.lbl_up.setTextFormat(Qt.TextFormat.RichText)
-        set_widget_style(self.lbl_up, "font-size: 22px; font-weight: 800; color: #ffffff; background: transparent;")
+        set_widget_style(self.lbl_up, "font-size: 19px; font-weight: 800; color: #c084fc; background: transparent;")
         rates_row.addWidget(self.lbl_up)
         s_lay.addLayout(rates_row)
 
         self.btn_speed = QPushButton("▶ Run speed test")
-        self.btn_speed.setFixedHeight(34)
+        self.btn_speed.setFixedHeight(30)
         self.btn_speed.setCursor(Qt.CursorShape.PointingHandCursor)
         set_widget_style(self.btn_speed, f"""
             QPushButton {{
                 background: {self._accent};
                 color: #0e1117;
-                font-size: 12px;
+                font-size: 11.5px;
                 font-weight: 700;
                 border: none;
-                border-radius: 9px;
+                border-radius: 8px;
             }}
             QPushButton:hover {{
                 background: #f7a278;
@@ -2215,15 +2334,20 @@ class StatsTabView(QWidget):
         """)
         self.btn_speed.clicked.connect(self._run_speed_test)
         s_lay.addWidget(self.btn_speed)
-        right_col.addWidget(self.card_speed)
+        s_lay.addStretch()
 
-        main_layout.addLayout(right_col, 2)
+        grid.addWidget(self.card_speed, 1, 1)
+
+        grid.setColumnStretch(0, 3)
+        grid.setColumnStretch(1, 2)
+        grid.setRowStretch(0, 1)
+        grid.setRowStretch(1, 1)
 
     def _create_gauge_card(self, title: str, subtitle: str, accent: str, chip1: str, chip2: str | None, initial_val: float):
         box = QWidget()
         lay = QVBoxLayout(box)
         lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(6)
+        lay.setSpacing(5)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         dial = StatRingGauge(size=76, stroke_width=8, accent=accent, parent=box)
@@ -2231,12 +2355,13 @@ class StatsTabView(QWidget):
         lay.addWidget(dial, alignment=Qt.AlignmentFlag.AlignCenter)
 
         lbl_t = QLabel(title)
-        set_widget_style(lbl_t, "font-size: 14px; font-weight: 700; color: #ffffff; background: transparent;")
+        set_widget_style(lbl_t, "font-size: 13.5px; font-weight: 700; color: #ffffff; background: transparent;")
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(lbl_t)
 
         lbl_sub = QLabel(subtitle)
-        set_widget_style(lbl_sub, "font-size: 10px; color: rgba(255,255,255,0.5); background: transparent;")
+        lbl_sub.setToolTip(subtitle)
+        set_widget_style(lbl_sub, "font-size: 10.5px; color: rgba(255,255,255,0.55); background: transparent;")
         lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(lbl_sub)
 
@@ -2245,12 +2370,12 @@ class StatsTabView(QWidget):
         chips_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if chip1:
             lbl_c1 = QLabel(chip1)
-            set_widget_style(lbl_c1, "background: rgba(255,255,255,0.06); border-radius: 6px; font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.8); padding: 2px 6px;")
+            set_widget_style(lbl_c1, "background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-size: 9.5px; font-weight: 600; color: rgba(255,255,255,0.85); padding: 2px 6px;")
             chips_row.addWidget(lbl_c1)
             box._chip1 = lbl_c1
         if chip2:
             lbl_c2 = QLabel(chip2)
-            set_widget_style(lbl_c2, "background: rgba(255,255,255,0.06); border-radius: 6px; font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.8); padding: 2px 6px;")
+            set_widget_style(lbl_c2, "background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-size: 9.5px; font-weight: 600; color: rgba(255,255,255,0.85); padding: 2px 6px;")
             chips_row.addWidget(lbl_c2)
             box._chip2 = lbl_c2
         lay.addLayout(chips_row)
@@ -2437,6 +2562,15 @@ class StatsTabView(QWidget):
         except Exception:
             return "-- h -- m"
 
+    def _get_boot_str(self) -> str:
+        try:
+            import psutil
+            from datetime import datetime
+            dt = datetime.fromtimestamp(psutil.boot_time())
+            return dt.strftime("Booted %b %d, %I:%M %p")
+        except Exception:
+            return "Booted recently"
+
     def _refresh_stats(self):
         if not self.isVisible():
             return
@@ -2466,6 +2600,8 @@ class StatsTabView(QWidget):
                 self.gauge_gpu._dial.set_value(float(gpu_util))
                 if hasattr(self.gauge_gpu, "_chip1"):
                     self.gauge_gpu._chip1.setText(f"{used_gb:.1f} / {tot_gb:.1f} GB")
+                if hasattr(self.gauge_gpu, "_chip2"):
+                    self.gauge_gpu._chip2.setText(f"{int(gpu_util)}% load")
             except Exception:
                 pass
 
@@ -2478,6 +2614,8 @@ class StatsTabView(QWidget):
             self.gauge_ram._lbl_sub.setText(f"{used_gb:.1f} / {total_gb:.1f} GB")
             if hasattr(self.gauge_ram, "_chip1"):
                 self.gauge_ram._chip1.setText(f"{free_gb:.1f} GB free")
+            if hasattr(self.gauge_ram, "_chip2"):
+                self.gauge_ram._chip2.setText(f"{int(ram_pct)}% used")
 
             curr_time = time.time()
             if not hasattr(self, "_last_disk_time") or (curr_time - self._last_disk_time > 30.0):
@@ -2486,7 +2624,15 @@ class StatsTabView(QWidget):
                     disk = psutil.disk_usage("C:\\")
                     d_used = disk.used / (1024 ** 3)
                     d_total = disk.total / (1024 ** 3)
+                    d_free = disk.free / (1024 ** 3)
+                    pct = disk.percent
                     self.lbl_disk_val.setText(f"{int(d_used)} / {int(d_total)} GB")
+                    if hasattr(self, "lbl_disk_pct"):
+                        self.lbl_disk_pct.setText(f"{int(pct)}%")
+                    if hasattr(self, "bar_disk"):
+                        self.bar_disk.set_ratio(pct / 100.0)
+                    if hasattr(self, "lbl_disk_sub"):
+                        self.lbl_disk_sub.setText(f"{int(d_free)} GB free · Local Disk")
                 except Exception:
                     pass
             net = psutil.net_io_counters()
@@ -2497,6 +2643,10 @@ class StatsTabView(QWidget):
                 down_str = f"{down_bps / (1024*1024):.1f} MB/s" if down_bps >= 1024*1024 else f"{int(down_bps / 1024)} KB/s"
                 up_str = f"{up_bps / (1024*1024):.1f} MB/s" if up_bps >= 1024*1024 else f"{int(up_bps / 1024)} KB/s"
                 self.lbl_net_val.setText(f"↓ {down_str}  ↑ {up_str}")
+                if hasattr(self, "lbl_net_down"):
+                    self.lbl_net_down.setText(f"↓ {down_str}")
+                if hasattr(self, "lbl_net_up"):
+                    self.lbl_net_up.setText(f"↑ {up_str}")
             self._last_net_bytes = (net.bytes_recv, net.bytes_sent)
             self._last_net_time = curr_time
 
@@ -2504,6 +2654,8 @@ class StatsTabView(QWidget):
             up_h = up_sec // 3600
             up_m = (up_sec % 3600) // 60
             self.lbl_up_val.setText(f"{up_h} h {up_m} m")
+            if hasattr(self, "lbl_up_boot"):
+                self.lbl_up_boot.setText(self._get_boot_str())
 
             # Periodic refresh of top apps list
             self._proc_refresh_tick = getattr(self, "_proc_refresh_tick", 0) + 1
