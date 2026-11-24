@@ -98,7 +98,7 @@ class AppMixerMenu(QMenu):
             QScrollArea, QScrollArea > QWidget, QWidget#appMixerRows {{
                 background: {colors['root']}; border: none;
             }}
-            QAbstractScrollArea::corner, QScrollBar::corner {{ background: transparent; }}
+            QScrollBar::corner {{ background: transparent; }}
             QSlider:focus {{ border: none; outline: none; }}
             QSlider::groove:horizontal {{ height: 3px; background: {colors['card']}; border-radius: 1px; }}
             QSlider::sub-page:horizontal {{ background: {colors['muted']}; border-radius: 1px; }}

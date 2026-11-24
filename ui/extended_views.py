@@ -1,7 +1,5 @@
 """Calendar, clipboard, PDF tools, commands, and Windows desktop views."""
 
-import ast
-import operator as op
 import os
 import sys
 import json
@@ -771,7 +769,7 @@ class LauncherTabView(QWidget):
         self._indexed = False
         layout = QVBoxLayout(self)
         self.input_search = QLineEdit()
-        self.input_search.setPlaceholderText("Search tabs, actions, apps, or calculate (e.g. 24 * 7)")
+        self.input_search.setPlaceholderText("Search tabs, actions, or apps")
         self.input_search.setAccessibleName("Search commands and apps")
         self.input_search.textChanged.connect(self._render_results)
         self.input_search.returnPressed.connect(self._launch_current)
@@ -791,37 +789,6 @@ class LauncherTabView(QWidget):
         self.apps_ready.connect(self._set_apps)
         self._render_results()
 
-    @staticmethod
-    def _eval_math(text: str):
-        expr = text.strip()
-        if not expr or not any(ch in expr for ch in "+-*/%^"):
-            return None
-        operators = {
-            ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul,
-            ast.Div: op.truediv, ast.FloorDiv: op.floordiv,
-            ast.Mod: op.mod, ast.Pow: op.pow, ast.USub: op.neg, ast.UAdd: op.pos,
-        }
-        def _eval_node(node):
-            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-                return node.value
-            if isinstance(node, ast.BinOp) and type(node.op) in operators:
-                left = _eval_node(node.left)
-                right = _eval_node(node.right)
-                if isinstance(node.op, ast.Pow) and (abs(right) > 100 or abs(left) > 10000):
-                    raise OverflowError("Exponent too large")
-                return operators[type(node.op)](left, right)
-            if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
-                return operators[type(node.op)](_eval_node(node.operand))
-            raise ValueError("Unsupported expression")
-        try:
-            parsed = ast.parse(expr.replace("^", "**"), mode="eval")
-            val = _eval_node(parsed.body)
-            if isinstance(val, (int, float)):
-                return f"{val:,.6g}" if isinstance(val, float) else f"{val:,}"
-        except Exception:
-            return None
-        return None
-
     def showEvent(self, event):
         super().showEvent(event)
         self.input_search.setFocus()
@@ -831,8 +798,7 @@ class LauncherTabView(QWidget):
         self._render_results()
 
     def _render_results(self):
-        raw_text = self.input_search.text()
-        words = raw_text.casefold().split()
+        words = self.input_search.text().casefold().split()
         if words and not self._indexed:
             self._indexed = True
 
@@ -845,14 +811,7 @@ class LauncherTabView(QWidget):
 
             threading.Thread(target=index, daemon=True, name="poppy-launcher").start()
         entries = self.commands + (self.apps if words else [])
-        matched = [entry for entry in entries if all(word in entry["name"].casefold() for word in words)][:40]
-        calc_val = self._eval_math(raw_text)
-        if calc_val is not None:
-            matched.insert(0, {
-                "name": f"= {calc_val}  (Enter to copy)",
-                "run": lambda value=calc_val: QApplication.clipboard().setText(value.replace(",", "")),
-            })
-        self._filtered = matched
+        self._filtered = [entry for entry in entries if all(word in entry["name"].casefold() for word in words)][:40]
         self.results.clear()
         self.results.addItems([entry["name"] for entry in self._filtered])
         if self._filtered:
