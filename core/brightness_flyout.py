@@ -147,9 +147,12 @@ class BrightnessFlyout:
         # Observe the volume buttons for unchanged readings at the limits.
         # Windows receives every key and owns the actual volume change.
         if code == 0 and message in (0x100, 0x104) and address:
-            key = wintypes.DWORD.from_address(address).value
-            if key in (_VOLUME_DOWN, _VOLUME_UP):
-                self._volume_key = (key, monotonic())
+            try:
+                key = wintypes.DWORD.from_address(address).value
+                if key in (_VOLUME_DOWN, _VOLUME_UP):
+                    self._volume_key = (key, monotonic())
+            except (ValueError, TypeError, OSError):
+                pass
         return self._user32.CallNextHookEx(None, code, message, address)
 
     def _poll_volume(self):

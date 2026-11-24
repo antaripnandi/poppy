@@ -606,7 +606,7 @@ class DynamicNotchWindow(QWidget):
             "Notes": 8
         }
         self._refresh_tab_names()
-        self.tab_strip = AnimatedTabStrip([(name, "") for name in self._active_tab_names], parent=self)
+        self.tab_strip = AnimatedTabStrip([(name, "") for name in self._active_tab_names], accent=self._theme["accent"], parent=self)
         self.tab_strip.tab_changed.connect(self._switch_tab)
         header_bar.addWidget(self.tab_strip)
         header_bar.addStretch()
@@ -732,7 +732,26 @@ class DynamicNotchWindow(QWidget):
         tools.setSpacing(6)
         commands = QPushButton("Commands")
         commands.setToolTip("Search tabs, actions, and installed apps (Ctrl+Shift+Space)")
-        set_widget_style(commands, "QPushButton { background: transparent; border: none; color: #a7adab; padding: 4px 7px; } QPushButton:hover { color: #edf1f0; } QPushButton:focus { border: 1px solid #a7adab; }")
+        set_widget_style(commands, """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 9px;
+                color: rgba(255, 255, 255, 0.65);
+                font-family: 'Segoe UI', -apple-system, sans-serif;
+                font-size: 11px;
+                font-weight: 500;
+                padding: 4px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.08);
+                color: #ffffff;
+                border-color: rgba(255, 255, 255, 0.14);
+            }
+            QPushButton:focus {
+                border: 1px solid rgba(242, 140, 90, 0.65);
+            }
+        """)
         commands.clicked.connect(self.open_commands)
         tools.addWidget(commands)
         tools.addStretch()
@@ -752,6 +771,7 @@ class DynamicNotchWindow(QWidget):
         self._switch_tab(0)
         self.tab_home.slider_vol.set_accent(self._theme["accent"])
         self.tab_home.slider_bright.set_accent(self._theme["accent"])
+        self.tab_strip.set_accent(self._theme["accent"])
         self._apply_layout_theme(self._appearance.get("layout", "Classic"))
         refresh_theme()
         self._refresh_peek_surface()
@@ -966,7 +986,7 @@ class DynamicNotchWindow(QWidget):
 
     def _update_clock(self):
         now = datetime.now()
-        show_seconds = self.tab_home.lbl_big_time.isVisible() and self._appearance.get("layout") != "Classic"
+        show_seconds = self.tab_home.lbl_big_time.isVisible()
         time_short = now.strftime("%I:%M %p").lstrip("0")
         self.lbl_clock.setText(time_short)
         self.tab_home.lbl_big_time.setText(now.strftime("%I:%M:%S %p").lstrip("0") if show_seconds else time_short)
@@ -2227,6 +2247,7 @@ class DynamicNotchWindow(QWidget):
             self.tab_calendar.set_accent(accent)
             self.tab_home.slider_vol.set_accent(accent)
             self.tab_home.slider_bright.set_accent(accent)
+            self.tab_strip.set_accent(accent)
         if palette_changed or layout_changed or light_changed or media_changed:
             self.tab_music.configure_appearance(self.config.get("media", {}), self._theme)
             self._applied_media_appearance = media_values

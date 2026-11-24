@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import hashlib
 import winreg
 import ctypes
 from ctypes import wintypes
@@ -17,8 +18,8 @@ import uuid
 import threading
 from contextlib import contextmanager
 
-from PySide6.QtCore import QObject, Signal, QTimer
-from poppy.core.storage import data_path, write_json
+from PySide6.QtCore import QObject, Signal, QTimer, QBuffer, QIODevice
+from poppy.core.storage import atomic_write, data_dir, data_path, write_json
 
 
 @contextmanager
@@ -372,19 +373,39 @@ class AppLauncherIndexer:
 
 
 class ClipboardHistoryManager(QObject):
-    """Text history with stable identities; pinned entries survive recopying."""
+    """Text and image history with stable identities; pinned entries survive recopying."""
     history_updated = Signal()
     save_failed = Signal(str)
     MAX_RECENT = 40
+    MAX_IMAGES = 20
     MAX_TEXT_BYTES = 1024 * 1024
+    MAX_IMAGE_BYTES = 12 * 1024 * 1024
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.store_file = data_path("clipboard_history.json")
         self.store_file.parent.mkdir(parents=True, exist_ok=True)
+        self.images_dir = data_dir() / "clipboard_images"
         self.history: list[dict] = []
         self.last_save_error = ""
         self._load()
+
+    @staticmethod
+    def classify_text(text: str) -> str:
+        stripped = (text or "").strip()
+        if stripped and not any(ch.isspace() for ch in stripped) and stripped.lower().startswith(("http://", "https://")):
+            return "link"
+        lower = stripped.lower()
+        code_prefixes = (
+            "npm ", "npx ", "pip ", "git ", "python ", "pytest ", "cd ", "docker ",
+            "curl ", "def ", "class ", "import ", "from ", "const ", "let ", "var ",
+            "function ", "select ", "sudo ", "powershell ", "cargo ", "go ",
+        )
+        if any(lower.startswith(prefix) for prefix in code_prefixes):
+            return "code"
+        if "\n" in stripped and any(tok in stripped for tok in ("def ", "class ", "=>", "{", "}", "();", "import ")):
+            return "code"
+        return "text"
 
     def _load(self):
         if self.store_file.exists():
@@ -394,13 +415,24 @@ class ClipboardHistoryManager(QObject):
                     return
                 seen_ids = set()
                 for item in raw:
-                    if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+                    if not isinstance(item, dict):
+                        continue
+                    clip_type = item.get("type")
+                    if clip_type == "image":
+                        img_path = item.get("image_path")
+                        if not isinstance(img_path, str) or not Path(img_path).is_file():
+                            continue
+                    elif not isinstance(item.get("text"), str):
                         continue
                     item_id = item.get("id")
                     if not isinstance(item_id, str) or item_id in seen_ids:
                         item_id = uuid.uuid4().hex
                     seen_ids.add(item_id)
-                    self.history.append({**item, "id": item_id})
+                    if not clip_type:
+                        clip_type = self.classify_text(item.get("text", ""))
+                    normalized = {**item, "id": item_id, "type": clip_type}
+                    normalized.setdefault("timestamp", time.time())
+                    self.history.append(normalized)
                 self._trim()
             except Exception:
                 self.history = []
@@ -415,28 +447,106 @@ class ClipboardHistoryManager(QObject):
             self.save_failed.emit(str(error))
             return False
 
+    def _remove_image_file(self, item: dict):
+        if item.get("type") == "image":
+            img_path = item.get("image_path")
+            if isinstance(img_path, str) and img_path:
+                try:
+                    p = Path(img_path)
+                    if p.exists() and p.is_file():
+                        p.unlink()
+                except OSError:
+                    pass
+
     def _trim(self):
         pinned = [c for c in self.history if c.get("pinned", False)]
         recent = [c for c in self.history if not c.get("pinned", False)]
-        self.history = pinned + recent[:self.MAX_RECENT]
+        kept_recent = []
+        removed = []
+        image_count = 0
+        for item in recent:
+            if item.get("type") == "image":
+                if image_count >= self.MAX_IMAGES:
+                    removed.append(item)
+                    continue
+                image_count += 1
+            if len(kept_recent) >= self.MAX_RECENT:
+                removed.append(item)
+            else:
+                kept_recent.append(item)
+        for item in removed:
+            self._remove_image_file(item)
+        self.history = pinned + kept_recent
 
     def add_clip(self, text: str):
         if not text or not text.strip():
             return False
         if len(text.encode("utf-8")) > self.MAX_TEXT_BYTES:
             return False
-        existing = next((c for c in self.history if c["text"] == text), None)
+        existing = next((c for c in self.history if c.get("type", "text") != "image" and c.get("text") == text), None)
         if existing and self.history[0] is existing:
             if self.last_save_error:
                 self._save()
                 self.history_updated.emit()
             return True
-        self.history = [c for c in self.history if c["text"] != text]
+        self.history = [c for c in self.history if not (c.get("type", "text") != "image" and c.get("text") == text)]
         item = {
             "id": existing["id"] if existing else uuid.uuid4().hex,
+            "type": self.classify_text(text),
             "text": text,
             "time": time.strftime("%I:%M %p"),
-            "pinned": existing.get("pinned", False) if existing else False
+            "timestamp": time.time(),
+            "pinned": existing.get("pinned", False) if existing else False,
+        }
+        self.history.insert(0, item)
+        self._trim()
+        self._save()
+        self.history_updated.emit()
+        return True
+
+    def add_image(self, qimage) -> bool:
+        """Capture, deduplicate (SHA-256), and persist a clipboard QImage as PNG."""
+        if qimage is None or qimage.isNull() or qimage.width() <= 0 or qimage.height() <= 0:
+            return False
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        if not qimage.save(buf, "PNG"):
+            return False
+        png_bytes = bytes(buf.data())
+        if not png_bytes or len(png_bytes) > self.MAX_IMAGE_BYTES:
+            return False
+        digest = hashlib.sha256(png_bytes).hexdigest()
+        existing = next((c for c in self.history if c.get("type") == "image" and c.get("image_hash") == digest), None)
+        if existing and self.history[0] is existing:
+            if self.last_save_error:
+                self._save()
+                self.history_updated.emit()
+            return True
+
+        item_id = existing["id"] if existing else uuid.uuid4().hex
+        self.images_dir = data_dir() / "clipboard_images"
+        image_file = self.images_dir / f"{item_id}.png"
+        try:
+            if not image_file.exists():
+                atomic_write(image_file, png_bytes)
+        except OSError as error:
+            self.last_save_error = str(error)
+            self.save_failed.emit(str(error))
+            return False
+
+        self.history = [c for c in self.history if not (c.get("type") == "image" and c.get("image_hash") == digest)]
+        item = {
+            "id": item_id,
+            "type": "image",
+            "text": f"Image · {qimage.width()}×{qimage.height()}",
+            "image_path": str(image_file),
+            "image_hash": digest,
+            "width": int(qimage.width()),
+            "height": int(qimage.height()),
+            "size_bytes": len(png_bytes),
+            "time": time.strftime("%I:%M %p"),
+            "timestamp": time.time(),
+            "pinned": existing.get("pinned", False) if existing else False,
         }
         self.history.insert(0, item)
         self._trim()
@@ -460,11 +570,15 @@ class ClipboardHistoryManager(QObject):
     def delete_clip(self, identity: str | int):
         index = self._index(identity)
         if 0 <= index < len(self.history):
-            self.history.pop(index)
+            removed = self.history.pop(index)
+            self._remove_image_file(removed)
             self._save()
             self.history_updated.emit()
 
     def clear_all(self):
+        removed = [c for c in self.history if not c.get("pinned", False)]
+        for item in removed:
+            self._remove_image_file(item)
         self.history = [c for c in self.history if c.get("pinned", False)]
         self._save()
         self.history_updated.emit()

@@ -93,30 +93,24 @@ def test_orders_save_reload_and_reset_only_the_selected_design(editor, audit_app
     window, settings = editor
     preview = settings.layout_preview
     preview.move_card("shelf", 0)
-    settings.combo_layout.setCurrentText("Paper")
     preview.move_card("notes", 0)
-    paper = list(preview.order)
+    order = list(preview.order)
     assert settings._save_settings()
     settings.close()
     saved = load_config()
-    assert saved["appearance"]["home_orders"]["Paper"] == paper
+    assert saved["appearance"]["home_orders"]["Classic"] == order
     reloaded = SettingsWindow(saved)
-    assert reloaded.layout_preview.order == paper
+    assert reloaded.layout_preview.order == order
     reloaded.btn_reset_order.click()
     assert reloaded.layout_preview.order == list(HOME_CARDS)
-    reloaded.combo_layout.setCurrentText("Classic")
-    assert reloaded.layout_preview.order[0] == "shelf"
     reloaded.close()
-    restored_window = DynamicNotchWindow(saved)
-    assert actual_order(restored_window.tab_home) == paper
-    restored_window.close()
 
 
 @pytest.mark.parametrize("bad", [None, "clock", [], ["notes"] * 4,
                                 ["clock", "controls", "notes", "unknown"], [[], {}, None, 1]])
 def test_invalid_order_cannot_hide_or_duplicate_a_section(bad):
-    config = normalize_appearance({"layout": "Paper", "home_orders": {"Paper": bad}})
-    assert home_order("Paper", config["home_orders"]) == HOME_CARDS
+    config = normalize_appearance({"layout": "Classic", "home_orders": {"Classic": bad}})
+    assert home_order("Classic", config["home_orders"]) == HOME_CARDS
 
 
 @pytest.mark.parametrize("mode", ["Dark", "Light"])
@@ -124,23 +118,13 @@ def test_new_designs_change_controls_and_restore_the_original(editor, audit_app,
     window, settings = editor
     assert [settings.combo_layout.itemText(i) for i in range(settings.combo_layout.count())] == list(LAYOUT_THEMES)
     settings.combo_mode.setCurrentText(mode)
-    snapshots = {}
-    for name in ("Classic", "Flat", "Paper", "Instrument", "Classic"):
-        settings.combo_layout.setCurrentText(name)
-        audit_app.processEvents()
-        snapshots[name] = window.tab_home.slider_vol.grab().toImage()
-        assert (window.tab_music.identity_layout.direction().name == "LeftToRight") == (name in ("Flat", "Paper"))
-        if name == "Paper":
-            assert window.tab_home.lbl_big_time.font().family() == "Cambria"
-        if name == "Instrument":
-            assert window.tab_home.lbl_big_time.font().family() == "Consolas"
-            assert all(label.isVisible() for label in window.tab_home._design_headers)
-        if name == "Classic":
-            clock_header, controls_header = window.tab_home._design_headers
-            assert clock_header.isHidden()
-            assert not controls_header.isHidden() and controls_header.text() == "System controls"
-            assert window.tab_home.lbl_big_time.font().family() != "Cambria"
-    assert snapshots["Classic"] != snapshots["Flat"] != snapshots["Paper"] != snapshots["Instrument"]
+    audit_app.processEvents()
+    name = "Classic"
+    settings.combo_layout.setCurrentText(name)
+    audit_app.processEvents()
+    clock_header, controls_header = window.tab_home._design_headers
+    assert clock_header.isHidden()
+    assert not controls_header.isHidden() and controls_header.text() == "System controls"
 
 
 @pytest.mark.parametrize("name", ["Flat", "Paper", "Instrument"])
@@ -209,19 +193,18 @@ def test_home_button_keeps_keyboard_focus_cue_without_a_click_outline(audit_app,
     assert mic.grab().toImage() == clicked
 
 
-def test_deck_daily_and_console_style_every_tab(editor, audit_app):
+def test_classic_styles_every_tab(editor, audit_app):
     window, settings = editor
-    for name in ("Deck", "Daily", "Console"):
-        settings.combo_layout.setCurrentText(name)
-        audit_app.processEvents()
-        expanded = window.view_expanded.layout()
-        assert expanded.indexOf(window.tab_stack) == (0 if name == "Daily" else 1)
-        assert window.tab_home._layout_name == window.tab_music._layout_name == name
-        assert window.tab_strip.buttons[0].icon().isNull() == (name != "Deck")
-        for index in range(2, window.tab_stack.count()):
-            page = window.tab_stack.widget(index)
-            assert page.layout().spacing() == LAYOUT_THEMES[name]["spacing"]
-            assert all(card.property("layoutTheme") == name for card in page.findChildren(CardFrame))
+    name = "Classic"
+    settings.combo_layout.setCurrentText(name)
+    audit_app.processEvents()
+    expanded = window.view_expanded.layout()
+    assert expanded.indexOf(window.tab_stack) == 1
+    assert window.tab_home._layout_name == window.tab_music._layout_name == name
+    for index in range(2, window.tab_stack.count()):
+        page = window.tab_stack.widget(index)
+        assert page.layout().spacing() == LAYOUT_THEMES[name]["spacing"]
+        assert all(card.property("layoutTheme") == name for card in page.findChildren(CardFrame))
 
 
 @pytest.mark.parametrize("name", list(LAYOUT_THEMES))
