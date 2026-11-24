@@ -223,16 +223,9 @@ class HomeTabView(QWidget):
             slider.setToolTip(label)
             slider.installEventFilter(self)
 
-        self.vol_row_widget = QWidget(card_controls)
-        vol_row = QHBoxLayout(self.vol_row_widget)
-        vol_row.setContentsMargins(0, 0, 0, 0)
-        vol_row.setSpacing(4)
-        vol_row.addWidget(self.slider_vol, 1)
-        self.btn_audio_gear = IconButton(Icons.SETTINGS, "Audio options (Mute, App mixer, Sound output)",
-                                         parent=self.vol_row_widget, size=26, font_size=13, is_fluent=True)
-        self.btn_audio_gear.clicked.connect(lambda: self.audio_gear_menu_requested.emit(self.btn_audio_gear))
-        vol_row.addWidget(self.btn_audio_gear)
-        l_ctrl.addWidget(self.vol_row_widget)
+        self.btn_audio_gear = IconButton(Icons.SETTINGS, "Audio options", parent=card_controls, size=26, font_size=13, is_fluent=True)
+        self.btn_audio_gear.hide()
+        l_ctrl.addWidget(self.slider_vol)
         l_ctrl.addWidget(self.slider_bright)
 
         # Hidden compatibility triggers (surfaced inside the volume gear menu)
