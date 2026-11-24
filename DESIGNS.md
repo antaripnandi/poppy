@@ -20,33 +20,27 @@ Poppy is a small daily utility. Keep controls readable, show real state, and lea
 - The compact artwork scales with the pill and uses a rounded image crop. The docked notch's top corners flare toward the screen edge. Leave room in the click-through mask for antialiased edge pixels.
 - Volume keys, matched Windows brightness notifications, and pill scrolling show transient level feedback inside the existing pill. Use a Fluent icon, a neutral animated track, and the percentage or mute state. Retarget the fill from its current position on repeated input and restore the normal pill after one second. Shift + scroll adjusts brightness on displays that support it. Only hide a recognized native brightness popup when the compact indicator can replace it.
 
-## Visual treatment and hierarchy
+## Visual treatment
 
-- Single unified Bento dashboard with 4-tier visual hierarchy ladder:
-  - **Tier 1 (100% #ffffff)**: Primary focal points (clock digits, active track title, active toggle state).
-  - **Tier 2 (70–80% rgba(255,255,255,0.75))**: Secondary metadata (artist name, formatted date, live weather, telemetry readouts).
-  - **Tier 3 (40–45% rgba(255,255,255,0.45))**: Tertiary & interactive labels (inactive tabs, secondary action text, empty state hints).
-  - **Tier 4 (25–30% rgba(255,255,255,0.08))**: Restrained borders, card fills (`rgba(255,255,255,0.04)`), subtle dividers.
-- Tactile Squircle Action Tiles (`SquircleTileButton`):
-  - $2 \times 4$ tactile squircle action buttons in Control Center: Keep Awake, Microphone, Focus, Screen Snip, Color Picker, Calculator, Bluetooth, and Lock PC.
-  - Fluent glyph centered above Segoe UI 9px semi-bold label. Responsive hover feedback, press state, and checked accent glow.
-- Compact Capsule Sliders (`CapsuleSlider`):
-  - Inline Volume and Brightness capsule sliders with numeric percentage indicators and smooth wheel / drag response.
-  - Audio gear button provides quick access to App Mixer, Mute, and Sound Output without visual clutter.
-- Mini Media Player:
-  - Breadcrumb track metadata (`Track Title` · `Artist`), centered transport controls (prev, play/pause, next), and player dropdown.
-- Shelf & Quick Calc:
-  - Staged file preview with thumbnail, filename, size, and Copy/Pin actions + smooth inline `Calculate...` math bar with safe AST evaluation.
-- Bottom Utility Dock:
-  - Floating rounded dock capsule below content for direct utilities (Keep-open, keep-awake, exclude capture, float tab, draw/annotate).
+- Flat dark surfaces, muted secondary text and restrained borders. Avoid ornamental badges, nested cards and large uppercase headings.
+- Segoe UI: 12px controls, 13px file titles, 14px notes, 20px track title. Keep long text bounded and provide full-text tooltips where it is truncated.
+- Home keeps playback in a compact row above the four draggable cards. Use 36px artwork, track and artist, direct transport controls and one source selector when multiple sessions are available. System controls use icon and percentage sliders with text actions. The Music page uses larger artwork and a separate lyrics column. Optional artwork tint adapts to Light and Dark modes.
+- Music centers artwork and metadata in vertical player layouts; Flat and Paper retain their horizontal identity. Center playback controls above a separate volume row. Use a borderless player surface, native Segoe UI typography, slim neutral timelines and quiet source buttons. Preserve keyboard focus indicators, seek behavior and full metadata in tooltips.
+- Use normal desktop transport buttons, elapsed/total timeline, volume control and an explicit Lyrics toggle. Avoid a phone widget silhouette.
+- Player buttons switch actual sessions; all sessions remain accessible through the player selector.
+- Keyboard focus must remain visible. Icon controls need accessible names and tooltips. Unsupported actions stay hidden or disabled.
+- On Classic Home, lead with the date and clock, keep hardware readings close to them, and reserve a filled panel for system controls. Notes and Shelf read as sections on the drawer surface. Keep the idle media strip compact and bring back the transport controls when a media session is available.
 
-## Settings and customization
+## Settings
 
 - No emoji in labels, descriptions or navigation. Use plain names and explain actual behavior.
-- Single unified layout theme (`Classic`): Consolidates previous layout variants into one cohesive, high-craft design system.
-- Appearance supports mode (Dark / Light / Follow Windows) and ten color palettes. Retains style, display, dimensions, corner radius and offset controls.
-- The Home arrangement editor retains dynamic section dragging and reordering for all 4 Bento cards (`clock`, `controls`, `notes`, `shelf`).
-- Home section switches control the mini-player, four cards and Screen Time. Pack visible cards in saved order and keep live widgets for hidden cards.
+- Preserve existing settings and all seven original themes. Charcoal, Sage and Slate are additional flat, muted presets.
+- Appearance separates nine layout themes, mode (Dark / Light / Follow Windows) and ten color palettes. Keep style, display, dimensions, corner radius and offset controls. Hover color can follow artwork, use a fixed color, or match the layout. Music has a separate background and session-button preference.
+- Layout themes change arrangements, not just color: Classic balances columns; Minimal uses a narrow summary/player column, smaller artwork and flat surfaces; Soft places notes beside the clock and uses rounded cards. Music always keeps the player on the left and lyrics on the right across all themes. Apply surface treatment and page spacing across the panel. Show a small Home arrangement preview in Settings because the main panel collapses while Settings is open.
+- Flat borrows alignment and low visual noise from Linear: divider lines, text tabs and thin controls. Paper borrows Things' reading-focused treatment: an open page, serif clock, text actions and plain editors. Instrument borrows Ableton's functional controls: header strips, fixed-width readings and segmented meters. These designs change controls and surfaces, with reversible authored styles; do not reduce them to card reordering.
+- Deck uses icon tabs, tinted cards, and side-by-side artwork and transport. Daily moves tabs and the Home player to the bottom, uses serif typography and an open page, and presents document actions as rows. Console uses monospaced readouts, segmented controls, a seek ruler, and timestamped lyrics. Apply the shared typography, controls, spacing and surfaces to all tabs and keep the real page widgets when switching designs.
+- The Home preview is an arrangement editor: drag sections with a visible preview and drop target, or move the focused section with Alt + arrows. Keep all four sections present, retain a separate order per design, and reset only the selected design. Preview live, save on Done, cancel on close. Rearranging must preserve the actual editors, playback and shelf content.
+- Home section switches control the mini-player, four cards and Screen Time. Apply visibility on Done. Pack visible cards in saved order and keep the live widgets for hidden cards. Screen Time uses the existing tracking setting and shows up to five ranked app durations.
 - Geometry previews are coalesced; they must not reapply global styles or rebuild Home. Release applies the final slider value. Wheel input over Settings fields scrolls the page without modifying values; numeric entries accept exact values.
 - Appearance previews live. Done saves atomically; closing cancels unsaved changes and restores the saved appearance. Preserve unknown configuration keys.
 - Wrap Settings descriptions and allow vertical scrolling. Use keyboard-accessible selectors. Preserve Qt pseudo-selectors when compiling Light styles and retain authored source styles for reversible mode changes. Artwork and user content must remain intact.

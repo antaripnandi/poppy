@@ -1,7 +1,5 @@
 """Calendar, clipboard, PDF tools, commands, and Windows desktop views."""
 
-import ast
-import operator as op
 import os
 import sys
 import json
@@ -395,40 +393,11 @@ class ClipboardTabView(QWidget):
         self.input_search = QLineEdit()
         self.input_search.setPlaceholderText("Search clipboard history")
         self.input_search.setAccessibleName("Search clipboard history")
-        set_widget_style(self.input_search, """
-            QLineEdit {
-                background: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 10px;
-                padding: 6px 12px;
-                color: #ffffff;
-                font-size: 12px;
-            }
-            QLineEdit:focus {
-                border: 1px solid rgba(242, 140, 90, 0.65);
-                background: rgba(255, 255, 255, 0.06);
-            }
-        """)
         self.input_search.textChanged.connect(self._render_clips)
         hdr.addWidget(self.input_search, stretch=1)
 
         self.btn_clear = QPushButton("Clear unpinned")
         self.btn_clear.setToolTip("Remove unpinned entries from clipboard history")
-        set_widget_style(self.btn_clear, """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 10px;
-                padding: 6px 12px;
-                color: rgba(255, 255, 255, 0.75);
-                font-size: 11px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.09);
-                color: #ffffff;
-            }
-        """)
         self.btn_clear.clicked.connect(self.clip_mgr.clear_all)
         hdr.addWidget(self.btn_clear)
         layout.addLayout(hdr)
@@ -488,12 +457,11 @@ class ClipboardTabView(QWidget):
             set_widget_style(row, """
                 QFrame {
                     background: rgba(255, 255, 255, 0.04);
-                    border: 1px solid rgba(255, 255, 255, 0.07);
-                    border-radius: 10px;
+                    border: none;
+                    border-radius: 8px;
                 }
                 QFrame:hover {
-                    background: rgba(255, 255, 255, 0.07);
-                    border-color: rgba(255, 255, 255, 0.12);
+                    background: rgba(255, 255, 255, 0.08);
                 }
             """)
             r_l = QHBoxLayout(row)
@@ -801,22 +769,8 @@ class LauncherTabView(QWidget):
         self._indexed = False
         layout = QVBoxLayout(self)
         self.input_search = QLineEdit()
-        self.input_search.setPlaceholderText("Search tabs, actions, apps, or calculate (e.g. 24 * 7)")
+        self.input_search.setPlaceholderText("Search tabs, actions, or apps")
         self.input_search.setAccessibleName("Search commands and apps")
-        set_widget_style(self.input_search, """
-            QLineEdit {
-                background: rgba(255, 255, 255, 0.045);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 11px;
-                padding: 8px 14px;
-                color: #ffffff;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border: 1px solid rgba(242, 140, 90, 0.65);
-                background: rgba(255, 255, 255, 0.06);
-            }
-        """)
         self.input_search.textChanged.connect(self._render_results)
         self.input_search.returnPressed.connect(self._launch_current)
         layout.addWidget(self.input_search)
@@ -827,7 +781,6 @@ class LauncherTabView(QWidget):
         self.results.itemActivated.connect(lambda item: self._launch_current())
         layout.addWidget(self.results, 1)
         self.status = QLabel("Enter to open · Esc to close")
-        set_widget_style(self.status, "font-size: 11px; color: rgba(255, 255, 255, 0.45); padding: 4px 2px;")
         layout.addWidget(self.status)
         for key, offset in (("Down", 1), ("Up", -1)):
             shortcut = QShortcut(QKeySequence(key), self.input_search)
@@ -835,37 +788,6 @@ class LauncherTabView(QWidget):
             shortcut.activated.connect(lambda delta=offset: self._move_selection(delta))
         self.apps_ready.connect(self._set_apps)
         self._render_results()
-
-    @staticmethod
-    def _eval_math(text: str):
-        expr = text.strip()
-        if not expr or not any(ch in expr for ch in "+-*/%^"):
-            return None
-        operators = {
-            ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul,
-            ast.Div: op.truediv, ast.FloorDiv: op.floordiv,
-            ast.Mod: op.mod, ast.Pow: op.pow, ast.USub: op.neg, ast.UAdd: op.pos,
-        }
-        def _eval_node(node):
-            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-                return node.value
-            if isinstance(node, ast.BinOp) and type(node.op) in operators:
-                left = _eval_node(node.left)
-                right = _eval_node(node.right)
-                if isinstance(node.op, ast.Pow) and (abs(right) > 100 or abs(left) > 10000):
-                    raise OverflowError("Exponent too large")
-                return operators[type(node.op)](left, right)
-            if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
-                return operators[type(node.op)](_eval_node(node.operand))
-            raise ValueError("Unsupported expression")
-        try:
-            parsed = ast.parse(expr.replace("^", "**"), mode="eval")
-            val = _eval_node(parsed.body)
-            if isinstance(val, (int, float)):
-                return f"{val:,.6g}" if isinstance(val, float) else f"{val:,}"
-        except Exception:
-            return None
-        return None
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -876,8 +798,7 @@ class LauncherTabView(QWidget):
         self._render_results()
 
     def _render_results(self):
-        raw_text = self.input_search.text()
-        words = raw_text.casefold().split()
+        words = self.input_search.text().casefold().split()
         if words and not self._indexed:
             self._indexed = True
 
@@ -890,14 +811,7 @@ class LauncherTabView(QWidget):
 
             threading.Thread(target=index, daemon=True, name="poppy-launcher").start()
         entries = self.commands + (self.apps if words else [])
-        matched = [entry for entry in entries if all(word in entry["name"].casefold() for word in words)][:40]
-        calc_val = self._eval_math(raw_text)
-        if calc_val is not None:
-            matched.insert(0, {
-                "name": f"= {calc_val}  (Enter to copy)",
-                "run": lambda value=calc_val: QApplication.clipboard().setText(value.replace(",", "")),
-            })
-        self._filtered = matched
+        self._filtered = [entry for entry in entries if all(word in entry["name"].casefold() for word in words)][:40]
         self.results.clear()
         self.results.addItems([entry["name"] for entry in self._filtered])
         if self._filtered:

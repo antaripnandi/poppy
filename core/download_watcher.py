@@ -57,7 +57,7 @@ def _writer_closed(path):
                           wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
     open_file.restype = wintypes.HANDLE
     handle = open_file(str(path), 0x80000000, 0x5, None, 3, 0x00200000, None)
-    if handle in (None, 0, -1, 0xFFFFFFFFFFFFFFFF, ctypes.c_void_p(-1).value):
+    if handle in (None, ctypes.c_void_p(-1).value):
         return False
     close_handle = kernel.CloseHandle
     close_handle.argtypes = [wintypes.HANDLE]

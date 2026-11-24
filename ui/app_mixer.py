@@ -51,13 +51,13 @@ class AppMixerMenu(QMenu):
         self._pins = list(dict.fromkeys(path for path in saved if isinstance(path, str)))[:24] if isinstance(saved, list) else []
         self._icons = QFileIconProvider()
         panel = QWidget()
-        panel.setFixedWidth(400)
+        panel.setFixedWidth(386)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(7)
 
         self.title = QLabel("App mixer")
-        set_widget_style(self.title, "font-family: 'Segoe UI'; font-weight: 700; font-size: 14px; color: #ffffff;")
+        set_widget_style(self.title, "font-weight: 600; font-size: 14px;")
         self.output = QLabel("Default playback output")
         self.output.setWordWrap(True)
         self.output.hide()
@@ -80,8 +80,6 @@ class AppMixerMenu(QMenu):
         self.scroll.setWidget(body)
         layout.addWidget(self.scroll)
         windows_mixer = QPushButton("Windows volume mixer")
-        windows_mixer.setObjectName("mixerWinMixer")
-        windows_mixer.setCursor(Qt.CursorShape.PointingHandCursor)
         windows_mixer.clicked.connect(self._open_windows_mixer)
         layout.addWidget(windows_mixer, alignment=Qt.AlignmentFlag.AlignLeft)
 
@@ -94,99 +92,24 @@ class AppMixerMenu(QMenu):
 
     def prepare(self):
         colors = surface_colors()
-        accent = "#f28c5a"
-        if hasattr(self.parent(), "_theme") and isinstance(self.parent()._theme, dict):
-            accent = self.parent()._theme.get("accent", "#f28c5a")
         self.setStyleSheet(f"""
-            QMenu {{
-                background-color: #161a22;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 14px;
-                padding: 4px;
-            }}
-            QMenu::item {{
-                background: transparent;
-                padding: 0;
-            }}
-            QLabel {{
-                color: #ffffff;
-                font-family: 'Segoe UI', -apple-system, sans-serif;
-            }}
+            QMenu {{ background: {colors['root']}; border: 1px solid {colors['card']}; padding: 0; }}
+            QLabel {{ color: {colors['text']}; }}
             QScrollArea, QScrollArea > QWidget, QWidget#appMixerRows {{
-                background: transparent;
-                border: none;
+                background: {colors['root']}; border: none;
             }}
-            QAbstractScrollArea::corner, QScrollBar::corner {{ background: transparent; }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 6px;
-                margin: 0;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(255, 255, 255, 0.2);
-                border-radius: 3px;
-                min-height: 20px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0;
-                background: transparent;
-            }}
-            QSlider {{
-                height: 22px;
-            }}
+            QScrollBar::corner {{ background: transparent; }}
             QSlider:focus {{ border: none; outline: none; }}
-            QSlider::groove:horizontal {{
-                height: 5px;
-                background: rgba(255, 255, 255, 0.12);
-                border-radius: 2.5px;
-            }}
-            QSlider::sub-page:horizontal {{
-                background: {accent};
-                border-radius: 2.5px;
-            }}
+            QSlider::groove:horizontal {{ height: 3px; background: {colors['card']}; border-radius: 1px; }}
+            QSlider::sub-page:horizontal {{ background: {colors['muted']}; border-radius: 1px; }}
             QSlider::handle:horizontal {{
-                width: 14px;
-                height: 14px;
-                margin: -4.5px 0;
-                border-radius: 7px;
-                background: #ffffff;
+                width: 7px; margin: -3px 0; border-radius: 4px;
+                background: {colors['text']}; border: 1px solid {colors['text']};
             }}
-            QSlider::handle:horizontal:hover {{
-                background: {accent};
-            }}
-            QPushButton#mixerMute {{
-                background: rgba(255, 255, 255, 0.06);
-                border: 1px solid rgba(255, 255, 255, 0.09);
-                border-radius: 6px;
-                color: rgba(255, 255, 255, 0.85);
-                font-family: 'Segoe UI';
-                font-size: 11px;
-                font-weight: 600;
-                padding: 3px 6px;
-            }}
-            QPushButton#mixerMute:hover {{
-                background: rgba(255, 255, 255, 0.12);
-            }}
-            QPushButton#mixerMute[app_muted="true"] {{
-                background: rgba(239, 68, 68, 0.2);
-                border: 1px solid rgba(239, 68, 68, 0.4);
-                color: #fca5a5;
-            }}
-            QPushButton#mixerWinMixer {{
-                background: transparent;
-                border: none;
-                color: {accent};
-                font-family: 'Segoe UI';
-                font-size: 11.5px;
-                font-weight: 600;
-                padding: 4px 0;
-            }}
-            QPushButton#mixerWinMixer:hover {{
-                text-decoration: underline;
-            }}
+            QSlider::handle:horizontal:focus {{ background: {colors['root']}; }}
         """)
         for label in (self.output, self.status):
-            set_widget_style(label, f"color: {colors['muted']}; font-family: 'Segoe UI'; font-size: 11px;")
+            set_widget_style(label, f"color: {colors['muted']};")
         self.refresh()
         self._refresh_timer.start()
         self._sync_spotify_polling()
@@ -241,22 +164,19 @@ class AppMixerMenu(QMenu):
                 pin.setAccessibleName(label)
                 pin.setToolTip(label)
             binding = self._spotify_rows.get(app.sessions)
-            if binding is not None and binding.active and getattr(binding.playback, "can_set_volume", False):
+            if binding is not None and binding.active:
                 binding._update()
             else:
                 slider.setEnabled(True)
                 mute.setEnabled(True)
                 row.setToolTip(f"{app.name} · Windows app volume")
                 slider.setAccessibleName(f"{app.name} volume")
-                target_app = self._spotify_app if (app.sessions == ("spotify-playback",) and self._spotify_app) else app
                 with QSignalBlocker(slider):
-                    slider.setValue(target_app.volume)
-                readout.setText("Mixed" if target_app.mixed else f"{target_app.volume}%")
-                mute.setText("Unmute" if target_app.muted else "Mute")
-                mute.setAccessibleName(f"{mute.text()} {target_app.name}")
-                mute.setProperty("app_muted", target_app.muted)
-                mute.style().unpolish(mute)
-                mute.style().polish(mute)
+                    slider.setValue(app.volume)
+                readout.setText("Mixed" if app.mixed else f"{app.volume}%")
+                mute.setText("Unmute" if app.muted else "Mute")
+                mute.setAccessibleName(f"{mute.text()} {app.name}")
+                mute.setProperty("app_muted", app.muted)
         self.status.setText("Start playing sound in an app to adjust it here." if output
                             else "Windows playback output is unavailable.")
         self.status.setVisible(not apps)
@@ -307,63 +227,37 @@ class AppMixerMenu(QMenu):
 
     def _add_row(self, app):
         row = QWidget()
-        row.setObjectName("mixerRow")
-        set_widget_style(row, """
-            QWidget#mixerRow {
-                background: rgba(255, 255, 255, 0.035);
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 8px;
-            }
-            QWidget#mixerRow:hover {
-                background: rgba(255, 255, 255, 0.06);
-            }
-        """)
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(8)
-
-        artwork = QLabel()
-        artwork.setFixedSize(20, 20)
-        artwork.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        if app.path and os.path.exists(app.path):
-            artwork.setPixmap(self._icons.icon(QFileInfo(app.path)).pixmap(20, 20))
-        else:
-            set_widget_style(artwork, "font-family: 'Segoe UI'; font-size: 13px; color: #a7adab; background: transparent;")
-            artwork.setText(Icons.VOLUME)
-        layout.addWidget(artwork)
-
         name = QLabel(app.name)
         name.setTextFormat(Qt.TextFormat.PlainText)
         name.setToolTip(app.name)
-        name.setFixedWidth(94)
-        set_widget_style(name, "font-family: 'Segoe UI'; font-size: 12px; font-weight: 600; color: #ffffff; background: transparent;")
+        name.setWordWrap(True)
+        name.setFixedWidth(86)
+        artwork = QLabel()
+        artwork.setFixedWidth(18)
+        if app.path:
+            artwork.setPixmap(self._icons.icon(QFileInfo(app.path)).pixmap(18, 18))
+        layout.addWidget(artwork)
         layout.addWidget(name)
-
         slider = _AppVolumeSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
         slider.setAccessibleName(f"{app.name} volume")
         layout.addWidget(slider, 1)
-
-        readout = QLabel(f"{app.volume}%")
-        readout.setFixedWidth(38)
+        readout = QLabel()
+        readout.setFixedWidth(42)
         readout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        set_widget_style(readout, "font-family: 'Segoe UI'; font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.85); background: transparent;")
         layout.addWidget(readout)
-
-        mute = QPushButton("Unmute" if app.muted else "Mute")
-        mute.setObjectName("mixerMute")
-        mute.setProperty("app_muted", app.muted)
-        mute.setFixedWidth(56)
-        mute.setCursor(Qt.CursorShape.PointingHandCursor)
+        mute = QPushButton()
+        mute.setFixedWidth(64)
         layout.addWidget(mute)
-
         key = self._app_key(app)
         if key:
-            pin = IconButton(Icons.PIN, f"Pin {app.name}", size=24, font_size=11, is_fluent=True)
+            pin = IconButton(Icons.PIN, f"Pin {app.name}", size=24, font_size=12, is_fluent=True)
             pin.setObjectName("mixerPin")
             pin.clicked.connect(lambda: self._toggle_pin(key, pin))
             layout.addWidget(pin)
-
         output = self._output
         slider.sliderMoved.connect(lambda value: readout.setText(f"{value}%"))
         slider.actionTriggered.connect(lambda _: self._slider_action(slider, output, app.sessions))
@@ -394,21 +288,18 @@ class AppMixerMenu(QMenu):
 
     def _slider_action(self, slider, output, sessions):
         binding = self._spotify_rows.get(sessions)
-        if binding is not None and binding.active and getattr(binding.playback, "can_set_volume", False):
+        if binding is not None and binding.active:
             binding.volume_gesture()
             return
-        real_sessions = sessions
-        if sessions == ("spotify-playback",) and self._spotify_app and self._spotify_app.sessions:
-            real_sessions = self._spotify_app.sessions
         level = slider.sliderPosition()
         if not slider.isVisible() or level == slider.value():
             return
         if slider.isSliderDown():
-            self._pending_level = slider, output, real_sessions, level
+            self._pending_level = slider, output, sessions, level
             if not self._level_timer.isActive():
                 self._level_timer.start()
         else:
-            self._apply(output, real_sessions, level=level)
+            self._apply(output, sessions, level=level)
 
     def _flush_level(self):
         pending, self._pending_level = self._pending_level, None
@@ -419,7 +310,7 @@ class AppMixerMenu(QMenu):
 
     def _finish_level(self, slider):
         binding = next((item for item in self._spotify_rows.values() if item.slider is slider), None)
-        if binding is not None and binding.active and getattr(binding.playback, "can_set_volume", False):
+        if binding is not None and binding.active:
             binding._write_volume()
             return
         if self._pending_level and self._pending_level[0] is slider:
@@ -429,15 +320,12 @@ class AppMixerMenu(QMenu):
 
     def _apply(self, output, sessions, **change):
         binding = self._spotify_rows.get(sessions)
-        if binding is not None and binding.active and getattr(binding.playback, "can_set_volume", False):
+        if binding is not None and binding.active:
             if "muted" in change:
                 binding.toggle_mute()
             return
-        real_sessions = sessions
-        if sessions == ("spotify-playback",) and self._spotify_app and self._spotify_app.sessions:
-            real_sessions = self._spotify_app.sessions
         try:
-            set_app_volume(output, real_sessions, **change)
+            set_app_volume(output, sessions, **change)
         except OSError as error:
             QToolTip.showText(self.mapToGlobal(self.rect().bottomLeft()), str(error), self)
         if not any(slider.isSliderDown() for _, slider, _, _ in self._rows.values()):

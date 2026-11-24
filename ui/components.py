@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
 )
 
-from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors, keyboard_focused, contrast_ink
+from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors, keyboard_focused
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.core.system_controls import AudioPeakMeter, system_animations_enabled
 
@@ -209,31 +209,26 @@ class AnimatedTabStrip(QWidget):
     """Compact tab navigation with text-only selection."""
     tab_changed = Signal(int)
 
-    def __init__(self, tab_items: list[tuple[str, str]], accent="#f28c5a", parent=None):
+    def __init__(self, tab_items: list[tuple[str, str]], accent="#0a84ff", parent=None):
         super().__init__(parent)
         self._current_index = -1
-        self._accent = accent
         self.buttons: list[QPushButton] = []
 
         set_widget_style(self, """
             AnimatedTabStrip {
                 background-color: transparent;
                 border: none;
-                border-radius: 12px;
-                padding: 2px 2px;
+                border-radius: 10px;
+                padding: 2px 3px;
             }
         """)
 
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(2, 2, 2, 2)
-        self._layout.setSpacing(4)
+        self._layout.setContentsMargins(3, 2, 3, 2)
+        self._layout.setSpacing(2)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.set_tabs(tab_items)
-
-    def set_accent(self, accent: str):
-        self._accent = accent
-        self._update_buttons_style()
 
     def set_tabs(self, tab_items: list[tuple[str, str]]):
         """Dynamically replace tabs in the strip without recreating the widget."""
@@ -264,41 +259,33 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_buttons_style(self):
-        accent = getattr(self, "_accent", "#f28c5a")
+        name = current_layout()
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             btn.setChecked(is_active)
-            btn.setFixedHeight(30)
+            color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
+            font_weight = "600" if is_active else "500"
+            btn.setFixedHeight(34 if name == "Deck" else 28)
             label = btn.property("tabLabel")
-            btn.setText(label)
-            btn.setIcon(QIcon())
+            btn.setText(label.upper() if name == "Console" else label)
+            btn.setIcon(self._tab_icon(label, is_light_theme()) if name == "Deck" else QIcon())
             btn.setIconSize(QSize(15, 15))
-            if is_active:
-                bg = accent
-                color = "#0e1117"
-                font_weight = "700"
-                hover_bg = accent
-            else:
-                bg = "transparent"
-                color = "rgba(255, 255, 255, 0.55)" if not is_light_theme() else "rgba(0, 0, 0, 0.65)"
-                font_weight = "500"
-                hover_bg = "rgba(255, 255, 255, 0.08)" if not is_light_theme() else "rgba(0, 0, 0, 0.06)"
+            family = {"Daily": "Georgia", "Console": "Consolas"}.get(name, "Segoe UI")
             set_widget_style(btn, f"""
                 QPushButton {{
-                    background-color: {bg};
+                    background-color: transparent;
                     border: none;
-                    border-radius: 12px;
+                    border-radius: 11px;
                     color: {color};
-                    font-family: 'Segoe UI', -apple-system, sans-serif;
+                    font-family: '{family}';
                     font-size: 12px;
                     font-weight: {font_weight};
-                    padding: 3px 12px;
+                    padding: 3px {6 if name == "Deck" else 9}px;
                 }}
                 QPushButton:hover {{
-                    background-color: {hover_bg};
-                    color: {"#0e1117" if is_active else ("#ffffff" if not is_light_theme() else "#000000")};
+                    color: #ffffff;
                 }}
-                QPushButton:focus {{ border: 1px solid rgba(242, 140, 90, 0.65); }}
+                QPushButton:focus {{ border: 1px solid rgba(190,211,242,0.65); }}
             """)
 
     @staticmethod
@@ -468,10 +455,18 @@ class CardFrame(QFrame):
     def apply_layout(self, name, *, outline=True):
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
         self.setProperty("layoutTheme", name)
-        border = "1px solid rgba(255, 255, 255, 0.08)" if outline else "none"
-        fill_alpha = spec.get('fill', 0.05) if not is_light_theme() else 0.04
-        radius = spec.get('radius', 16)
-        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255, 255, 255, {fill_alpha}); border: {border}; border-radius: {radius}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
+        border = "1px solid rgba(255,255,255,0.08)" if outline and name != "Minimal" else "none"
+        if name == "Flat":
+            border = "none; border-top: 1px solid rgba(255,255,255,0.13)"
+        elif name == "Paper":
+            border = "none"
+        elif name == "Daily":
+            border = "none; border-top: 1px solid rgba(236,222,194,0.25)"
+        elif name in ("Instrument", "Console"):
+            border = "1px solid rgba(255,255,255,0.16)"
+        elif name == "Deck":
+            border = "1px solid rgba(172,199,247,0.22)"
+        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255,255,255,{spec['fill']}); border: {border}; border-radius: {spec['radius']}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
 class CircularProgressRing(QWidget):
@@ -718,28 +713,29 @@ class AudioVisualizerBars(QWidget):
 
 
 class MetricLabel(QLabel):
-    """Clean hardware telemetry label with tactile pill styling."""
+    """Clean hardware telemetry label."""
     def __init__(self, tag: str, val: str = "--%", parent=None):
         super().__init__(parent)
         self.tag = tag
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setText(f"{tag} {val}")
         self._default_style = """
             QLabel {
-                background: rgba(255, 255, 255, 0.045);
-                border: 1px solid rgba(255, 255, 255, 0.075);
-                border-radius: 8px;
-                color: rgba(255, 255, 255, 0.85);
-                font-family: 'Segoe UI', -apple-system, sans-serif;
+                background: transparent;
+                border: none;
+                color: #a7adab;
+                font-family: 'Segoe UI';
                 font-size: 11px;
-                font-weight: 600;
-                padding: 4px 6px;
+                padding: 3px 2px;
             }
         """
         self.apply_design(current_layout())
 
     def apply_design(self, name):
-        set_widget_style(self, self._default_style)
+        if name in ("Flat", "Paper", "Instrument"):
+            family = "Consolas" if name == "Instrument" else "Segoe UI"
+            set_widget_style(self, f"QLabel {{ background: transparent; border: none; color: #a6b5b0; font-family: '{family}'; font-size: 10px; padding: 2px 5px 9px 5px; }}")
+        else:
+            set_widget_style(self, self._default_style)
         self.update()
 
     def set_val(self, val_str: str):
@@ -771,347 +767,6 @@ class MetricLabel(QLabel):
                     painter.fillRect(rect, fill)
                 elif (index + 1) / segments <= percentage:
                     painter.fillRect(rect, fill)
-
-
-class SquircleTileButton(QPushButton):
-    """Tactile squircle quick-action tile with centered Fluent glyph and compact label."""
-
-    def __init__(self, icon_glyph: str, label: str, tooltip: str = "", *, toggle: bool = False, parent=None):
-        super().__init__(label, parent)
-        self._icon_glyph = icon_glyph
-        self._tile_label = label
-        self._compact = False
-        self._hovered = False
-        self.setCheckable(toggle)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumSize(46, 36)
-        self.setFixedHeight(44)
-        if tooltip:
-            self.setToolTip(tooltip)
-            self.setAccessibleName(tooltip)
-        set_widget_style(self, "QPushButton { background: transparent; border: none; outline: none; }")
-
-    def setText(self, text: str):
-        self._tile_label = text
-        super().setText(text)
-        self.update()
-
-    def set_compact(self, compact: bool):
-        if self._compact != compact:
-            self._compact = compact
-            self.setFixedHeight(36 if compact else 44)
-            self.updateGeometry()
-            self.update()
-
-    def sizeHint(self) -> QSize:
-        return QSize(54, 36 if self._compact else 44)
-
-    def enterEvent(self, event):
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        light = is_light_theme()
-        checked = self.isChecked()
-        pressed = self.isDown()
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-
-        if checked:
-            fill = QColor(234, 110, 50) if light else QColor(242, 140, 90)
-            border = QColor(234, 110, 50) if light else QColor(242, 140, 90)
-        elif pressed:
-            fill = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 26)
-            border = QColor(0, 0, 0, 32) if light else QColor(255, 255, 255, 36)
-        elif self._hovered:
-            fill = QColor(0, 0, 0, 16) if light else QColor(255, 255, 255, 20)
-            border = QColor(0, 0, 0, 26) if light else QColor(255, 255, 255, 28)
-        else:
-            fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 11)
-            border = QColor(0, 0, 0, 20) if light else QColor(255, 255, 255, 18)
-
-        if keyboard_focused(self):
-            border = QColor("#2563eb") if light else QColor(242, 140, 90)
-
-        painter.setBrush(QBrush(fill))
-        painter.setPen(QPen(border, 1.0))
-        painter.drawRoundedRect(rect, 12.0, 12.0)
-
-        w, h = self.width(), self.height()
-        icon_color = (QColor("#ffffff") if light else QColor("#0e1117")) if checked else (
-            QColor("#1e293b") if light else QColor("#ffffff")
-        )
-        label_color = (QColor("#ffffff") if light else QColor("#0e1117")) if checked else (
-            QColor(30, 41, 59, 175) if light else QColor(255, 255, 255, 175)
-        )
-
-        icon_font = QFont(get_fluent_font_family())
-        icon_font.setPixelSize(13 if self._compact else 16)
-        painter.setFont(icon_font)
-        painter.setPen(icon_color)
-        icon_h = int(h * 0.54)
-        painter.drawText(QRect(0, 3 if self._compact else 5, w, icon_h),
-                         Qt.AlignmentFlag.AlignCenter, self._icon_glyph)
-
-        lbl_font = QFont("Segoe UI")
-        lbl_font.setPixelSize(9)
-        lbl_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(lbl_font)
-        painter.setPen(label_color)
-        elided = painter.fontMetrics().elidedText(self._tile_label, Qt.TextElideMode.ElideRight, max(12, w - 6))
-        painter.drawText(QRect(3, icon_h - 1, max(1, w - 6), h - icon_h - 2),
-                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, elided)
-
-
-
-class ControlPillTile(QPushButton):
-    """Tactile rounded-pill control tile with icon badge, subtitle, and optional menu chevron."""
-
-    menu_requested = Signal()
-
-    def __init__(
-        self,
-        icon_glyph: str,
-        title: str,
-        subtitle: str = "Off",
-        tooltip: str = "",
-        *,
-        toggle: bool = False,
-        has_menu: bool = False,
-        accent: str = "#0a84ff",
-        parent=None,
-    ):
-        super().__init__(title, parent)
-        self._icon_glyph = icon_glyph
-        self._title = title
-        self._subtitle = subtitle
-        self._has_menu = has_menu
-        self._accent = accent
-        self._compact = False
-        self._hovered = False
-        self.setCheckable(toggle)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumSize(96, 40)
-        self.setFixedHeight(48)
-        if tooltip:
-            self.setToolTip(tooltip)
-            self.setAccessibleName(tooltip)
-        set_widget_style(self, "QPushButton { background: transparent; border: none; outline: none; }")
-
-    def setText(self, text: str):
-        self._title = text
-        super().setText(text)
-        self.update()
-
-    def set_subtitle(self, subtitle: str):
-        if self._subtitle != subtitle:
-            self._subtitle = subtitle
-            self.update()
-
-    def set_icon(self, icon_glyph: str):
-        if self._icon_glyph != icon_glyph:
-            self._icon_glyph = icon_glyph
-            self.update()
-
-    def set_accent(self, accent: str):
-        self._accent = accent or "#0a84ff"
-        self.update()
-
-    def set_compact(self, compact: bool):
-        if self._compact != compact:
-            self._compact = compact
-            self.setFixedHeight(40 if compact else 48)
-            self.updateGeometry()
-            self.update()
-
-    def sizeHint(self) -> QSize:
-        return QSize(128, 40 if self._compact else 48)
-
-    def mouseReleaseEvent(self, event):
-        if (
-            self._has_menu
-            and self.isCheckable()
-            and event.button() == Qt.MouseButton.LeftButton
-            and event.position().x() >= self.width() - 26
-        ):
-            self.setDown(False)
-            self.menu_requested.emit()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def enterEvent(self, event):
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        light = is_light_theme()
-        checked = self.isChecked()
-        pressed = self.isDown()
-        w, h = float(self.width()), float(self.height())
-        rect = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
-        radius = min(15.0, h / 2.2)
-
-        accent_col = QColor(self._accent)
-        if not accent_col.isValid():
-            accent_col = QColor("#0a84ff")
-
-        if checked:
-            fill = accent_col.darker(108) if pressed else (accent_col.lighter(106) if self._hovered else accent_col)
-            border = QColor(fill)
-            ink = QColor(contrast_ink(fill))
-            sub_ink = QColor(ink)
-            sub_ink.setAlpha(190)
-            badge_bg = QColor(ink)
-            badge_bg.setAlpha(32)
-            div_col = QColor(ink)
-            div_col.setAlpha(48)
-        else:
-            if pressed:
-                fill = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 28)
-            elif self._hovered:
-                fill = QColor(0, 0, 0, 16) if light else QColor(255, 255, 255, 20)
-            else:
-                fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 11)
-            border = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 18)
-            ink = QColor("#18202a") if light else QColor("#f4f7fb")
-            sub_ink = QColor(32, 40, 51, 145) if light else QColor(255, 255, 255, 128)
-            badge_bg = QColor(0, 0, 0, 15) if light else QColor(255, 255, 255, 16)
-            div_col = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 18)
-
-        if keyboard_focused(self):
-            border = QColor("#2563eb") if light else QColor(190, 211, 242, 210)
-
-        painter.setBrush(QBrush(fill))
-        painter.setPen(QPen(border, 1.0))
-        painter.drawRoundedRect(rect, radius, radius)
-
-        # Left circular icon badge
-        badge_d = 24.0 if self._compact else 28.0
-        badge_x = 8.0 if self._compact else 10.0
-        badge_y = (h - badge_d) / 2.0
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(badge_bg))
-        painter.drawEllipse(QRectF(badge_x, badge_y, badge_d, badge_d))
-
-        icon_font = QFont(get_fluent_font_family())
-        icon_font.setPixelSize(11 if self._compact else 12)
-        painter.setFont(icon_font)
-        painter.setPen(ink)
-        painter.drawText(QRectF(badge_x, badge_y, badge_d, badge_d),
-                         Qt.AlignmentFlag.AlignCenter, self._icon_glyph)
-
-        # Right chevron zone if menu available
-        right_margin = 26.0 if self._has_menu else 8.0
-        if self._has_menu:
-            div_x = w - 24.0
-            painter.setPen(QPen(div_col, 1.0))
-            painter.drawLine(QPoint(int(div_x), 10), QPoint(int(div_x), int(h - 10)))
-            chev_font = QFont(get_fluent_font_family())
-            chev_font.setPixelSize(8)
-            painter.setFont(chev_font)
-            painter.setPen(sub_ink)
-            painter.drawText(QRectF(div_x, 0, 22.0, h), Qt.AlignmentFlag.AlignCenter, Icons.CHEVRON_DOWN)
-
-        # Title + subtitle
-        text_x = int(badge_x + badge_d + 8.0)
-        text_w = max(12, int(w - text_x - right_margin))
-        title_font = QFont("Segoe UI")
-        title_font.setPixelSize(11 if self._compact else 12)
-        title_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(title_font)
-        painter.setPen(ink)
-        elided_title = painter.fontMetrics().elidedText(self._title, Qt.TextElideMode.ElideRight, text_w)
-        if self._subtitle:
-            mid = int(h * 0.52)
-            painter.drawText(QRect(text_x, 3, text_w, mid - 2),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, elided_title)
-            sub_font = QFont("Segoe UI")
-            sub_font.setPixelSize(9 if self._compact else 10)
-            sub_font.setWeight(QFont.Weight.Medium)
-            painter.setFont(sub_font)
-            painter.setPen(sub_ink)
-            elided_sub = painter.fontMetrics().elidedText(self._subtitle, Qt.TextElideMode.ElideRight, text_w)
-            painter.drawText(QRect(text_x, mid, text_w, int(h) - mid - 3),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, elided_sub)
-        else:
-            painter.drawText(QRect(text_x, 0, text_w, int(h)),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_title)
-
-
-class StatRingGauge(QWidget):
-    """Thick anti-aliased circular gauge with centered tabular percentage readout."""
-
-    def __init__(self, size: int = 86, stroke_width: int = 8, accent: str = "#0a84ff", parent=None):
-        super().__init__(parent)
-        self._size = size
-        self._stroke = stroke_width
-        self._accent = QColor(accent)
-        self._percent = 0.0
-        self._label = "0%"
-        self.setFixedSize(size, size)
-
-    def set_value(self, percent: float | None, label: str | None = None):
-        if percent is None:
-            self._percent = 0.0
-            self._label = label if label is not None else "N/A"
-        else:
-            self._percent = max(0.0, min(100.0, float(percent)))
-            self._label = label if label is not None else f"{int(round(self._percent))}%"
-        self.update()
-
-    def set_accent(self, color):
-        c = QColor(color)
-        if c.isValid():
-            self._accent = c
-            self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        light = is_light_theme()
-        margin = self._stroke / 2.0 + 2.0
-        rect = QRectF(margin, margin, self.width() - 2 * margin, self.height() - 2 * margin)
-
-        track = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 20)
-        pen_track = QPen(track, self._stroke, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen_track)
-        painter.drawEllipse(rect)
-
-        if self._percent > 0:
-            arc_color = QColor(self._accent)
-            if light and arc_color.lightness() > 155:
-                arc_color = arc_color.darker(145)
-            pen_arc = QPen(arc_color, self._stroke, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen_arc)
-            painter.drawArc(rect, 90 * 16, -int((self._percent / 100.0) * 360 * 16))
-
-        font = QFont("Segoe UI")
-        font.setPixelSize(max(13, int(self._size * 0.21)))
-        font.setWeight(QFont.Weight.Bold)
-        painter.setFont(font)
-        painter.setPen(QColor("#18202a") if light else QColor("#ffffff"))
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._label)
-
 
 
 class ScreenTimeHomeWidget(CardFrame):
@@ -1290,7 +945,7 @@ class CapsuleSlider(QSlider):
     Renders as a 30px rounded pill with fluid fill, embedded icon, and clean numeric readout.
     Fully backwards compatible with standard QSlider APIs.
     """
-    def __init__(self, icon: str = "", accent: str = "#f28c5a", orientation=Qt.Orientation.Horizontal,
+    def __init__(self, icon: str = "", accent: str = "#0a84ff", orientation=Qt.Orientation.Horizontal,
                  parent=None, *, compact_track=False):
         super().__init__(orientation, parent)
         self._icon = icon
@@ -1381,7 +1036,7 @@ class CapsuleSlider(QSlider):
             painter.setClipPath(path)
 
             fill_color = QColor(self._accent)
-            fill_color.setAlpha(240)
+            fill_color.setAlpha(200)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(fill_color))
             painter.drawRect(fill_rect)
@@ -1606,11 +1261,9 @@ class LyricLineWidget(QFrame):
         self._lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # Explicit fonts ensure QLabel font metrics, sizeHint and heightForWidth are 100% accurate
-        self._font_active = QFont("Segoe UI")
-        self._font_active.setPixelSize(18)
+        self._font_active = QFont("Segoe UI", 18)
         self._font_active.setWeight(QFont.Weight.ExtraBold)
-        self._font_inactive = QFont("Segoe UI")
-        self._font_inactive.setPixelSize(15)
+        self._font_inactive = QFont("Segoe UI", 15)
         self._font_inactive.setWeight(QFont.Weight.DemiBold)
         self._lbl.setFont(self._font_inactive)
 
