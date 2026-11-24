@@ -259,28 +259,26 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_buttons_style(self):
-        name = current_layout()
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             btn.setChecked(is_active)
             color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
             font_weight = "600" if is_active else "500"
-            btn.setFixedHeight(34 if name == "Deck" else 28)
+            btn.setFixedHeight(28)
             label = btn.property("tabLabel")
-            btn.setText(label.upper() if name == "Console" else label)
-            btn.setIcon(self._tab_icon(label, is_light_theme()) if name == "Deck" else QIcon())
+            btn.setText(label)
+            btn.setIcon(QIcon())
             btn.setIconSize(QSize(15, 15))
-            family = {"Daily": "Georgia", "Console": "Consolas"}.get(name, "Segoe UI")
             set_widget_style(btn, f"""
                 QPushButton {{
                     background-color: transparent;
                     border: none;
                     border-radius: 11px;
                     color: {color};
-                    font-family: '{family}';
+                    font-family: 'Segoe UI';
                     font-size: 12px;
                     font-weight: {font_weight};
-                    padding: 3px {6 if name == "Deck" else 9}px;
+                    padding: 3px 9px;
                 }}
                 QPushButton:hover {{
                     color: #ffffff;
@@ -453,19 +451,9 @@ class CardFrame(QFrame):
         self.apply_layout(current_layout())
 
     def apply_layout(self, name, *, outline=True):
-        spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
+        spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Soft"])
         self.setProperty("layoutTheme", name)
-        border = "1px solid rgba(255,255,255,0.08)" if outline and name != "Minimal" else "none"
-        if name == "Flat":
-            border = "none; border-top: 1px solid rgba(255,255,255,0.13)"
-        elif name == "Paper":
-            border = "none"
-        elif name == "Daily":
-            border = "none; border-top: 1px solid rgba(236,222,194,0.25)"
-        elif name in ("Instrument", "Console"):
-            border = "1px solid rgba(255,255,255,0.16)"
-        elif name == "Deck":
-            border = "1px solid rgba(172,199,247,0.22)"
+        border = "1px solid rgba(255,255,255,0.08)" if outline else "none"
         set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255,255,255,{spec['fill']}); border: {border}; border-radius: {spec['radius']}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
@@ -731,11 +719,7 @@ class MetricLabel(QLabel):
         self.apply_design(current_layout())
 
     def apply_design(self, name):
-        if name in ("Flat", "Paper", "Instrument"):
-            family = "Consolas" if name == "Instrument" else "Segoe UI"
-            set_widget_style(self, f"QLabel {{ background: transparent; border: none; color: #a6b5b0; font-family: '{family}'; font-size: 10px; padding: 2px 5px 9px 5px; }}")
-        else:
-            set_widget_style(self, self._default_style)
+        set_widget_style(self, self._default_style)
         self.update()
 
     def set_val(self, val_str: str):
@@ -743,30 +727,6 @@ class MetricLabel(QLabel):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        name = current_layout()
-        if name not in ("Flat", "Paper", "Instrument"):
-            return
-        value = self.text().rsplit(" ", 1)[-1]
-        try:
-            percentage = max(0.0, min(1.0, float(value.rstrip("%")) / 100)) if value.endswith("%") else None
-        except ValueError:
-            percentage = None
-        painter = QPainter(self)
-        track = QColor(0, 0, 0, 28) if is_light_theme() else QColor(255, 255, 255, 28)
-        fill = QColor("#526c60" if is_light_theme() else "#a3b9ab")
-        painter.setPen(Qt.PenStyle.NoPen)
-        width = max(1, self.width() - 10)
-        for index in range(10 if name == "Instrument" else 1):
-            segments = 10 if name == "Instrument" else 1
-            rect = QRectF(5 + index * width / segments, self.height() - 5,
-                          width / segments - (2 if segments > 1 else 0), 3)
-            painter.fillRect(rect, track)
-            if percentage is not None:
-                if segments == 1:
-                    rect.setWidth(rect.width() * percentage)
-                    painter.fillRect(rect, fill)
-                elif (index + 1) / segments <= percentage:
-                    painter.fillRect(rect, fill)
 
 
 class ScreenTimeHomeWidget(CardFrame):
@@ -843,7 +803,7 @@ class ScreenTimeHomeWidget(CardFrame):
     def apply_layout(self, name, *, outline=True):
         super().apply_layout(name, outline=outline)
         if hasattr(self, "title"):
-            self.title.setText("Screen time" if name == "Console" else "Screen time today")
+            self.title.setText("Screen time today")
 
 
 class DraggableThumbnail(QLabel):
@@ -1078,29 +1038,19 @@ class CapsuleSlider(QSlider):
         left, width = 32.0, max(1.0, w - 80)
         pct = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum()) if self.isEnabled() else 0
         painter.setPen(Qt.PenStyle.NoPen)
-        if name in ("Instrument", "Console"):
-            count = max(1, int(width / 10))
-            for index in range(count):
-                painter.fillRect(QRectF(left + index * width / count, h / 2 - 5, width / count - 2, 10),
-                                 accent if (index + 1) / count <= pct else track)
-        else:
-            thickness = 2 if name in ("Paper", "Daily") else 4 if name == "Deck" else 3
-            track_y = (h - thickness) / 2
-            painter.fillRect(QRectF(left, track_y, width, thickness), track)
-            painter.fillRect(QRectF(left, track_y, width * pct, thickness), accent)
+        thickness = 3
+        track_y = (h - thickness) / 2
+        painter.fillRect(QRectF(left, track_y, width, thickness), track)
+        painter.fillRect(QRectF(left, track_y, width * pct, thickness), accent)
         thumb_x = left + width * pct
         focused = self.hasFocus() and self.isEnabled()
-        if self.isEnabled() and name == "Deck":
-            painter.setBrush(foreground)
-            radius = 6 if focused else 4
-            painter.drawEllipse(QRectF(thumb_x - radius, h / 2 - radius, 2 * radius, 2 * radius))
-        elif self.isEnabled():
+        if self.isEnabled():
             thumb_width = 4 if focused else 2
             painter.fillRect(QRectF(thumb_x - thumb_width / 2, h / 2 - 6, thumb_width, 12), foreground)
         painter.setPen(foreground)
         painter.setFont(QFont(get_fluent_font_family(), 10))
         painter.drawText(QRectF(5, 0, 24, h), Qt.AlignmentFlag.AlignVCenter, self._icon)
-        painter.setFont(QFont("Consolas" if name in ("Instrument", "Console") else "Segoe UI", 9))
+        painter.setFont(QFont("Segoe UI", 9))
         value = f"{self.value()}%" if self.isEnabled() else "N/A"
         painter.drawText(QRectF(w - 45, 0, 40, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, value)
 
@@ -1212,33 +1162,7 @@ class PlaybackSlider(ClickableSlider):
             self.seek_clicked.emit(self.value())
 
     def paintEvent(self, event):
-        if not self._time_ruler or current_layout() != "Console":
-            super().paintEvent(event)
-            return
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        style = self.style()
-        groove = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
-        handle = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
-        start = groove.x() + handle.width() / 2
-        span = max(1, groove.width() - handle.width())
-        pct = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
-        colors = surface_colors()
-        painter = QPainter(self)
-        painter.setPen(Qt.PenStyle.NoPen)
-        muted = QColor(colors["muted"])
-        muted.setAlphaF(0.45)
-        count = max(2, int(span // 7))
-        for tick in range(count + 1):
-            fraction = tick / count
-            height = 11 if tick % 5 == 0 else 5
-            x = start + span * (1 - fraction if option.upsideDown else fraction)
-            painter.fillRect(QRectF(x - 1, (self.height() - height) / 2, 2, height),
-                             QColor(colors["accent"]) if fraction <= pct and self.isEnabled() else muted)
-        if self.hasFocus():
-            x = start + span * (1 - pct if option.upsideDown else pct)
-            painter.fillRect(QRectF(x - 2, (self.height() - 14) / 2, 4, 14), QColor(colors["text"]))
-        painter.end()
+        super().paintEvent(event)
 
 
 class LyricLineWidget(QFrame):
@@ -1281,8 +1205,7 @@ class LyricLineWidget(QFrame):
 
     def apply_design(self, name):
         self._design = name
-        seconds = max(0, int(self.time_sec))
-        self._lbl.setText(f"{seconds // 60:02d}:{seconds % 60:02d}   {self._raw_text}" if name == "Console" else self._raw_text)
+        self._lbl.setText(self._raw_text)
         self.update_style()
         self.updateGeometry()
 
@@ -1328,16 +1251,6 @@ class LyricLineWidget(QFrame):
 
     def update_style(self):
         focus = "QFrame:focus { border: 1px solid rgba(255,255,255,0.65); }"
-        if self._design in ("Deck", "Daily", "Console"):
-            name = self._design
-            family, size = {"Deck": ("Segoe UI", 15), "Daily": ("Georgia", 18), "Console": ("Consolas", 13)}[name]
-            color = "#edf1f0" if self._is_active else "#a7adab"
-            weight = 800 if self._is_active else 700
-            set_widget_style(self._lbl, f"QLabel {{ font-family: '{family}'; font-size: {size}px; font-weight: {weight}; color: {color}; background: transparent; }}")
-            border = "border-left: 2px solid #b87557;" if name == "Daily" and self._is_active else ""
-            fill = "rgba(171,206,153,0.12)" if self._is_active and name != "Daily" else "transparent"
-            set_widget_style(self, f"QFrame {{ background: {fill}; border: 1px solid transparent; {border} }} QFrame:hover {{ background: rgba(255,255,255,0.06); }} {focus}")
-            return
         set_widget_style(self, """
             QFrame {
                 background: transparent;
@@ -1371,7 +1284,7 @@ class LyricLineWidget(QFrame):
 
     def enterEvent(self, event):
         super().enterEvent(event)
-        if not self._is_active and self._design not in ("Deck", "Daily", "Console"):
+        if not self._is_active:
             set_widget_style(self._lbl, """
                 QLabel {
                     color: rgba(255, 255, 255, 0.85);
@@ -1398,12 +1311,8 @@ class SpotifyLyricsWidget(QFrame):
     seek_requested = Signal(float)
 
     def apply_design(self, name):
-        background = "rgba(162,191,240,0.09)" if name == "Deck" else "transparent"
-        border = ("border-left: 1px solid rgba(200,183,156,0.32);" if name == "Daily"
-                  else "border-top: 1px solid rgba(170,192,158,0.24);" if name == "Console" else "")
-        set_widget_style(self, f"QFrame#lyricsWidgetFrame {{ background: {background}; border: none; {border} border-radius: 14px; }}")
-        margins = (14, 8, 12, 8) if name in ("Deck", "Daily", "Console") else (6, 2, 6, 6)
-        self.layout().setContentsMargins(*margins)
+        set_widget_style(self, "QFrame#lyricsWidgetFrame { background: transparent; border: none; border-radius: 14px; }")
+        self.layout().setContentsMargins(6, 2, 6, 6)
         for line in self._line_buttons:
             line.apply_design(name)
 

@@ -752,7 +752,7 @@ class DynamicNotchWindow(QWidget):
         self._switch_tab(0)
         self.tab_home.slider_vol.set_accent(self._theme["accent"])
         self.tab_home.slider_bright.set_accent(self._theme["accent"])
-        self._apply_layout_theme(self._appearance.get("layout", "Classic"))
+        self._apply_layout_theme(self._appearance.get("layout", "Soft"))
         refresh_theme()
         self._refresh_peek_surface()
 
@@ -966,7 +966,7 @@ class DynamicNotchWindow(QWidget):
 
     def _update_clock(self):
         now = datetime.now()
-        show_seconds = self.tab_home.lbl_big_time.isVisible() and self._appearance.get("layout") != "Classic"
+        show_seconds = self.tab_home.lbl_big_time.isVisible()
         time_short = now.strftime("%I:%M %p").lstrip("0")
         self.lbl_clock.setText(time_short)
         self.tab_home.lbl_big_time.setText(now.strftime("%I:%M:%S %p").lstrip("0") if show_seconds else time_short)
@@ -2169,15 +2169,14 @@ class DynamicNotchWindow(QWidget):
 
     def _apply_layout_theme(self, name):
         """Apply arrangements and surface density without recreating page content."""
-        spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
+        spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Soft"])
         self.tab_home.apply_layout(name, home_order(name, self._appearance.get("home_orders")))
         self.tab_music.apply_layout(name)
         self.tab_docs.apply_layout(name)
         expanded = self.view_expanded.layout()
-        index = 2 if name == "Daily" else 0
-        if expanded.itemAt(index) is not self._expanded_header:
+        if expanded.itemAt(0) is not self._expanded_header:
             expanded.removeItem(self._expanded_header)
-            expanded.insertLayout(index, self._expanded_header)
+            expanded.insertLayout(0, self._expanded_header)
         if not self.tab_music._artwork_pixmap.isNull():
             self.tab_home.lbl_music_art.setPixmap(self.tab_music._rounded_art(
                 self.tab_music._artwork_pixmap, self.tab_home.lbl_music_art.width(), min(6, self.tab_music._art_radius())))
@@ -2200,7 +2199,7 @@ class DynamicNotchWindow(QWidget):
         app_cfg = normalize_appearance(app_cfg)
         previous = self._appearance
         palette_changed = self._theme_name != app_cfg.get("theme", DEFAULT_THEME)
-        layout_changed = previous.get("layout", "Classic") != app_cfg.get("layout", "Classic")
+        layout_changed = previous.get("layout", "Soft") != app_cfg.get("layout", "Soft")
         order_changed = home_order(app_cfg["layout"], previous.get("home_orders")) != home_order(app_cfg["layout"], app_cfg.get("home_orders"))
         light_changed = configure_theme(app_cfg)
         media_values = self._media_appearance_values()
@@ -2231,7 +2230,7 @@ class DynamicNotchWindow(QWidget):
             self.tab_music.configure_appearance(self.config.get("media", {}), self._theme)
             self._applied_media_appearance = media_values
         if layout_changed:
-            self._apply_layout_theme(app_cfg.get("layout", "Classic"))
+            self._apply_layout_theme(app_cfg.get("layout", "Soft"))
             self._update_clock()
         elif order_changed:
             self.tab_home.apply_layout(app_cfg["layout"], home_order(app_cfg["layout"], app_cfg.get("home_orders")))
@@ -3025,10 +3024,6 @@ class DynamicNotchWindow(QWidget):
             bg_col = grad_col = self._peek_bg
             if self._appearance["peek_color_source"] == "artwork" and not self.tab_music._artwork_pixmap.isNull():
                 grad_col = bg_col.lighter(108) if is_light_theme() else bg_col.darker(155)
-        if self.state != NotchState.PEEK and self._appearance.get("layout") in ("Flat", "Paper", "Instrument"):
-            if self._appearance.get("layout") == "Paper" and not is_light_theme():
-                bg_col = QColor((bg_col.red() * 3 + 44) // 4, (bg_col.green() * 3 + 40) // 4, (bg_col.blue() * 3 + 32) // 4)
-            grad_col = bg_col
         dx = bounds.width() if self.state == NotchState.PEEK else 0
         gradient = QLinearGradient(bounds.x(), bounds.y(), bounds.x() + dx, bounds.y() + bounds.height())
         gradient.setColorAt(0.0, grad_col)
@@ -3049,7 +3044,7 @@ class DynamicNotchWindow(QWidget):
         if self._shutting_down:
             super().closeEvent(event)
             return
-        if not self.tab_home.flush_notes() or not self.tab_notes.flush_notes():
+        if not self.tab_home.flush_notes() or (getattr(self, "tab_notes", None) and not self.tab_notes.flush_notes()):
             event.ignore()
             return
         for note in list(self._floating_notes):

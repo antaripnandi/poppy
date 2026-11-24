@@ -622,11 +622,10 @@ class DocsTabView(QWidget):
         self.recent_layout.addWidget(self.lbl_empty_recent)
 
     def apply_layout(self, name):
-        list_view = name in ("Daily", "Console")
-        self.action_cards.setDirection(QBoxLayout.Direction.TopToBottom if list_view else QBoxLayout.Direction.LeftToRight)
+        self.action_cards.setDirection(QBoxLayout.Direction.LeftToRight)
         for row in self._action_rows:
-            row.setDirection(QBoxLayout.Direction.LeftToRight if list_view else QBoxLayout.Direction.TopToBottom)
-            row.setSpacing(12 if list_view else 8)
+            row.setDirection(QBoxLayout.Direction.TopToBottom)
+            row.setSpacing(8)
 
     def _convert_to_pdf(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select text file to convert to PDF", "", "Text files (*.txt *.md *.py *.json *.html)")

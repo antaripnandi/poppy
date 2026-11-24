@@ -15,7 +15,7 @@ from poppy.ui.styles import normalize_appearance
 
 @pytest.fixture
 def editor(audit_app, monkeypatch):
-    window = DynamicNotchWindow({"appearance": {"layout_version": 3, "layout": "Classic"}})
+    window = DynamicNotchWindow({"appearance": {"layout_version": 3, "layout": "Soft"}})
     monkeypatch.setattr(window, "_get_current_screen_geometry", lambda: QRect(0, 0, 1440, 1000))
     window._is_pinned = True
     window.show()
@@ -51,7 +51,7 @@ def test_drag_changes_home_and_outside_drop_and_escape_leave_it_alone(editor, au
     assert preview._ghost.isVisible()
     QTest.mouseRelease(source, Qt.MouseButton.LeftButton, pos=destination)
     audit_app.processEvents()
-    expected = ["controls", "notes", "shelf", "clock"]
+    expected = ["notes", "controls", "shelf", "clock"]
     assert preview.order == actual_order(window.tab_home) == expected
     assert preview._ghost.isHidden()
     assert source.hasFocus()
@@ -78,12 +78,12 @@ def test_keyboard_orders_are_independent_per_design_and_cancel_restores(editor, 
         QTest.keyClick(first, Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier)
         assert actual_order(home) == preview.order
         assert actual_order(home) != list(LAYOUT_THEMES[name]["home_order"])
-    settings.combo_layout.setCurrentText("Classic")
-    assert preview.order == ["controls", "notes", "clock", "shelf"]
+    settings.combo_layout.setCurrentText("Soft")
+    assert preview.order == ["notes", "controls", "clock", "shelf"]
     assert home.txt_notes.toPlainText() == "Keep this text"
     assert music._pos_sec == 42
     settings.close()
-    assert actual_order(home) == list(HOME_CARDS)
+    assert actual_order(home) == list(LAYOUT_THEMES["Soft"]["home_order"])
     assert home is window.tab_home and music is window.tab_music
 
 
@@ -93,30 +93,28 @@ def test_orders_save_reload_and_reset_only_the_selected_design(editor, audit_app
     window, settings = editor
     preview = settings.layout_preview
     preview.move_card("shelf", 0)
-    settings.combo_layout.setCurrentText("Paper")
+    settings.combo_layout.setCurrentText("Soft")
     preview.move_card("notes", 0)
-    paper = list(preview.order)
+    soft = list(preview.order)
     assert settings._save_settings()
     settings.close()
     saved = load_config()
-    assert saved["appearance"]["home_orders"]["Paper"] == paper
+    assert saved["appearance"]["home_orders"]["Soft"] == soft
     reloaded = SettingsWindow(saved)
-    assert reloaded.layout_preview.order == paper
+    assert reloaded.layout_preview.order == soft
     reloaded.btn_reset_order.click()
-    assert reloaded.layout_preview.order == list(HOME_CARDS)
-    reloaded.combo_layout.setCurrentText("Classic")
-    assert reloaded.layout_preview.order[0] == "shelf"
+    assert reloaded.layout_preview.order == list(LAYOUT_THEMES["Soft"]["home_order"])
     reloaded.close()
     restored_window = DynamicNotchWindow(saved)
-    assert actual_order(restored_window.tab_home) == paper
+    assert actual_order(restored_window.tab_home) == soft
     restored_window.close()
 
 
 @pytest.mark.parametrize("bad", [None, "clock", [], ["notes"] * 4,
                                 ["clock", "controls", "notes", "unknown"], [[], {}, None, 1]])
 def test_invalid_order_cannot_hide_or_duplicate_a_section(bad):
-    config = normalize_appearance({"layout": "Paper", "home_orders": {"Paper": bad}})
-    assert home_order("Paper", config["home_orders"]) == HOME_CARDS
+    config = normalize_appearance({"layout": "Soft", "home_orders": {"Soft": bad}})
+    assert home_order("Soft", config["home_orders"]) == tuple(LAYOUT_THEMES["Soft"]["home_order"])
 
 
 @pytest.mark.parametrize("mode", ["Dark", "Light"])
@@ -124,26 +122,14 @@ def test_new_designs_change_controls_and_restore_the_original(editor, audit_app,
     window, settings = editor
     assert [settings.combo_layout.itemText(i) for i in range(settings.combo_layout.count())] == list(LAYOUT_THEMES)
     settings.combo_mode.setCurrentText(mode)
-    snapshots = {}
-    for name in ("Classic", "Flat", "Paper", "Instrument", "Classic"):
-        settings.combo_layout.setCurrentText(name)
-        audit_app.processEvents()
-        snapshots[name] = window.tab_home.slider_vol.grab().toImage()
-        assert (window.tab_music.identity_layout.direction().name == "LeftToRight") == (name in ("Flat", "Paper"))
-        if name == "Paper":
-            assert window.tab_home.lbl_big_time.font().family() == "Cambria"
-        if name == "Instrument":
-            assert window.tab_home.lbl_big_time.font().family() == "Consolas"
-            assert all(label.isVisible() for label in window.tab_home._design_headers)
-        if name == "Classic":
-            clock_header, controls_header = window.tab_home._design_headers
-            assert clock_header.isHidden()
-            assert not controls_header.isHidden() and controls_header.text() == "System controls"
-            assert window.tab_home.lbl_big_time.font().family() != "Cambria"
-    assert snapshots["Classic"] != snapshots["Flat"] != snapshots["Paper"] != snapshots["Instrument"]
+    settings.combo_layout.setCurrentText("Soft")
+    audit_app.processEvents()
+    clock_header, controls_header = window.tab_home._design_headers
+    assert clock_header.isHidden()
+    assert not controls_header.isHidden() and controls_header.text() == "System controls"
 
 
-@pytest.mark.parametrize("name", ["Flat", "Paper", "Instrument"])
+@pytest.mark.parametrize("name", ["Soft"])
 def test_redesigned_slider_hit_area_matches_the_visible_track(editor, audit_app, name):
     window, settings = editor
     settings.combo_layout.setCurrentText(name)
@@ -157,16 +143,16 @@ def test_design_compilation_preserves_focus_and_restores_authored_controls(audit
     from PySide6.QtWidgets import QPushButton
     button = QPushButton("Action")
     original = "QPushButton { background: #202329; border: none; border-radius: 10px; } QPushButton:hover { background: #414957; } QPushButton:focus { border: 1px solid #a7bbc7; }"
-    configure_theme({"mode": "Dark", "layout": "Classic"})
+    configure_theme({"mode": "Dark", "layout": "Soft"})
     set_widget_style(button, original)
     for mode in ("Dark", "Light"):
-        for name in ("Flat", "Paper", "Instrument"):
+        for name in ("Soft",):
             configure_theme({"mode": mode, "layout": name})
             refresh_theme()
             assert "QPushButton:hover" in button.styleSheet()
             assert 'QPushButton[poppyKeyboardFocus="true"]:focus' in button.styleSheet()
             assert button.property("poppyStyleSource") == original
-    configure_theme({"mode": "Dark", "layout": "Classic"})
+    configure_theme({"mode": "Dark", "layout": "Soft"})
     refresh_theme()
     assert button.styleSheet().replace('[poppyKeyboardFocus="true"]', "") == original
 
@@ -176,7 +162,7 @@ def test_home_button_keeps_keyboard_focus_cue_without_a_click_outline(audit_app,
     from PySide6.QtWidgets import QPushButton, QWidget
     from poppy.ui.views import HomeTabView
 
-    configure_theme({"mode": mode, "layout": "Classic"})
+    configure_theme({"mode": mode, "layout": "Soft"})
     panel = QWidget()
     panel.resize(180, 90)
     before = QPushButton("Before", panel)
@@ -211,13 +197,10 @@ def test_home_button_keeps_keyboard_focus_cue_without_a_click_outline(audit_app,
 
 def test_deck_daily_and_console_style_every_tab(editor, audit_app):
     window, settings = editor
-    for name in ("Deck", "Daily", "Console"):
+    for name in ("Soft",):
         settings.combo_layout.setCurrentText(name)
         audit_app.processEvents()
-        expanded = window.view_expanded.layout()
-        assert expanded.indexOf(window.tab_stack) == (0 if name == "Daily" else 1)
         assert window.tab_home._layout_name == window.tab_music._layout_name == name
-        assert window.tab_strip.buttons[0].icon().isNull() == (name != "Deck")
         for index in range(2, window.tab_stack.count()):
             page = window.tab_stack.widget(index)
             assert page.layout().spacing() == LAYOUT_THEMES[name]["spacing"]

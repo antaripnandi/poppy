@@ -492,7 +492,7 @@ class SettingsWindow(QWidget):
         self.combo_mode.setItemText(2, "Follow Windows")
         self.combo_mode.currentTextChanged.connect(self._on_live_appearance_change)
         l_app.addWidget(_create_setting_card([
-            SettingRow("Layout theme", f"{len(LAYOUT_THEMES)} layouts for navigation, typography and all tabs", self.combo_layout),
+            SettingRow("Layout theme", "Active layout for navigation, typography and cards", self.combo_layout),
             SettingRow("Appearance mode", "Dark, Light, or follow the Windows app setting", self.combo_mode),
         ]))
         self.combo_pill_font = QComboBox()
@@ -1537,7 +1537,7 @@ class SettingsWindow(QWidget):
             if key != "screentime":
                 checkbox.setChecked(key not in hidden)
         self._home_orders = {name: list(order) for name, order in app_cfg.get("home_orders", {}).items()}
-        self.combo_layout.setCurrentText(app_cfg.get("layout", "Classic"))
+        self.combo_layout.setCurrentText(app_cfg.get("layout", "Soft"))
         self.combo_mode.setCurrentIndex({"Dark": 0, "Light": 1, "System": 2}.get(app_cfg.get("mode"), 0))
         active_theme = app_cfg.get("theme", DEFAULT_THEME)
         self.combo_theme.blockSignals(True)

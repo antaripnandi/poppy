@@ -89,9 +89,9 @@ def normalize_appearance(appearance: dict) -> dict:
         result.update(open_width=DEFAULT_PANEL_WIDTH, open_height=DEFAULT_PANEL_HEIGHT)
     result.setdefault("open_width", DEFAULT_PANEL_WIDTH)
     result.setdefault("open_height", DEFAULT_PANEL_HEIGHT)
-    result.setdefault("layout", "Classic")
+    result.setdefault("layout", "Soft")
     if not isinstance(result["layout"], str) or result["layout"] not in LAYOUT_THEMES:
-        result["layout"] = "Classic"
+        result["layout"] = "Soft"
     orders = result.get("home_orders", {})
     result["home_orders"] = {name: list(home_order(name, orders)) for name in LAYOUT_THEMES
                              if isinstance(orders, dict) and name in orders}
@@ -111,16 +111,11 @@ def normalize_appearance(appearance: dict) -> dict:
 
 
 
-def get_theme(theme_name: str, layout="Classic") -> dict:
-    palette = THEME_PRESETS.get(theme_name if isinstance(theme_name, str) else DEFAULT_THEME, THEME_PRESETS[DEFAULT_THEME])
-    if isinstance(layout, str) and layout in DESIGN_PALETTES:
-        root, card, _, _, accent = DESIGN_PALETTES[layout][0]
-        return {**palette, "bg": root, "gradient": card if layout == "Deck" else root,
-                "accent": accent if palette["name"] == DEFAULT_THEME else palette["accent"]}
-    return palette
+def get_theme(theme_name: str, layout="Soft") -> dict:
+    return THEME_PRESETS.get(theme_name if isinstance(theme_name, str) else DEFAULT_THEME, THEME_PRESETS[DEFAULT_THEME])
 
 
-def get_stylesheet(theme_name: str = DEFAULT_THEME, layout="Classic") -> str:
+def get_stylesheet(theme_name: str = DEFAULT_THEME, layout="Soft") -> str:
     theme = get_theme(theme_name, layout)
     accent = theme["accent"]
 
