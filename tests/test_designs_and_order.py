@@ -203,8 +203,6 @@ def test_classic_styles_every_tab(editor, audit_app):
     assert window.tab_home._layout_name == window.tab_music._layout_name == name
     for index in range(2, window.tab_stack.count()):
         page = window.tab_stack.widget(index)
-        if page is window.tab_home:
-            continue
         assert page.layout().spacing() == LAYOUT_THEMES[name]["spacing"]
         assert all(card.property("layoutTheme") == name for card in page.findChildren(CardFrame))
 

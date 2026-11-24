@@ -5,9 +5,6 @@ Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 """
 
 import os
-import math
-import json
-from datetime import datetime, date, timedelta
 from functools import lru_cache
 from PySide6.QtCore import (
     Qt, QRect, QRectF, QSize, QTimer, QPoint, QUrl, QMimeData, Signal, QPropertyAnimation, QVariantAnimation, QEasingCurve, QEvent, Property
@@ -17,8 +14,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider,
-    QLineEdit
+    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
 )
 
 from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors, keyboard_focused, contrast_ink
@@ -213,31 +209,26 @@ class AnimatedTabStrip(QWidget):
     """Compact tab navigation with text-only selection."""
     tab_changed = Signal(int)
 
-    def __init__(self, tab_items: list[tuple[str, str]], accent="#f28c5a", parent=None):
+    def __init__(self, tab_items: list[tuple[str, str]], accent="#0a84ff", parent=None):
         super().__init__(parent)
         self._current_index = -1
-        self._accent = accent
         self.buttons: list[QPushButton] = []
 
         set_widget_style(self, """
             AnimatedTabStrip {
                 background-color: transparent;
                 border: none;
-                border-radius: 12px;
-                padding: 2px 2px;
+                border-radius: 10px;
+                padding: 2px 3px;
             }
         """)
 
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(2, 2, 2, 2)
-        self._layout.setSpacing(4)
+        self._layout.setContentsMargins(3, 2, 3, 2)
+        self._layout.setSpacing(2)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.set_tabs(tab_items)
-
-    def set_accent(self, accent: str):
-        self._accent = accent
-        self._update_buttons_style()
 
     def set_tabs(self, tab_items: list[tuple[str, str]]):
         """Dynamically replace tabs in the strip without recreating the widget."""
@@ -268,41 +259,33 @@ class AnimatedTabStrip(QWidget):
         self._update_buttons_style()
 
     def _update_buttons_style(self):
-        accent = getattr(self, "_accent", "#f28c5a")
+        name = current_layout()
         for i, btn in enumerate(self.buttons):
             is_active = (i == self._current_index)
             btn.setChecked(is_active)
-            btn.setFixedHeight(30)
+            color = "#ffffff" if is_active else "rgba(255, 255, 255, 0.65)"
+            font_weight = "600" if is_active else "500"
+            btn.setFixedHeight(34 if name == "Deck" else 28)
             label = btn.property("tabLabel")
-            btn.setText(label)
-            btn.setIcon(QIcon())
+            btn.setText(label.upper() if name == "Console" else label)
+            btn.setIcon(self._tab_icon(label, is_light_theme()) if name == "Deck" else QIcon())
             btn.setIconSize(QSize(15, 15))
-            if is_active:
-                bg = accent
-                color = "#0e1117"
-                font_weight = "700"
-                hover_bg = accent
-            else:
-                bg = "transparent"
-                color = "rgba(255, 255, 255, 0.55)" if not is_light_theme() else "rgba(0, 0, 0, 0.65)"
-                font_weight = "500"
-                hover_bg = "rgba(255, 255, 255, 0.08)" if not is_light_theme() else "rgba(0, 0, 0, 0.06)"
+            family = {"Daily": "Georgia", "Console": "Consolas"}.get(name, "Segoe UI")
             set_widget_style(btn, f"""
                 QPushButton {{
-                    background-color: {bg};
+                    background-color: transparent;
                     border: none;
-                    border-radius: 12px;
+                    border-radius: 11px;
                     color: {color};
-                    font-family: 'Segoe UI', -apple-system, sans-serif;
+                    font-family: '{family}';
                     font-size: 12px;
                     font-weight: {font_weight};
-                    padding: 3px 12px;
+                    padding: 3px {6 if name == "Deck" else 9}px;
                 }}
                 QPushButton:hover {{
-                    background-color: {hover_bg};
-                    color: {"#0e1117" if is_active else ("#ffffff" if not is_light_theme() else "#000000")};
+                    color: #ffffff;
                 }}
-                QPushButton:focus {{ border: 1px solid rgba(242, 140, 90, 0.65); }}
+                QPushButton:focus {{ border: 1px solid rgba(190,211,242,0.65); }}
             """)
 
     @staticmethod
@@ -469,13 +452,21 @@ class CardFrame(QFrame):
         self.setObjectName("cardFrame")
         self.apply_layout(current_layout())
 
-    def apply_layout(self, name, *, outline=False):
+    def apply_layout(self, name, *, outline=True):
         spec = LAYOUT_THEMES.get(name, LAYOUT_THEMES["Classic"])
         self.setProperty("layoutTheme", name)
-        border = "1px solid rgba(255, 255, 255, 0.08)" if outline else "none"
-        fill_alpha = spec.get('fill', 0.05) if not is_light_theme() else 0.04
-        radius = spec.get('radius', 18)
-        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255, 255, 255, {fill_alpha}); border: {border}; border-radius: {radius}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
+        border = "1px solid rgba(255,255,255,0.08)" if outline and name != "Minimal" else "none"
+        if name == "Flat":
+            border = "none; border-top: 1px solid rgba(255,255,255,0.13)"
+        elif name == "Paper":
+            border = "none"
+        elif name == "Daily":
+            border = "none; border-top: 1px solid rgba(236,222,194,0.25)"
+        elif name in ("Instrument", "Console"):
+            border = "1px solid rgba(255,255,255,0.16)"
+        elif name == "Deck":
+            border = "1px solid rgba(172,199,247,0.22)"
+        set_widget_style(self, f"CardFrame#cardFrame {{ background: rgba(255,255,255,{spec['fill']}); border: {border}; border-radius: {spec['radius']}px; }} CardFrame QLabel {{ background: transparent; border: none; }}")
 
 
 class CircularProgressRing(QWidget):
@@ -722,28 +713,29 @@ class AudioVisualizerBars(QWidget):
 
 
 class MetricLabel(QLabel):
-    """Clean hardware telemetry label with tactile chip styling matching Hitodama."""
+    """Clean hardware telemetry label."""
     def __init__(self, tag: str, val: str = "--%", parent=None):
         super().__init__(parent)
         self.tag = tag
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setText(f"{tag} {val}")
         self._default_style = """
             QLabel {
-                background: rgba(255, 255, 255, 0.045);
-                border: 1px solid rgba(255, 255, 255, 0.075);
-                border-radius: 8px;
-                color: rgba(255, 255, 255, 0.85);
-                font-family: 'Segoe UI', -apple-system, sans-serif;
+                background: transparent;
+                border: none;
+                color: #a7adab;
+                font-family: 'Segoe UI';
                 font-size: 11px;
-                font-weight: 600;
-                padding: 4px 6px;
+                padding: 3px 2px;
             }
         """
         self.apply_design(current_layout())
 
     def apply_design(self, name):
-        set_widget_style(self, self._default_style)
+        if name in ("Flat", "Paper", "Instrument"):
+            family = "Consolas" if name == "Instrument" else "Segoe UI"
+            set_widget_style(self, f"QLabel {{ background: transparent; border: none; color: #a6b5b0; font-family: '{family}'; font-size: 10px; padding: 2px 5px 9px 5px; }}")
+        else:
+            set_widget_style(self, self._default_style)
         self.update()
 
     def set_val(self, val_str: str):
@@ -831,39 +823,39 @@ class SquircleTileButton(QPushButton):
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
 
         if checked:
-            fill = QColor(234, 110, 50) if light else QColor(242, 140, 90)
-            border = QColor(234, 110, 50) if light else QColor(242, 140, 90)
+            fill = QColor(37, 99, 235, 36) if light else QColor(100, 160, 240, 51)
+            border = QColor(37, 99, 235, 115) if light else QColor(100, 160, 240, 128)
         elif pressed:
-            fill = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 26)
+            fill = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 28)
             border = QColor(0, 0, 0, 32) if light else QColor(255, 255, 255, 36)
         elif self._hovered:
             fill = QColor(0, 0, 0, 16) if light else QColor(255, 255, 255, 20)
             border = QColor(0, 0, 0, 26) if light else QColor(255, 255, 255, 28)
         else:
-            fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 11)
-            border = QColor(0, 0, 0, 20) if light else QColor(255, 255, 255, 18)
+            fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 9)
+            border = QColor(0, 0, 0, 20) if light else QColor(255, 255, 255, 16)
 
         if keyboard_focused(self):
-            border = QColor("#2563eb") if light else QColor(242, 140, 90)
+            border = QColor("#2563eb") if light else QColor(190, 211, 242, 180)
 
         painter.setBrush(QBrush(fill))
         painter.setPen(QPen(border, 1.0))
-        painter.drawRoundedRect(rect, 12.0, 12.0)
+        painter.drawRoundedRect(rect, 10.0, 10.0)
 
         w, h = self.width(), self.height()
-        icon_color = (QColor("#ffffff") if light else QColor("#0e1117")) if checked else (
-            QColor("#1e293b") if light else QColor("#ffffff")
+        icon_color = (QColor("#1d4ed8") if light else QColor("#dbeafe")) if checked else (
+            QColor("#1e293b") if light else QColor("#eef2f6")
         )
-        label_color = (QColor("#ffffff") if light else QColor("#0e1117")) if checked else (
-            QColor(30, 41, 59, 175) if light else QColor(255, 255, 255, 175)
+        label_color = (QColor("#1d4ed8") if light else QColor("#dbeafe")) if checked else (
+            QColor(30, 41, 59, 175) if light else QColor(255, 255, 255, 170)
         )
 
         icon_font = QFont(get_fluent_font_family())
-        icon_font.setPixelSize(13 if self._compact else 16)
+        icon_font.setPixelSize(13 if self._compact else 15)
         painter.setFont(icon_font)
         painter.setPen(icon_color)
-        icon_h = int(h * 0.54)
-        painter.drawText(QRect(0, 3 if self._compact else 5, w, icon_h),
+        icon_h = int(h * 0.56)
+        painter.drawText(QRect(0, 2 if self._compact else 4, w, icon_h),
                          Qt.AlignmentFlag.AlignCenter, self._icon_glyph)
 
         lbl_font = QFont("Segoe UI")
@@ -872,7 +864,7 @@ class SquircleTileButton(QPushButton):
         painter.setFont(lbl_font)
         painter.setPen(label_color)
         elided = painter.fontMetrics().elidedText(self._tile_label, Qt.TextElideMode.ElideRight, max(12, w - 6))
-        painter.drawText(QRect(3, icon_h - 1, max(1, w - 6), h - icon_h - 2),
+        painter.drawText(QRect(3, icon_h - 1, max(1, w - 6), h - icon_h),
                          Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, elided)
 
 
@@ -923,8 +915,6 @@ class ControlPillTile(QPushButton):
             self._subtitle = subtitle
             self.update()
 
-    setSubtitle = set_subtitle
-
     def set_icon(self, icon_glyph: str):
         if self._icon_glyph != icon_glyph:
             self._icon_glyph = icon_glyph
@@ -947,6 +937,7 @@ class ControlPillTile(QPushButton):
     def mouseReleaseEvent(self, event):
         if (
             self._has_menu
+            and self.isCheckable()
             and event.button() == Qt.MouseButton.LeftButton
             and event.position().x() >= self.width() - 26
         ):
@@ -997,19 +988,17 @@ class ControlPillTile(QPushButton):
                 fill = QColor(0, 0, 0, 16) if light else QColor(255, 255, 255, 20)
             else:
                 fill = QColor(0, 0, 0, 10) if light else QColor(255, 255, 255, 11)
-            border = Qt.PenStyle.NoPen
+            border = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 18)
             ink = QColor("#18202a") if light else QColor("#f4f7fb")
             sub_ink = QColor(32, 40, 51, 145) if light else QColor(255, 255, 255, 128)
             badge_bg = QColor(0, 0, 0, 15) if light else QColor(255, 255, 255, 16)
-            div_col = QColor(0, 0, 0, 0) if light else QColor(255, 255, 255, 0)
+            div_col = QColor(0, 0, 0, 22) if light else QColor(255, 255, 255, 18)
 
         if keyboard_focused(self):
             border = QColor("#2563eb") if light else QColor(190, 211, 242, 210)
-            painter.setPen(QPen(border, 1.0))
-        else:
-            painter.setPen(Qt.PenStyle.NoPen)
 
         painter.setBrush(QBrush(fill))
+        painter.setPen(QPen(border, 1.0))
         painter.drawRoundedRect(rect, radius, radius)
 
         # Left circular icon badge
@@ -1297,13 +1286,12 @@ class CapsuleSlider(QSlider):
     Renders as a 30px rounded pill with fluid fill, embedded icon, and clean numeric readout.
     Fully backwards compatible with standard QSlider APIs.
     """
-    def __init__(self, icon: str = "", accent: str = "#f28c5a", orientation=Qt.Orientation.Horizontal,
-                 parent=None, *, compact_track=False, show_text=True):
+    def __init__(self, icon: str = "", accent: str = "#0a84ff", orientation=Qt.Orientation.Horizontal,
+                 parent=None, *, compact_track=False):
         super().__init__(orientation, parent)
         self._icon = icon
         self._accent = accent
         self._compact_track = compact_track
-        self._show_text = show_text
         self._is_down = False
         self.setFixedHeight(30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1389,7 +1377,7 @@ class CapsuleSlider(QSlider):
             painter.setClipPath(path)
 
             fill_color = QColor(self._accent)
-            fill_color.setAlpha(240)
+            fill_color.setAlpha(200)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(fill_color))
             painter.drawRect(fill_rect)
@@ -1406,15 +1394,14 @@ class CapsuleSlider(QSlider):
             painter.drawText(icon_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._icon)
 
         # 4. Percentage text on the right
-        if self._show_text:
-            val_str = f"{self.value()}%" if self.isEnabled() else "N/A"
-            font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
-            painter.setFont(font_val)
-            painter.setPen(QColor(241, 245, 249, 210))
-            if (pct >= 0.9 and QColor(self._accent).lightness() > 145) or (is_light_theme() and pct < 0.9):
-                painter.setPen(QColor("#202833"))
-            txt_rect = QRectF(w - 44, 0, 36, h)
-            painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
+        val_str = f"{self.value()}%" if self.isEnabled() else "N/A"
+        font_val = QFont("Segoe UI", 9, QFont.Weight.Bold)
+        painter.setFont(font_val)
+        painter.setPen(QColor(241, 245, 249, 210))
+        if (pct >= 0.9 and QColor(self._accent).lightness() > 145) or (is_light_theme() and pct < 0.9):
+            painter.setPen(QColor("#202833"))
+        txt_rect = QRectF(w - 44, 0, 36, h)
+        painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val_str)
         if self.hasFocus():
             x = max(5.0, min(w - 5.0, w * pct))
             painter.fillRect(QRectF(x - 3, h - 5, 6, 2),
@@ -2076,729 +2063,6 @@ class SpotifyLyricsWidget(QFrame):
             if item.widget():
                 item.widget().hide()
                 item.widget().deleteLater()
-
-
-class WaveformSeekBar(QWidget):
-    """
-    Sine-wave / sound-wave progress visualizer seekbar.
-    Draws a continuous fluid waveform across its width, highlighting elapsed time in accent ink.
-    """
-    seek_requested = Signal(float)
-
-    def __init__(self, parent=None, accent="#93c5fd"):
-        super().__init__(parent)
-        self._accent = QColor(accent)
-        self._position = 0.0
-        self._duration = 100.0
-        self._is_dragging = False
-        self.setFixedHeight(18)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def set_duration(self, duration: float):
-        self._duration = max(1.0, float(duration))
-        self.update()
-
-    def set_position(self, pos: float):
-        if not self._is_dragging:
-            self._position = max(0.0, min(self._duration, float(pos)))
-            self.update()
-
-    def set_accent(self, accent: str):
-        c = QColor(accent)
-        if c.isValid():
-            self._accent = c
-            self.update()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._is_dragging = True
-            self._apply_mouse(event.position().x())
-
-    def mouseMoveEvent(self, event):
-        if self._is_dragging:
-            self._apply_mouse(event.position().x())
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._is_dragging:
-            self._is_dragging = False
-            self.seek_requested.emit(self._position)
-
-    def _apply_mouse(self, x: float):
-        ratio = max(0.0, min(1.0, x / max(1.0, float(self.width()))))
-        self._position = ratio * self._duration
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = float(self.width()), float(self.height())
-        mid_y = h / 2.0
-        ratio = max(0.0, min(1.0, self._position / max(1.0, self._duration)))
-        split_x = ratio * w
-
-        step = 2.0
-        amplitude = 3.5
-        wavelength = 18.0
-
-        path_active = QPainterPath()
-        path_active.moveTo(0, mid_y)
-        x = 0.0
-        while x <= split_x:
-            y = mid_y + amplitude * math.sin(x / wavelength * 2 * math.pi)
-            path_active.lineTo(x, y)
-            x += step
-
-        path_inactive = QPainterPath()
-        path_inactive.moveTo(split_x, mid_y + amplitude * math.sin(split_x / wavelength * 2 * math.pi))
-        x = split_x
-        while x <= w:
-            y = mid_y + amplitude * math.sin(x / wavelength * 2 * math.pi)
-            path_inactive.lineTo(x, y)
-            x += step
-
-        pen_active = QPen(self._accent, 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen_active)
-        painter.drawPath(path_active)
-
-        pen_inactive = QPen(QColor(255, 255, 255, 45), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen_inactive)
-        painter.drawPath(path_inactive)
-
-        # Draw playhead dot
-        dot_y = mid_y + amplitude * math.sin(split_x / wavelength * 2 * math.pi)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(self._accent))
-        painter.drawEllipse(QRectF(split_x - 3.5, dot_y - 3.5, 7.0, 7.0))
-
-
-class StackedClockWidget(QWidget):
-    """
-    Hitodama stacked digital clock with 2-line large digits:
-    09
-    ···
-    41
-    AM • Tue 29
-    """
-    def __init__(self, parent=None, accent="#f28c5a"):
-        super().__init__(parent)
-        self._accent = QColor(accent)
-        self.setFixedHeight(170)
-        self._timer = QTimer(self)
-        self._timer.setInterval(1000)
-        self._timer.timeout.connect(self._on_tick)
-        self._timer.start()
-
-    def _on_tick(self):
-        if self.isVisible():
-            self.update()
-
-    def set_accent(self, accent: str):
-        c = QColor(accent)
-        if c.isValid():
-            self._accent = c
-            self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        now = datetime.now()
-        hour_str = now.strftime("%I")
-        minute_str = now.strftime("%M")
-        ampm = now.strftime("%p")
-        day_str = now.strftime("%a %d")
-        sub_text = f"{ampm} • {day_str}"
-
-        w, h = float(self.width()), float(self.height())
-
-        font_digits = QFont("Segoe UI Variable Display", 38, QFont.Weight.Bold)
-        if not font_digits.exactMatch():
-            font_digits = QFont("Segoe UI", 38, QFont.Weight.Bold)
-
-        painter.setFont(font_digits)
-        painter.setPen(QColor("#ffffff"))
-
-        # Draw Hours at top
-        rect_hour = QRectF(0, 8, w, 48)
-        painter.drawText(rect_hour, Qt.AlignmentFlag.AlignCenter, hour_str)
-
-        # Draw three dots separator (peach)
-        dots_y = 66
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(self._accent))
-        dot_spacing = 7.0
-        center_x = w / 2.0
-        for offset in (-dot_spacing, 0, dot_spacing):
-            painter.drawEllipse(QRectF(center_x + offset - 1.5, dots_y, 3.0, 3.0))
-
-        # Draw Minutes
-        rect_min = QRectF(0, 78, w, 48)
-        painter.setFont(font_digits)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(rect_min, Qt.AlignmentFlag.AlignCenter, minute_str)
-
-        # Draw subtext: AM • Tue 29
-        font_sub = QFont("Segoe UI", 11, QFont.Weight.Medium)
-        painter.setFont(font_sub)
-        painter.setPen(QColor(255, 255, 255, 150))
-        rect_sub = QRectF(0, 134, w, 24)
-        painter.drawText(rect_sub, Qt.AlignmentFlag.AlignCenter, sub_text)
-
-
-class WeekCalendarStrip(QWidget):
-    """
-    Hitodama 'This week' horizontal day-picker calendar strip.
-    Shows 7 days Mon-Sun with today active in a vibrant peach squircle pill,
-    plus the 'Next • 11:00 AM' upcoming event capsule below.
-    """
-    event_clicked = Signal()
-
-    def __init__(self, parent=None, accent="#f28c5a"):
-        super().__init__(parent)
-        self._accent = QColor(accent)
-        self._next_event_title = ""
-        self._next_event_time = ""
-        self.setFixedHeight(140)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._load_next_event()
-
-    def _load_next_event(self):
-        try:
-            from poppy.core.storage import data_path
-            cal_file = data_path("calendar_events.json")
-            if cal_file.exists():
-                data = json.loads(cal_file.read_text(encoding="utf-8"))
-                today_str = date.today().isoformat()
-                today_events = data.get(today_str, [])
-                if today_events:
-                    self._next_event_title = today_events[0].get("title", "")
-                    self._next_event_time = today_events[0].get("time", "")
-        except Exception:
-            pass
-
-    def set_next_event(self, time_str: str, title: str):
-        self._next_event_time = time_str
-        self._next_event_title = title
-        try:
-            from poppy.core.storage import data_path, write_json
-            cal_file = data_path("calendar_events.json")
-            data = {}
-            if cal_file.exists():
-                try:
-                    data = json.loads(cal_file.read_text(encoding="utf-8"))
-                except Exception:
-                    data = {}
-            today_str = date.today().isoformat()
-            data[today_str] = [{"time": time_str, "title": title}]
-            write_json(cal_file, data)
-        except Exception:
-            pass
-        self.update()
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and event.position().y() >= 85:
-            self.event_clicked.emit()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def set_accent(self, accent: str):
-        c = QColor(accent)
-        if c.isValid():
-            self._accent = c
-            self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = float(self.width()), float(self.height())
-        today = date.today()
-        start_of_week = today - timedelta(days=today.weekday())
-        end_of_week = start_of_week + timedelta(days=6)
-
-        # Header: "This week" and range "Sep 28 - Oct 4"
-        font_hdr = QFont("Segoe UI", 12, QFont.Weight.Bold)
-        painter.setFont(font_hdr)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(QRectF(12, 10, 120, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "This week")
-
-        range_str = f"{start_of_week.strftime('%b %d')} - {end_of_week.strftime('%b %d')}"
-        font_range = QFont("Segoe UI", 10, QFont.Weight.Normal)
-        painter.setFont(font_range)
-        painter.setPen(QColor(255, 255, 255, 120))
-        painter.drawText(QRectF(w - 140, 10, 128, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, range_str)
-
-        # 7-day strip
-        col_w = (w - 24.0) / 7.0
-        strip_y = 36.0
-        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-        for i in range(7):
-            d = start_of_week + timedelta(days=i)
-            is_today = (d == today)
-            col_x = 12.0 + i * col_w
-
-            if is_today:
-                pill_rect = QRectF(col_x + 2.0, strip_y, col_w - 4.0, 42.0)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QBrush(self._accent))
-                painter.drawRoundedRect(pill_rect, 10.0, 10.0)
-
-                painter.setPen(QColor("#0e1117"))
-                font_dname = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
-                painter.setFont(font_dname)
-                painter.drawText(QRectF(col_x, strip_y + 4, col_w, 14), Qt.AlignmentFlag.AlignCenter, day_names[i])
-
-                font_dnum = QFont("Segoe UI", 12, QFont.Weight.Bold)
-                painter.setFont(font_dnum)
-                painter.drawText(QRectF(col_x, strip_y + 18, col_w, 20), Qt.AlignmentFlag.AlignCenter, str(d.day))
-            else:
-                painter.setPen(QColor(255, 255, 255, 120))
-                font_dname = QFont("Segoe UI", 9, QFont.Weight.Normal)
-                painter.setFont(font_dname)
-                painter.drawText(QRectF(col_x, strip_y + 4, col_w, 14), Qt.AlignmentFlag.AlignCenter, day_names[i])
-
-                painter.setPen(QColor("#ffffff"))
-                font_dnum = QFont("Segoe UI", 12, QFont.Weight.DemiBold)
-                painter.setFont(font_dnum)
-                painter.drawText(QRectF(col_x, strip_y + 18, col_w, 20), Qt.AlignmentFlag.AlignCenter, str(d.day))
-
-        # Next event capsule
-        event_y = 90.0
-        event_rect = QRectF(12.0, event_y, w - 24.0, 40.0)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor(255, 255, 255, 10)))
-        painter.drawRoundedRect(event_rect, 12.0, 12.0)
-
-        # Pink accent vertical line
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor("#f43f5e")))
-        painter.drawRoundedRect(QRectF(22.0, event_y + 9.0, 3.5, 22.0), 1.75, 1.75)
-
-        if self._next_event_title:
-            # Next • 11:00 AM
-            font_time = QFont("Segoe UI", 10, QFont.Weight.Bold)
-            painter.setFont(font_time)
-            painter.setPen(QColor("#ffffff"))
-            time_label = f"Next • {self._next_event_time}" if self._next_event_time else "Next event"
-            painter.drawText(QRectF(32.0, event_y + 5.0, w - 60.0, 16.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time_label)
-
-            # Title
-            font_ev = QFont("Segoe UI", 10, QFont.Weight.Normal)
-            painter.setFont(font_ev)
-            painter.setPen(QColor(255, 255, 255, 140))
-            painter.drawText(QRectF(32.0, event_y + 21.0, w - 60.0, 15.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._next_event_title)
-        else:
-            # Empty / Prompt state
-            font_time = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
-            painter.setFont(font_time)
-            painter.setPen(QColor(255, 255, 255, 180))
-            painter.drawText(QRectF(32.0, event_y + 5.0, w - 60.0, 16.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "No upcoming events scheduled")
-
-            font_ev = QFont("Segoe UI", 9.5, QFont.Weight.Normal)
-            painter.setFont(font_ev)
-            painter.setPen(QColor(255, 255, 255, 100))
-            painter.drawText(QRectF(32.0, event_y + 21.0, w - 60.0, 15.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Click to view or schedule in Calendar")
-
-
-class PomodoroFocusWidget(QWidget):
-    """
-    Hitodama Pomodoro focus timer with 100px circular gauge dial (05:00),
-    0 h / 05 min inputs, preset pills (1m, 5m, 10m, 15m, 20m), and Start / Reset buttons.
-    Fully synchronized with Poppy's core PomodoroManager engine.
-    """
-    timer_started = Signal(int)
-    timer_reset = Signal()
-    preset_changed = Signal(int)
-    start_clicked = Signal()
-    reset_clicked = Signal()
-
-    def __init__(self, parent=None, accent="#f28c5a"):
-        super().__init__(parent)
-        self._accent = QColor(accent)
-        self._total_sec = 300
-        self._remaining_sec = 300
-        self._is_running = False
-        self._active_preset = 5
-
-        self.setFixedHeight(170)
-        self._init_ui()
-
-        self._tick_timer = QTimer(self)
-        self._tick_timer.setInterval(1000)
-        self._tick_timer.timeout.connect(self._on_tick)
-
-    def _init_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(16)
-
-        # Left: Dial Ring
-        self.dial = StatRingGauge(size=100, stroke_width=8, accent=self._accent.name(), parent=self)
-        self.dial.set_value(100.0, "05:00")
-        layout.addWidget(self.dial, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        # Right: Controls
-        right_col = QVBoxLayout()
-        right_col.setSpacing(8)
-
-        # Top row: 0 h, 05 min badges
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        self.lbl_h = QLabel("0 h")
-        self.lbl_m = QLabel("05 min")
-        for lbl in (self.lbl_h, self.lbl_m):
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-            set_widget_style(lbl, "background: rgba(255,255,255,0.04); border: none; border-radius: 8px; color: #ffffff; font-size: 11px; font-weight: 600; padding: 4px 10px;")
-            top_row.addWidget(lbl, 1)
-        self.lbl_h.mouseReleaseEvent = lambda e: self._increment_hours()
-        self.lbl_m.mouseReleaseEvent = lambda e: self._increment_minutes()
-        right_col.addLayout(top_row)
-
-        # Presets row: 1m, 5m, 10m, 15m, 20m
-        preset_row = QHBoxLayout()
-        preset_row.setSpacing(4)
-        self.preset_buttons = []
-        for mins in (1, 5, 10, 15, 20):
-            btn = QPushButton(f"{mins}m")
-            btn.setCheckable(True)
-            btn.setChecked(mins == 5)
-            btn.setFixedHeight(26)
-            btn.clicked.connect(lambda _, m=mins: self._select_preset(m))
-            set_widget_style(btn, f"""
-                QPushButton {{
-                    background: rgba(255,255,255,0.04);
-                    border: none;
-                    border-radius: 6px;
-                    color: rgba(255,255,255,0.7);
-                    font-size: 10px;
-                    font-weight: 600;
-                    padding: 0 4px;
-                }}
-                QPushButton:checked {{
-                    background: {self._accent.name()};
-                    color: #0e1117;
-                    border: none;
-                }}
-            """)
-            self.preset_buttons.append((btn, mins))
-            preset_row.addWidget(btn)
-        right_col.addLayout(preset_row)
-
-        # Actions row: Start / Reset
-        act_row = QHBoxLayout()
-        act_row.setSpacing(8)
-        self.btn_start = QPushButton("Start")
-        self.btn_start.setFixedHeight(34)
-        self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_start, f"""
-            QPushButton {{
-                background: {self._accent.name()};
-                color: #0e1117;
-                font-size: 12px;
-                font-weight: 700;
-                border: none;
-                border-radius: 9px;
-            }}
-            QPushButton:hover {{
-                background: #f7a278;
-            }}
-        """)
-        self.btn_start.clicked.connect(self._on_start_clicked)
-        act_row.addWidget(self.btn_start, 2)
-
-        self.btn_reset = QPushButton("Reset")
-        self.btn_reset.setFixedHeight(34)
-        self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_reset, """
-            QPushButton {
-                background: rgba(255,255,255,0.06);
-                border: none;
-                color: #ffffff;
-                font-size: 12px;
-                font-weight: 600;
-                border-radius: 9px;
-            }
-            QPushButton:hover {
-                background: rgba(255,255,255,0.1);
-            }
-        """)
-        self.btn_reset.clicked.connect(self._on_reset_clicked)
-        act_row.addWidget(self.btn_reset, 1)
-
-        right_col.addLayout(act_row)
-        layout.addLayout(right_col, 1)
-
-    def _increment_hours(self):
-        curr_m = self._total_sec // 60
-        new_m = ((curr_m // 60 + 1) % 4) * 60 + (curr_m % 60)
-        if new_m <= 0:
-            new_m = 25
-        self._select_preset(new_m)
-
-    def _increment_minutes(self):
-        curr_m = self._total_sec // 60
-        new_m = (curr_m + 5) if (curr_m % 60) < 55 else (curr_m // 60) * 60
-        if new_m <= 0:
-            new_m = 5
-        self._select_preset(new_m)
-
-    def _select_preset(self, mins: int):
-        self._active_preset = mins
-        self._total_sec = mins * 60
-        self._remaining_sec = self._total_sec
-        for b, m in self.preset_buttons:
-            b.setChecked(m == mins)
-        self.lbl_h.setText(f"{mins // 60} h")
-        self.lbl_m.setText(f"{mins % 60:02d} min")
-        self._update_display()
-        self.preset_changed.emit(mins * 60)
-
-    def _on_start_clicked(self):
-        self.start_clicked.emit()
-        self._toggle_timer()
-
-    def _on_reset_clicked(self):
-        self.reset_clicked.emit()
-        self._reset_timer()
-
-    def _toggle_timer(self):
-        if self._is_running:
-            self._is_running = False
-            self._tick_timer.stop()
-            self.btn_start.setText("Start")
-        else:
-            self._is_running = True
-            self._tick_timer.start()
-            self.btn_start.setText("Pause")
-            self.timer_started.emit(self._remaining_sec)
-
-    def _reset_timer(self):
-        self._is_running = False
-        self._tick_timer.stop()
-        self._remaining_sec = self._total_sec
-        self.btn_start.setText("Start")
-        self._update_display()
-        self.timer_reset.emit()
-
-    def sync_pomodoro_time(self, rem_sec: int, total_sec: int, fmt_time: str, progress: float):
-        self._remaining_sec = rem_sec
-        self._total_sec = max(1, total_sec)
-        self.dial.set_value(progress * 100.0, fmt_time)
-        hrs = rem_sec // 3600
-        mins = (rem_sec % 3600) // 60
-        self.lbl_h.setText(f"{hrs} h")
-        self.lbl_m.setText(f"{mins:02d} min")
-
-    def sync_pomodoro_state(self, is_running: bool):
-        self._is_running = is_running
-        self.btn_start.setText("Pause" if is_running else "Start")
-        if is_running:
-            if not self._tick_timer.isActive():
-                self._tick_timer.start()
-        else:
-            self._tick_timer.stop()
-
-    def _on_tick(self):
-        if self._remaining_sec > 0:
-            self._remaining_sec -= 1
-            self._update_display()
-        else:
-            self._reset_timer()
-
-    def _update_display(self):
-        pct = (self._remaining_sec / max(1.0, float(self._total_sec))) * 100.0
-        m = self._remaining_sec // 60
-        s = self._remaining_sec % 60
-        self.dial.set_value(pct, f"{m:02d}:{s:02d}")
-
-
-class TodoChecklistWidget(QWidget):
-    """
-    Hitodama To-Do Checklist widget.
-    Header with 'Today' and green '0/1' badge.
-    Interactive items with circular check indicators and strikethrough.
-    Bottom '+ Add a to-do...' input with circular orange submit arrow button.
-    Persisted to ~/.poppy/todos.json.
-    """
-    def __init__(self, parent=None, accent="#f28c5a"):
-        super().__init__(parent)
-        self._accent = QColor(accent)
-        from poppy.core.storage import data_path
-        self._store_file = data_path("todos.json")
-        self._todos = self._load_todos()
-        self._init_ui()
-
-    def _load_todos(self) -> list:
-        if self._store_file.exists():
-            try:
-                return json.loads(self._store_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        return []
-
-    def _save_todos(self):
-        try:
-            from poppy.core.storage import write_json
-            write_json(self._store_file, self._todos)
-        except Exception:
-            pass
-
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
-
-        # Header
-        hdr = QHBoxLayout()
-        lbl_title = QLabel("Today")
-        set_widget_style(lbl_title, "font-size: 15px; font-weight: 700; color: #ffffff; background: transparent;")
-        hdr.addWidget(lbl_title)
-        hdr.addStretch()
-
-        self.lbl_badge = QLabel("0/1")
-        set_widget_style(self.lbl_badge, "background: #10b981; color: #ffffff; font-size: 10px; font-weight: 700; border-radius: 9px; padding: 2px 7px;")
-        hdr.addWidget(self.lbl_badge)
-        layout.addLayout(hdr)
-
-        # Scroll items
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.horizontalScrollBar().rangeChanged.connect(lambda min, max: scroll.horizontalScrollBar().setRange(0, 0))
-        set_widget_style(scroll, "QScrollArea { background: transparent; border: none; }")
-
-        self.items_box = QWidget()
-        self.items_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        set_widget_style(self.items_box, "background: transparent;")
-        self.items_layout = QVBoxLayout(self.items_box)
-        self.items_layout.setContentsMargins(0, 0, 0, 0)
-        self.items_layout.setSpacing(6)
-        self.items_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(self.items_box)
-        layout.addWidget(scroll, 1)
-
-        # Bottom Input
-        bot_row = QHBoxLayout()
-        bot_row.setSpacing(8)
-        self.txt_new = QLineEdit()
-        self.txt_new.setPlaceholderText("+ Add a task...")
-        set_widget_style(self.txt_new, """
-            QLineEdit {
-                background: rgba(255,255,255,0.04);
-                border: none;
-                border-radius: 10px;
-                color: #ffffff;
-                font-size: 12px;
-                padding: 7px 12px;
-            }
-            QLineEdit:focus {
-                background: rgba(255,255,255,0.07);
-            }
-        """)
-        self.txt_new.returnPressed.connect(self._add_item)
-        bot_row.addWidget(self.txt_new, 1)
-
-        self.btn_add = QPushButton("→")
-        self.btn_add.setFixedSize(30, 30)
-        self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_widget_style(self.btn_add, f"""
-            QPushButton {{
-                background: {self._accent.name()};
-                color: #0e1117;
-                font-size: 14px;
-                font-weight: 700;
-                border: none;
-                border-radius: 15px;
-            }}
-            QPushButton:hover {{
-                background: #f7a278;
-            }}
-        """)
-        self.btn_add.clicked.connect(self._add_item)
-        bot_row.addWidget(self.btn_add)
-        layout.addLayout(bot_row)
-
-        self._render_items()
-
-    def _render_items(self):
-        while self.items_layout.count() > 0:
-            item = self.items_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        done_count = 0
-        for i, todo in enumerate(self._todos):
-            if todo.get("done", False):
-                done_count += 1
-            row = QFrame()
-            row.setFixedHeight(38)
-            set_widget_style(row, "QFrame { background: rgba(255,255,255,0.04); border-radius: 9px; padding: 4px 8px; } QFrame:hover { background: rgba(255,255,255,0.07); }")
-            r_lay = QHBoxLayout(row)
-            r_lay.setContentsMargins(6, 0, 6, 0)
-            r_lay.setSpacing(10)
-
-            btn_chk = QPushButton("✓" if todo.get("done") else "")
-            btn_chk.setFixedSize(22, 22)
-            btn_chk.setCursor(Qt.CursorShape.PointingHandCursor)
-            if todo.get("done"):
-                set_widget_style(btn_chk, f"QPushButton {{ background: {self._accent.name()}; border: 2px solid {self._accent.name()}; color: #0e1117; font-size: 11px; font-weight: 800; border-radius: 11px; }}")
-            else:
-                set_widget_style(btn_chk, "QPushButton { background: transparent; border: 2px solid rgba(255, 255, 255, 0.35); border-radius: 11px; } QPushButton:hover { border-color: #f28c5a; }")
-            btn_chk.clicked.connect(lambda _, idx=i: self._toggle_done(idx))
-            r_lay.addWidget(btn_chk)
-
-            lbl = QLabel(todo.get("text", ""))
-            lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            if todo.get("done"):
-                set_widget_style(lbl, "color: rgba(255,255,255,0.35); text-decoration: line-through; font-size: 12px; background: transparent;")
-            else:
-                set_widget_style(lbl, "color: #ffffff; font-size: 12px; font-weight: 500; background: transparent;")
-            r_lay.addWidget(lbl, 1)
-
-            btn_del = QPushButton("×")
-            btn_del.setFixedSize(18, 18)
-            btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
-            set_widget_style(btn_del, "background: transparent; color: rgba(255,255,255,0.3); font-size: 13px; border: none;")
-            btn_del.clicked.connect(lambda _, idx=i: self._delete_item(idx))
-            r_lay.addWidget(btn_del)
-
-            self.items_layout.addWidget(row)
-
-        if not self._todos:
-            lbl_empty = QLabel("No tasks for today.\nAdd one below!")
-            lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            set_widget_style(lbl_empty, "color: rgba(255, 255, 255, 0.4); font-size: 11.5px; padding: 20px 0;")
-            self.items_layout.addWidget(lbl_empty)
-
-        total = len(self._todos)
-        self.lbl_badge.setText(f"{done_count}/{total}")
-        if total > 0 and done_count == total:
-            set_widget_style(self.lbl_badge, "background: #10b981; color: #ffffff; font-size: 10px; font-weight: 700; border-radius: 9px; padding: 2px 7px;")
-        else:
-            set_widget_style(self.lbl_badge, "background: rgba(255,255,255,0.12); color: #ffffff; font-size: 10px; font-weight: 700; border-radius: 9px; padding: 2px 7px;")
-
-    def _toggle_done(self, idx: int):
-        if 0 <= idx < len(self._todos):
-            self._todos[idx]["done"] = not self._todos[idx].get("done", False)
-            self._save_todos()
-            self._render_items()
-
-    def _delete_item(self, idx: int):
-        if 0 <= idx < len(self._todos):
-            self._todos.pop(idx)
-            self._save_todos()
-            self._render_items()
-
-    def _add_item(self):
-        txt = self.txt_new.text().strip()
-        if txt:
-            self._todos.append({"text": txt, "done": False})
-            self.txt_new.clear()
-            self._save_todos()
-            self._render_items()
-
 
 
 

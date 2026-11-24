@@ -31,13 +31,15 @@
   },
   "tabs": {
     "enabled": [
-      "Controls",
-      "Today",
-      "Stats",
+      "Home",
+      "Music",
+      "Calendar",
       "Clipboard",
+      "Docs",
+      "Desktops",
+      "Timer",
       "Shelf",
-      "Apps",
-      "Power"
+      "Notes"
     ]
   },
   "notifications": {
@@ -97,7 +99,7 @@
     "auto_hover_peek": true,
     "scroll_volume": true,
     "pill_levels": true,
-    "default_tab": "Today",
+    "default_tab": "Smart",
     "animation_duration_ms": 200,
     "keep_in_tray": true,
     "autostart": false

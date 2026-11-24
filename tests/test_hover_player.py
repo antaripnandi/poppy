@@ -262,7 +262,7 @@ def test_playback_controls_keep_peek_open_and_artwork_opens_home(audit_app, monk
     assert calls == ["play", "next", "previous"]
     QTest.mouseClick(window.peek_thumb, Qt.MouseButton.LeftButton)
     assert window.state == NotchState.EXPANDED
-    assert window.tab_stack.currentWidget() in (window.tab_home, window.tab_today)
+    assert window.tab_stack.currentWidget() is window.tab_home
     assert not window._peek_opacity.isEnabled()
     window.close()
 
@@ -372,7 +372,7 @@ def test_idle_hover_opens_and_stays_open_when_a_media_session_ends(audit_app, mo
     assert window.lbl_clock.isVisible()
     QTest.mouseClick(window.lbl_clock, Qt.MouseButton.LeftButton)
     assert window.state == NotchState.EXPANDED
-    assert window.tab_stack.currentWidget() in (window.tab_home, window.tab_today)
+    assert window.tab_stack.currentWidget() is window.tab_home
     window.close()
 
 

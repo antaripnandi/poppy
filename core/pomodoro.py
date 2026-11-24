@@ -46,14 +46,6 @@ class PomodoroManager(QObject):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
 
-    def set_duration(self, seconds: int):
-        """Set work focus duration in seconds."""
-        self.work_duration = max(60, int(seconds))
-        if self.state == PomoState.STOPPED:
-            self.remaining_seconds = self.work_duration
-            self.total_seconds = self.work_duration
-            self._emit_update()
-
     def start(self):
         """Start or resume the timer."""
         if self.is_running:

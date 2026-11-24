@@ -65,24 +65,17 @@ class DropShelfManager(QObject):
 
     def _load_state(self):
         try:
-            import tempfile
             if not self._state_file.exists():
                 return
             with open(self._state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             staged = data.get("staged_paths", [])
             pinned = data.get("pinned_apps", [])
-            temp_dir = os.path.abspath(tempfile.gettempdir()).lower()
             for p in pinned:
                 if os.path.exists(p) and p not in self.pinned_apps:
                     self.pinned_apps.append(p)
             for p in staged:
-                if not os.path.exists(p):
-                    continue
-                p_norm = os.path.abspath(p).lower()
-                if p_norm.startswith(temp_dir) or "example_" in Path(p).name.lower():
-                    continue
-                if not any(it.path == p for it in self.staged_items):
+                if os.path.exists(p) and not any(it.path == p for it in self.staged_items):
                     item = StagedItem(p)
                     if item.is_image:
                         item.thumbnail = load_thumbnail(p)

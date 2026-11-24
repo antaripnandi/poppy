@@ -4,44 +4,24 @@ Keep the authored dark stylesheet so changing modes never compounds color
 conversions. Artwork and user content are left untouched.
 """
 
-import os
 import re
 from functools import lru_cache
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QWidget
-from shiboken6 import isValid
 
 LAYOUT_THEMES = {
     "Classic": {
-        "radius": 16, "padding": 16, "spacing": 12, "fill": 0.05,
+        "radius": 14, "padding": 16, "spacing": 12, "fill": 0.045,
         "inset": 12, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
         "media_columns": (1, 1), "art_size": 144,
         "description": "Tactile Bento dashboard with compact media controls and fluid system tools.",
-    },
-    "Flat": {
-        "radius": 16, "padding": 16, "spacing": 12, "fill": 0.05,
-        "inset": 12, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (1, 1), "art_size": 144,
-        "description": "Tactile Bento dashboard.",
-    },
-    "Paper": {
-        "radius": 16, "padding": 16, "spacing": 12, "fill": 0.05,
-        "inset": 12, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (1, 1), "art_size": 144,
-        "description": "Tactile Bento dashboard.",
-    },
-    "Instrument": {
-        "radius": 16, "padding": 16, "spacing": 12, "fill": 0.05,
-        "inset": 12, "columns": (1, 1), "home_order": ("clock", "controls", "notes", "shelf"),
-        "media_columns": (1, 1), "art_size": 144,
-        "description": "Tactile Bento dashboard.",
     },
 }
 
 HOME_CARDS = ("clock", "controls", "notes", "shelf")
 DESIGN_PALETTES = {}
-TRACK_LAYOUTS = ("Flat", "Paper", "Instrument")
+TRACK_LAYOUTS = ()
 
 
 def home_slots(name, count, *, wide=True):
@@ -84,36 +64,31 @@ class _KeyboardFocus(QObject):
     """Keep visual focus cues for keyboard navigation and shortcuts."""
 
     def eventFilter(self, watched, event):
-        try:
-            if not isValid(watched):
+        kind = event.type()
+        if kind == QEvent.Type.FocusIn and isinstance(watched, QWidget):
+            reason = event.reason()
+            if reason in (Qt.FocusReason.ActiveWindowFocusReason, Qt.FocusReason.PopupFocusReason):
                 return False
-            val = getattr(event.type(), "value", -1)
-            if val == 8:
-                if not isinstance(watched, QWidget):
-                    return False
-                reason_val = getattr(event.reason(), "value", -1)
-                if reason_val in (3, 4):
-                    return False
-                visible = reason_val in (1, 2, 5)
-                widget = watched
-            elif val == 2:
-                parent = self.parent()
-                if not parent or not isValid(parent):
-                    return False
-                widget = parent.focusWidget()
-                visible = False
-            else:
-                return False
-            if widget and isValid(widget) and bool(widget.property("poppyKeyboardFocus")) != visible:
-                widget.setProperty("poppyKeyboardFocus", visible)
-                style = widget.style()
-                if style and isValid(style):
-                    style.unpolish(widget)
-                    style.polish(widget)
-                widget.update()
-        except (Exception, BaseException):
+            widget = watched
+            visible = reason in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                                 Qt.FocusReason.ShortcutFocusReason)
+        elif kind == QEvent.Type.MouseButtonPress:
+            # Clicking an already focused control does not produce a FocusIn.
+            widget = self.parent().focusWidget()
+            visible = False
+        else:
             return False
+        if widget and bool(widget.property("poppyKeyboardFocus")) != visible:
+            widget.setProperty("poppyKeyboardFocus", visible)
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
+            widget.update()
         return False
+
+
+def keyboard_focused(widget):
+    return widget.hasFocus() and bool(widget.property("poppyKeyboardFocus"))
 
 
 def is_light_theme():
@@ -123,7 +98,7 @@ def is_light_theme():
 
 def configure_theme(appearance):
     app = QApplication.instance()
-    if app and not hasattr(app, "_poppy_focus_filter"):
+    if not hasattr(app, "_poppy_focus_filter"):
         app._poppy_focus_filter = _KeyboardFocus(app)
         app.installEventFilter(app._poppy_focus_filter)
     light = resolve_light_mode(appearance.get("mode", "Dark"))
@@ -136,8 +111,13 @@ def configure_theme(appearance):
     return changed
 
 
-def keyboard_focused(widget):
-    return widget.hasFocus() and bool(widget.property("poppyKeyboardFocus"))
+def surface_colors():
+    design = DESIGN_PALETTES.get(current_layout())
+    if design:
+        return dict(zip(("root", "card", "text", "muted", "accent"), design[is_light_theme()]))
+    if is_light_theme():
+        return {"root": "#f4f1e9" if current_layout() == "Paper" else "#eef1f5", "card": "#ffffff", "text": "#202833", "muted": "#546274"}
+    return {"root": "#111419", "card": "#1b2027", "text": "#edf1f7", "muted": "#9ca8b7"}
 
 
 def contrast_ink(color: QColor) -> str:
@@ -148,12 +128,6 @@ def contrast_ink(color: QColor) -> str:
     luminance = sum(weight * linear(channel) for weight, channel in zip(
         (0.2126, 0.7152, 0.0722), (color.redF(), color.greenF(), color.blueF())))
     return "#000000" if luminance >= 0.179 else "#ffffff"
-
-
-def surface_colors():
-    if is_light_theme():
-        return {"root": "#f4f1e9" if current_layout() == "Paper" else "#eef1f5", "card": "#ffffff", "text": "#202833", "muted": "#546274"}
-    return {"root": "#111419", "card": "#1b2027", "text": "#edf1f7", "muted": "#9ca8b7"}
 
 
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\([^)]*\)|\b(?:white|black)\b")
@@ -199,8 +173,18 @@ def _light_color(value, role, paper=False):
     return color.name()
 
 
+def themed_stylesheet(source):
+    layout = current_layout()
+    source = _design_stylesheet(source, layout)
+    if is_light_theme():
+        source = _light_stylesheet(source, layout in ("Paper", "Daily"))
+    return _keyboard_focus_stylesheet(_direction_stylesheet(source, layout, is_light_theme()))
+
+
 @lru_cache(maxsize=1024)
 def _keyboard_focus_stylesheet(source):
+    # Insert the attribute before any Qt subcontrol or pseudo-state.
+    # Native-outline suppression also applies to mouse-focused sliders.
     if ":focus" not in source:
         return source
     return re.sub(
@@ -214,12 +198,33 @@ def _keyboard_focus_stylesheet(source):
     )
 
 
-def themed_stylesheet(source):
-    layout = current_layout()
-    source = _design_stylesheet(source, layout)
-    if is_light_theme():
-        source = _light_stylesheet(source, layout in ("Paper", "Daily"))
-    return _keyboard_focus_stylesheet(source)
+@lru_cache(maxsize=1024)
+def _direction_stylesheet(source, layout, light):
+    palette = DESIGN_PALETTES.get(layout)
+    if not palette:
+        return source
+    _, card, text, muted, _ = palette[light]
+    family = {"Deck": "Segoe UI", "Daily": "Georgia", "Console": "Consolas"}[layout]
+    def adapt(match):
+        selector, body = match.groups()
+        # Icon fonts and explicit per-control overrides remain intact.
+        if selector.strip() in ("*", "QLabel", "QPushButton", "QListWidget", "QComboBox",
+                                 "QTextEdit", "QLineEdit", "QTableWidget", "QDialog, QMessageBox"):
+            if "font-family" not in body or "'Segoe UI'" in body:
+                body = re.sub(r"font-family\s*:[^;]+;", "", body) + f"font-family: '{family}';"
+            if selector.strip() in ("QListWidget", "QTableWidget", "QDialog, QMessageBox"):
+                body = re.sub(r"background(?:-color)?\s*:[^;]+;", "", body) + f"background: {card};"
+        def tint(declaration):
+            role, value = declaration.groups()
+            if role != "color":
+                return declaration.group()
+            color = QColor(value.strip())
+            if not color.isValid() or color.saturation() > 125:
+                return declaration.group()
+            primary = color.lightness() < 70 if light else color.lightness() > 185
+            return f"color: {text if primary else muted}"
+        return selector + "{" + _DECLARATION.sub(tint, body) + "}"
+    return re.sub(r"([^{}]+)\{([^{}]*)\}", adapt, source)
 
 
 @lru_cache(maxsize=1024)
@@ -228,7 +233,8 @@ def _design_stylesheet(source, layout):
     if layout not in TRACK_LAYOUTS:
         return source
     radius = LAYOUT_THEMES[layout]["radius"]
-    source = re.sub(r"border-radius\s*:\s*[\d.]+px", f"border-radius: {radius}px", source)
+    if layout != "Deck":
+        source = re.sub(r"border-radius\s*:\s*[\d.]+px", f"border-radius: {radius}px", source)
     def control(block):
         selector, body = block.groups()
         if "QTextEdit" in selector and ":" not in selector and layout in ("Flat", "Paper", "Daily"):
@@ -246,6 +252,8 @@ def _design_stylesheet(source, layout):
         elif "QSlider::handle:horizontal" in selector:
             width = {"Instrument": 2, "Console": 5, "Deck": 12}.get(layout, 8)
             body = re.sub(r"width\s*:[^;]+;", f"width: {width}px;", body)
+            if layout == "Deck":
+                body += "border-radius: 6px;"
         return selector + "{" + body + "}"
     source = re.sub(r"([^{}]+)\{([^{}]*)\}", control, source)
     return source
@@ -258,6 +266,8 @@ def _light_stylesheet(source, paper=False):
         if role == "color" or "background" in role or role.startswith("border"):
             value = _COLOR.sub(lambda color: _light_color(color.group(), role, paper), value)
         return f"{role}: {value}"
+    # Compile declarations only. Qt's ::subcontrol and :hover selectors also
+    # contain colons and must retain their exact spelling.
     if "{" not in source:
         return _DECLARATION.sub(declaration, source)
     return re.sub(r"(?<=\{)[^{}]*(?=\})", lambda block: _DECLARATION.sub(declaration, block.group()), source)
