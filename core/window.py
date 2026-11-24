@@ -865,6 +865,7 @@ class DynamicNotchWindow(QWidget):
             clipboard.dataChanged.connect(self._on_clipboard_data_changed)
 
         # Home Audio & Bluetooth Menus
+        self.tab_home.audio_gear_menu_requested.connect(self._open_app_mixer)
         self.tab_home.audio_device_menu_requested.connect(self._show_audio_device_dropdown)
         self.tab_home.bluetooth_menu_requested.connect(self._show_bluetooth_dropdown)
 
