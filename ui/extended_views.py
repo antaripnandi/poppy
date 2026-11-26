@@ -1,38 +1,35 @@
 """Calendar, clipboard, PDF tools, commands, and Windows desktop views."""
 
 import os
-import sys
 import json
 import time
 import calendar
-from datetime import datetime, date
+from datetime import date
 from html import escape
 from pathlib import Path
 from urllib.parse import unquote_plus, urlsplit
-import subprocess
 import ctypes
 import uuid
 import threading
 
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QPoint, QSize, Signal, QTimer, QUrl, QMimeData, QDate, QEvent
+    Qt, QPoint, Signal, QTimer, QEvent
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
+    QPainter, QColor, QPen, QPainterPath, QCursor,
     QPageSize, QTextDocument, QPdfWriter, QShortcut, QKeySequence
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QScrollArea, QFrame, QApplication, QFileDialog, QMessageBox, QLayout, QBoxLayout, QSizePolicy, QListWidget, QListWidgetItem
+    QLineEdit, QFrame, QApplication, QFileDialog, QMessageBox, QLayout, QBoxLayout, QSizePolicy, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import QSaveFile, QIODevice
 from shiboken6 import isValid
 
 from poppy.ui.theme import contrast_ink, set_widget_style
-from poppy.ui.icons import Icons, get_fluent_font_family
+from poppy.ui.icons import Icons
 from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
 from poppy.core.annotation_wheel import AnnotationWheel
-from poppy.core.system_tools import lock_workstation
 from poppy.core.system_features import current_desktop_windows, activate_desktop_window
 from poppy.core.storage import data_path, write_json
 

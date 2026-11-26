@@ -28,12 +28,12 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QApplication,
-    QStackedWidget, QPushButton, QFrame, QGraphicsOpacityEffect, QMenu, QLayout, QSizePolicy, QMessageBox, QDialog, QWidgetAction
+    QPushButton, QGraphicsOpacityEffect, QMenu, QLayout, QSizePolicy, QMessageBox, QDialog, QWidgetAction
 )
 
 from poppy.ui.theme import set_widget_style, configure_theme, refresh_theme, surface_colors, is_light_theme, resolve_light_mode, LAYOUT_THEMES, home_order, contrast_ink
 from poppy.ui.components import (
-    IconButton, TabButton, AudioVisualizerBars, DraggableThumbnail, PillLevel,
+    IconButton, AudioVisualizerBars, DraggableThumbnail, PillLevel,
     AnimatedTabStrip, AnimatedStackedWidget, CardFrame, ClickableSlider, PlaybackSlider
 )
 from poppy.ui.icons import Icons, get_fluent_font_family
@@ -316,7 +316,7 @@ class DynamicNotchWindow(QWidget):
         self.view_collapsed.setFixedSize(self._collapsed_w, self._collapsed_h)
         v_coll_layout = QHBoxLayout(self.view_collapsed)
         v_coll_layout.setContentsMargins(20, 0, 20, 0)
-        v_coll_layout.setSpacing(6)
+        v_coll_layout.setSpacing(8)
         v_coll_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Left zone artwork scales with the configured pill dimensions.
@@ -348,7 +348,7 @@ class DynamicNotchWindow(QWidget):
         right_box = QWidget(self)
         r_layout = QHBoxLayout(right_box)
         r_layout.setContentsMargins(0, 0, 0, 0)
-        r_layout.setSpacing(3)
+        r_layout.setSpacing(4)
         self.lbl_coll_pomo = QLabel("")
         self.lbl_coll_pomo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_coll_pomo.hide()
@@ -381,8 +381,8 @@ class DynamicNotchWindow(QWidget):
         self.view_peek.setFixedSize(*self.PEEK_SIZE)
         self.view_peek.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout = QHBoxLayout(self.view_peek)
-        layout.setContentsMargins(21, 7, 21, 7)
-        layout.setSpacing(13)
+        layout.setContentsMargins(20, 8, 20, 8)
+        layout.setSpacing(12)
         self.peek_thumb = QLabel(Icons.MUSIC)
         self.peek_thumb.setFixedSize(82, 82)
         self.peek_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -425,7 +425,7 @@ class DynamicNotchWindow(QWidget):
         player.addLayout(controls)
 
         playback = QHBoxLayout()
-        playback.setSpacing(7)
+        playback.setSpacing(8)
         self.peek_seek = PlaybackSlider(Qt.Orientation.Horizontal, time_ruler=False)
         self.peek_seek.setAccessibleName("Playback position")
         self.peek_seek.setFixedHeight(16)
@@ -453,7 +453,7 @@ class DynamicNotchWindow(QWidget):
         volume = QWidget()
         volume.setFixedWidth(48)
         volume_layout = QVBoxLayout(volume)
-        volume_layout.setContentsMargins(5, 6, 5, 6)
+        volume_layout.setContentsMargins(4, 8, 4, 8)
         volume_layout.setSpacing(4)
         self.lbl_peek_volume = QLabel("0%")
         self.lbl_peek_volume.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -488,7 +488,7 @@ class DynamicNotchWindow(QWidget):
         self.view_peek.setGraphicsEffect(self._peek_opacity)
         self._peek_opacity.setEnabled(False)
         self._peek_fade = QPropertyAnimation(self._peek_opacity, b"opacity", self)
-        self._peek_fade.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._peek_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._peek_fade.finished.connect(lambda: self._finish_reveal(self.view_peek, self._peek_opacity))
 
         # =====================================================================
@@ -498,8 +498,8 @@ class DynamicNotchWindow(QWidget):
         self.view_island.setFixedSize(420, 64)
         self.view_island.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         v_isl_layout = QHBoxLayout(self.view_island)
-        v_isl_layout.setContentsMargins(22, 8, 22, 8)
-        v_isl_layout.setSpacing(6)
+        v_isl_layout.setContentsMargins(20, 8, 20, 8)
+        v_isl_layout.setSpacing(8)
 
         # Draggable Thumbnail Preview (44x44, rounded 8px)
         self.island_thumb = DraggableThumbnail(size=44, border_radius=8, parent=self)
@@ -580,17 +580,17 @@ class DynamicNotchWindow(QWidget):
         self._expanded_opacity.setOpacity(1.0)
         self._expanded_opacity.setEnabled(False)
         self._anim_opacity = QPropertyAnimation(self._expanded_opacity, b"opacity", self)
-        self._anim_opacity.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._anim_opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim_opacity.finished.connect(lambda: self._finish_reveal(self.view_expanded, self._expanded_opacity))
         v_exp_layout = QVBoxLayout(self.view_expanded)
-        v_exp_layout.setContentsMargins(14, 12, 14, 12)
+        v_exp_layout.setContentsMargins(16, 12, 16, 12)
         v_exp_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         v_exp_layout.setSpacing(8)
 
         # Header Bar: Tabs on the Left, Clock & Controls Capsule on the Right
         header_bar = QHBoxLayout()
         self._expanded_header = header_bar
-        header_bar.setSpacing(6)
+        header_bar.setSpacing(8)
         header_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Direct tab navigation with a text-only selection.
@@ -728,8 +728,8 @@ class DynamicNotchWindow(QWidget):
 
         v_exp_layout.addWidget(self.tab_stack, stretch=1)
         tools = QHBoxLayout()
-        tools.setContentsMargins(6, 0, 6, 0)
-        tools.setSpacing(6)
+        tools.setContentsMargins(8, 0, 8, 0)
+        tools.setSpacing(4)
         commands = QPushButton("Commands")
         commands.setToolTip("Search tabs, actions, and installed apps (Ctrl+Shift+Space)")
         set_widget_style(commands, "QPushButton { background: transparent; border: none; color: #a7adab; padding: 4px 7px; } QPushButton:hover { color: #edf1f0; } QPushButton:focus { border: 1px solid #a7adab; }")

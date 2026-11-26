@@ -1,6 +1,5 @@
 """Poppy settings with live appearance previews and explicit saving."""
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -478,7 +477,7 @@ class SettingsWindow(QWidget):
         l_app.setSpacing(12)
 
         lbl_app_hdr = QLabel("Appearance")
-        set_widget_style(lbl_app_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_app_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_app_sub = QLabel("Choose a layout theme, appearance mode and color palette.")
         set_widget_style(lbl_app_sub, "font-size: 12px; color: #9ca3a5;")
         l_app.addWidget(lbl_app_hdr)
@@ -644,7 +643,7 @@ class SettingsWindow(QWidget):
         l_tabs.setSpacing(12)
 
         lbl_tabs_hdr = QLabel("Tools")
-        set_widget_style(lbl_tabs_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_tabs_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_tabs_sub = QLabel("Every enabled tool has its own tab. Home opens the dashboard.")
         set_widget_style(lbl_tabs_sub, "font-size: 12px; color: #9ca3a5;")
         l_tabs.addWidget(lbl_tabs_hdr)
@@ -716,7 +715,7 @@ class SettingsWindow(QWidget):
         l_beh.setSpacing(12)
 
         lbl_beh_hdr = QLabel("Behavior")
-        set_widget_style(lbl_beh_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_beh_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_beh_sub = QLabel("Choose how Poppy opens and runs.")
         set_widget_style(lbl_beh_sub, "font-size: 12px; color: #9ca3a5;")
         l_beh.addWidget(lbl_beh_hdr)
@@ -754,7 +753,7 @@ class SettingsWindow(QWidget):
         l_notif.setSpacing(12)
 
         lbl_notif_hdr = QLabel("Notifications")
-        set_widget_style(lbl_notif_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_notif_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_notif_sub = QLabel("Choose how Poppy shows its alerts.")
         set_widget_style(lbl_notif_sub, "font-size: 12px; color: #9ca3a5;")
         l_notif.addWidget(lbl_notif_hdr)
@@ -787,7 +786,7 @@ class SettingsWindow(QWidget):
         l_st.setSpacing(12)
 
         lbl_st_hdr = QLabel("Screen time")
-        set_widget_style(lbl_st_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_st_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_st_sub = QLabel("Track active time and choose when to take a break.")
         set_widget_style(lbl_st_sub, "font-size: 12px; color: #9ca3a5;")
         l_st.addWidget(lbl_st_hdr)
@@ -803,8 +802,8 @@ class SettingsWindow(QWidget):
             }
         """)
         l_card_summary = QVBoxLayout(card_st_summary)
-        l_card_summary.setContentsMargins(16, 14, 16, 14)
-        l_card_summary.setSpacing(10)
+        l_card_summary.setContentsMargins(16, 16, 16, 16)
+        l_card_summary.setSpacing(8)
 
         row_top_stat = QHBoxLayout()
         stat_left = QVBoxLayout()
@@ -812,7 +811,7 @@ class SettingsWindow(QWidget):
         lbl_st_tag = QLabel("Today")
         set_widget_style(lbl_st_tag, "font-size: 12px; font-weight: 500; color: #a7b2bf; background: transparent; border: none;")
         self.lbl_st_today_time = QLabel("0m")
-        set_widget_style(self.lbl_st_today_time, "font-size: 26px; font-weight: 600; color: #eef0f0; background: transparent; border: none;")
+        set_widget_style(self.lbl_st_today_time, "font-size: 28px; font-weight: 600; color: #eef0f0; background: transparent; border: none;")
         stat_left.addWidget(lbl_st_tag)
         stat_left.addWidget(self.lbl_st_today_time)
         row_top_stat.addLayout(stat_left)
@@ -849,7 +848,7 @@ class SettingsWindow(QWidget):
         l_card_summary.addWidget(self.bar_st_goal)
 
         # Top Apps Breakdown row
-        self.lbl_st_top_apps = QLabel("Top apps will appear as you work...")
+        self.lbl_st_top_apps = QLabel("Top apps appear as you work")
         set_widget_style(self.lbl_st_top_apps, "font-size: 12px; color: #9ca3a5; background: transparent; border: none;")
         l_card_summary.addWidget(self.lbl_st_top_apps)
         l_st.addWidget(card_st_summary)
@@ -953,7 +952,7 @@ class SettingsWindow(QWidget):
         l_media.setSpacing(12)
 
         lbl_media_hdr = QLabel("Music")
-        set_widget_style(lbl_media_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_media_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_media_sub = QLabel("Optional lyrics for the current track.")
         set_widget_style(lbl_media_sub, "font-size: 12px; color: #9ca3a5;")
         l_media.addWidget(lbl_media_hdr)
@@ -1008,7 +1007,7 @@ class SettingsWindow(QWidget):
         l_weath.setSpacing(12)
 
         lbl_weath_hdr = QLabel("Weather")
-        set_widget_style(lbl_weath_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_weath_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_weath_sub = QLabel("Weather stays off until you choose a location.")
         set_widget_style(lbl_weath_sub, "font-size: 12px; color: #9ca3a5;")
         l_weath.addWidget(lbl_weath_hdr)
@@ -1044,7 +1043,7 @@ class SettingsWindow(QWidget):
         l_pomo.setSpacing(12)
 
         lbl_pomo_hdr = QLabel("Timer")
-        set_widget_style(lbl_pomo_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_pomo_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_pomo_sub = QLabel("Set your focus and break lengths.")
         set_widget_style(lbl_pomo_sub, "font-size: 12px; color: #9ca3a5;")
         l_pomo.addWidget(lbl_pomo_hdr)
@@ -1084,7 +1083,7 @@ class SettingsWindow(QWidget):
         l_rpc.setSpacing(12)
 
         lbl_rpc_hdr = QLabel("Discord")
-        set_widget_style(lbl_rpc_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_rpc_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_rpc_sub = QLabel("Broadcast active Spotify media and Pomodoro status to Discord.")
         set_widget_style(lbl_rpc_sub, "font-size: 12px; color: #9ca3a5;")
         l_rpc.addWidget(lbl_rpc_hdr)
@@ -1118,7 +1117,7 @@ class SettingsWindow(QWidget):
         l_hw.setSpacing(12)
 
         lbl_hw_hdr = QLabel("System")
-        set_widget_style(lbl_hw_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_hw_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_hw_sub = QLabel("Choose which background monitors run.")
         set_widget_style(lbl_hw_sub, "font-size: 12px; color: #9ca3a5;")
         l_hw.addWidget(lbl_hw_hdr)
@@ -1145,7 +1144,7 @@ class SettingsWindow(QWidget):
         l_abt.setSpacing(12)
 
         lbl_abt_hdr = QLabel("Poppy")
-        set_widget_style(lbl_abt_hdr, "font-size: 21px; font-weight: 600; color: #eef0f0;")
+        set_widget_style(lbl_abt_hdr, "font-size: 20px; font-weight: 600; color: #eef0f0;")
         lbl_abt_ver = QLabel(f"Version {APP_VERSION} · Windows 10 and 11")
         set_widget_style(lbl_abt_ver, "font-size: 12px; color: #9ca3a5;")
         lbl_abt_desc = QLabel("A small desktop panel for music, files, notes and focus.\n")

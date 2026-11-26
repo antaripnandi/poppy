@@ -15,10 +15,10 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QApplication, QSlider, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QStackedWidget, QGraphicsOpacityEffect, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
+    QVBoxLayout, QHBoxLayout, QStackedWidget, QSizePolicy, QLayout, QStyle, QStyleOptionSlider
 )
 
-from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, TRACK_LAYOUTS, is_light_theme, current_layout, surface_colors, keyboard_focused
+from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, keyboard_focused
 from poppy.ui.icons import Icons, get_fluent_font_family
 from poppy.core.system_controls import AudioPeakMeter, system_animations_enabled
 
@@ -391,55 +391,6 @@ class TabButton(QPushButton):
                 QPushButton:hover {
                     background-color: rgba(255, 255, 255, 0.05);
                     color: #f1f5f9;
-                }
-            """)
-
-
-class SourcePill(QPushButton):
-    """Clean capsule pill for switching active media sessions (Spotify, YouTube, etc.)."""
-    def __init__(self, text: str, session_index: int, is_active: bool = False, accent: str = "#6e9bff", parent=None):
-        super().__init__(text, parent)
-        self.session_index = session_index
-        self._is_active = is_active
-        self._accent = accent
-        self.setFixedHeight(22)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_style()
-
-    def set_active(self, is_active: bool, accent: str = None):
-        self._is_active = is_active
-        if accent:
-            self._accent = accent
-        self.update_style()
-
-    def update_style(self):
-        if self._is_active:
-            bg_color = _accent_to_rgba(self._accent, 0.22)
-            set_widget_style(self, f"""
-                QPushButton {{
-                    background-color: {bg_color};
-                    border: none;
-                    border-radius: 11px;
-                    color: {self._accent};
-                    font-size: 10px;
-                    font-weight: 600;
-                    padding: 2px 10px;
-                }}
-            """)
-        else:
-            set_widget_style(self, """
-                QPushButton {
-                    background-color: rgba(255, 255, 255, 0.05);
-                    border: none;
-                    border-radius: 11px;
-                    color: #94a3b8;
-                    font-size: 10px;
-                    font-weight: 500;
-                    padding: 2px 10px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(255, 255, 255, 0.10);
-                    color: #f8fafc;
                 }
             """)
 
@@ -1028,10 +979,9 @@ class CapsuleSlider(QSlider):
                              QColor("#202833") if is_light_theme() else QColor("#f1f5f9"))
 
     def _paint_track_control(self, painter, w, h):
-        name = current_layout()
         foreground = QColor("#28362f" if is_light_theme() else "#e1e9e5")
         accent = QColor(self._accent)
-        if self._compact_track and name not in TRACK_LAYOUTS:
+        if self._compact_track:
             accent = QColor("#526578" if is_light_theme() else "#93a2af")
         if is_light_theme() and accent.lightness() > 145:
             accent = accent.darker(175)
@@ -1201,7 +1151,7 @@ class LyricLineWidget(QFrame):
         self.setMinimumHeight(44)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(0)
         layout.addWidget(self._lbl)
 
@@ -1369,8 +1319,8 @@ class SpotifyLyricsWidget(QFrame):
     seek_requested = Signal(float)
 
     def apply_design(self, name):
-        set_widget_style(self, "QFrame#lyricsWidgetFrame { background: transparent; border: none; border-radius: 14px; }")
-        self.layout().setContentsMargins(6, 2, 6, 6)
+        set_widget_style(self, "QFrame#lyricsWidgetFrame { background: transparent; border: none; border-radius: 16px; }")
+        self.layout().setContentsMargins(8, 4, 8, 8)
         for line in self._line_buttons:
             line.apply_design(name)
 
@@ -1385,8 +1335,8 @@ class SpotifyLyricsWidget(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(8)
 
         # Header bar
         hdr_row = QHBoxLayout()

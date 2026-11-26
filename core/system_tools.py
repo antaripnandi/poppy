@@ -207,11 +207,3 @@ def lock_workstation():
     except Exception:
         pass
 
-
-def launch_windows_search():
-    """Opens native Windows Search or Run prompt."""
-    try:
-        subprocess.Popen(["cmd.exe", "/c", "start", "ms-search:"], shell=False)
-    except Exception:
-        pass
-

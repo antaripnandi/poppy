@@ -10,7 +10,6 @@ Zero external dependencies (pure stdlib).
 """
 
 import json
-import os
 import re
 import urllib.parse
 import urllib.request
@@ -19,7 +18,6 @@ import time
 from difflib import SequenceMatcher
 from contextlib import contextmanager, nullcontext
 import urllib.error
-from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QTimer
 from poppy.core.storage import data_path, write_json, spotify_cookie
 

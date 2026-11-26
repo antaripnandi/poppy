@@ -9,10 +9,10 @@ and persistent on-screen presence across desktops.
 import json
 import uuid
 
-from PySide6.QtCore import Qt, QPoint, Signal, QSize, QTimer, QRectF
-from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QGuiApplication, QRegion
+from PySide6.QtCore import Qt, QPoint, Signal, QTimer, QRectF
+from PySide6.QtGui import QPixmap, QPainter, QGuiApplication, QRegion
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel,
     QSizeGrip, QFrame, QApplication
 )
 

@@ -6,7 +6,7 @@ Features NotchX's 7 theme presets, frosted card styling, and clean sans-serif ty
 
 from PySide6.QtGui import QColor
 from poppy.ui.pill_fonts import DEFAULT_PILL_FONT
-from poppy.ui.theme import DESIGN_PALETTES, LAYOUT_THEMES, home_order
+from poppy.ui.theme import LAYOUT_THEMES, home_order
 
 
 THEME_PRESETS = {
@@ -126,18 +126,18 @@ def get_stylesheet(theme_name: str = DEFAULT_THEME, layout="Soft") -> str:
     font-size: 12px;
 }}
 
-QMenu {{ background: #202223; border: 1px solid #3a3d3e; border-radius: 8px; padding: 5px; }}
-QMenu::item {{ padding: 7px 26px 7px 10px; border-radius: 5px; }}
+QMenu {{ background: #202223; border: 1px solid #3a3d3e; border-radius: 8px; padding: 4px; }}
+QMenu::item {{ padding: 8px 24px 8px 12px; border-radius: 6px; }}
 QMenu::item:selected {{ background: #343738; }}
 QMenu::item:disabled {{ color: #818687; }}
-QMenu::separator {{ height: 1px; background: #3a3d3e; margin: 5px; }}
+QMenu::separator {{ height: 1px; background: #3a3d3e; margin: 4px; }}
 QDialog, QMessageBox {{ background: #1b2027; }}
 
 QToolTip {{
     background-color: #0f1219;
     color: #f1f5f9;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 5px;
+    border-radius: 6px;
     padding: 4px 8px;
     font-size: 12px;
 }}
@@ -218,7 +218,7 @@ QSlider::handle:horizontal {{
     border: 1px solid #7f8b91;
     width: 8px;
     margin: -3px 0;
-    border-radius: 5px;
+    border-radius: 4px;
 }}
 
 QSlider::handle:horizontal:hover {{

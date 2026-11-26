@@ -53,8 +53,8 @@ class AppMixerMenu(QMenu):
         panel = QWidget()
         panel.setFixedWidth(386)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(7)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
         self.title = QLabel("App mixer")
         set_widget_style(self.title, "font-weight: 600; font-size: 14px;")

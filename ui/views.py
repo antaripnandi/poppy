@@ -6,15 +6,13 @@ Faithfully inspired by NotchX's official interface (home-v2.png, now-playing-v2.
 import os
 import ast
 import operator as op
-import re
 import time
-from pathlib import Path
-from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer, QSize, QRect, QEvent
+from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QTimer, QRect, QEvent
 from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QPainterPath, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QLineEdit, QTextEdit, QPushButton, QSlider,
-    QFrame, QScrollArea, QApplication, QMenu, QSizePolicy, QFileDialog, QLayout, QBoxLayout,
+    QLineEdit, QTextEdit, QPushButton,
+    QFrame, QApplication, QMenu, QSizePolicy, QFileDialog, QLayout, QBoxLayout,
     QComboBox, QSpinBox, QStackedWidget
 )
 
@@ -98,7 +96,7 @@ class HomeTabView(QWidget):
 
     def _init_ui(self):
         home = QVBoxLayout(self)
-        home.setContentsMargins(12, 8, 12, 10)
+        home.setContentsMargins(12, 8, 12, 12)
         home.setSpacing(12)
         self._init_player()
         home.addWidget(self.mini_player)
@@ -145,7 +143,7 @@ class HomeTabView(QWidget):
         card_clock = CardFrame(self)
         self.card_clock = card_clock
         l_clock = QVBoxLayout(card_clock)
-        l_clock.setContentsMargins(18, 16, 18, 14)
+        l_clock.setContentsMargins(16, 16, 16, 16)
         l_clock.setSpacing(4)
 
         self.lbl_big_time = QLabel("12:11:29 AM")
@@ -173,7 +171,7 @@ class HomeTabView(QWidget):
         # Hardware readings
         telemetry_row = QGridLayout()
         self.telemetry_grid = telemetry_row
-        telemetry_row.setSpacing(6)
+        telemetry_row.setSpacing(8)
         self.lbl_cpu = MetricLabel("CPU", "--%")
         self.lbl_gpu = MetricLabel("GPU", "--%")
         self.lbl_ram = MetricLabel("RAM", "--%")
@@ -201,7 +199,7 @@ class HomeTabView(QWidget):
         self.card_controls = card_controls
         l_ctrl = QVBoxLayout(card_controls)
         self.controls_layout = l_ctrl
-        l_ctrl.setContentsMargins(18, 14, 18, 14)
+        l_ctrl.setContentsMargins(16, 16, 16, 16)
         l_ctrl.setSpacing(4)
 
         self.slider_vol = CapsuleSlider(icon=Icons.VOLUME, parent=self, compact_track=True)
@@ -225,7 +223,7 @@ class HomeTabView(QWidget):
         l_ctrl.addSpacing(4)
 
         actions = QGridLayout()
-        actions.setSpacing(3)
+        actions.setSpacing(4)
         self.quick_actions = []
         for index, (attr, label, tip, signal, toggle) in enumerate((
             ("btn_act_caffeine", "Awake", "Keep the PC awake", self.caffeine_toggle_requested, True),
@@ -269,13 +267,13 @@ class HomeTabView(QWidget):
 
         self.txt_notes = QTextEdit()
         self.txt_notes.setMinimumHeight(64)
-        self.txt_notes.setPlaceholderText("Jot something down...")
+        self.txt_notes.setPlaceholderText("Write a note")
         set_widget_style(self.txt_notes, """
             QTextEdit {
                 background: rgba(255, 255, 255, 0.025);
                 border: 1px solid rgba(255, 255, 255, 0.05);
-                border-radius: 10px;
-                padding: 10px;
+                border-radius: 8px;
+                padding: 8px;
                 color: #f1f5f9;
                 font-size: 11.5px;
             }
@@ -303,7 +301,7 @@ class HomeTabView(QWidget):
         card_shelf = CardFrame(self)
         self.card_shelf = card_shelf
         l_shelf = QVBoxLayout(card_shelf)
-        l_shelf.setContentsMargins(18, 14, 18, 14)
+        l_shelf.setContentsMargins(16, 16, 16, 16)
         l_shelf.setSpacing(8)
 
         shelf_hdr = QHBoxLayout()
@@ -1104,7 +1102,6 @@ class MusicTabView(QWidget):
             color = QColor.fromHsl(max(0, hue), min(saturation, 65), 242)
         spec = LAYOUT_THEMES[self._layout_name]
         background = color.name()
-        set_widget_style(self.player_card, f"QFrame#mediaCard {{ background: {background}; border: none; border-radius: {spec['radius']}px; }} QFrame#mediaCard QLabel {{ background: transparent; border: none; }}")
         set_widget_style(self.player_card, f"QFrame#mediaCard {{ background: {background}; border: none; border-radius: {spec['radius']}px; }} QFrame#mediaCard QLabel {{ background: transparent; border: none; }}")
 
     @property
