@@ -838,7 +838,7 @@ class MusicTabView(QWidget):
         self.apply_layout(self._layout_name)
 
         self._playback_timer = QTimer(self)
-        self._playback_timer.setInterval(100)
+        self._playback_timer.setInterval(33)
         self._playback_timer.timeout.connect(self._on_local_playback_tick)
 
     def showEvent(self, event):
@@ -1177,15 +1177,26 @@ class MusicTabView(QWidget):
         self.lbl_remaining.setText(self._format_time(self._dur_sec) if self._dur_sec > 0 else "--:--")
 
     def update_timeline(self, pos_sec: float, dur_sec: float, is_playing: bool):
+        was_playing = self._is_playing
         self._reported_timeline = (pos_sec, dur_sec, is_playing)
         self._is_playing = is_playing
         self._last_tick_ts = time.time()
         seekable = dur_sec > 0 and self._can_seek
+        if is_playing and self.isVisible():
+            if not self._playback_timer.isActive():
+                self._playback_timer.start()
+        else:
+            self._playback_timer.stop()
         if self.scrubber.isSliderDown():
             if not seekable:
                 self.scrubber.cancel_drag()
             return
-        self._pos_sec = pos_sec if dur_sec > 0 else 0.0
+        if (was_playing and is_playing and dur_sec > 0 and dur_sec == self._dur_sec
+                and self._pos_sec > 0 and abs(pos_sec - self._pos_sec) < 0.85):
+            if pos_sec > self._pos_sec:
+                self._pos_sec = min(dur_sec, self._pos_sec + (pos_sec - self._pos_sec) * 0.25)
+        else:
+            self._pos_sec = pos_sec if dur_sec > 0 else 0.0
         self._dur_sec = dur_sec
         self.scrubber.setEnabled(seekable)
         self.scrubber.setRange(0, max(1, round(dur_sec)))
@@ -1198,9 +1209,11 @@ class MusicTabView(QWidget):
             now = time.time()
             delta = now - self._last_tick_ts
             self._last_tick_ts = now
+            prev_sec = round(self._pos_sec)
             self._pos_sec = min(self._dur_sec, self._pos_sec + delta)
-            self.scrubber.setValue(round(self._pos_sec))
-            self._update_time_labels()
+            if round(self._pos_sec) != prev_sec:
+                self.scrubber.setValue(round(self._pos_sec))
+                self._update_time_labels()
             self.lyrics_widget.update_playback_time(self._pos_sec)
 
     def set_playback_state(self, is_playing: bool):

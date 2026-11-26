@@ -4,6 +4,7 @@ Stripped of visual noise, garish emoji, and AI border lines.
 Faithfully recreating NotchX's design system (home-v2, now-playing-v2, pill-v2).
 """
 
+import html
 import os
 from functools import lru_cache
 from PySide6.QtCore import (
@@ -1173,6 +1174,9 @@ class LyricLineWidget(QFrame):
         super().__init__(parent)
         self.time_sec = time_sec
         self._raw_text = text
+        self._words = text.split()
+        self._word_spans = self._compute_word_spans(self._words)
+        self._last_word_state = None
         self._design = current_layout()
         self._is_active = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1241,13 +1245,67 @@ class LyricLineWidget(QFrame):
             return
         super().keyPressEvent(event)
 
+    @staticmethod
+    def _compute_word_spans(words: list[str]) -> list[tuple[float, float]]:
+        if not words:
+            return []
+        weights = [max(2, len(w)) + 1 for w in words]
+        total = float(sum(weights))
+        spans = []
+        acc = 0.0
+        for weight in weights:
+            start = acc / total
+            acc += weight
+            spans.append((start, acc / total))
+        return spans
+
     def set_active(self, active: bool):
         if self._is_active != active:
             self._is_active = active
+            self._last_word_state = None
             self.setMinimumHeight(56 if active else 44)
             self._lbl.setFont(self._font_active if active else self._font_inactive)
-            self.updateGeometry()
             self.update_style()
+            if active:
+                self.set_word_progress(0.0)
+            else:
+                self._lbl.setTextFormat(Qt.TextFormat.PlainText)
+                self._lbl.setText(self._raw_text)
+            self.updateGeometry()
+
+    def set_word_progress(self, progress: float):
+        if not self._is_active or not self._words:
+            return
+        p = max(0.0, min(1.0, progress))
+        w_idx = len(self._words) - 1
+        w_prog = 1.0
+        for i, (s_frac, e_frac) in enumerate(self._word_spans):
+            if p <= e_frac or i == len(self._words) - 1:
+                w_idx = i
+                span = max(1e-4, e_frac - s_frac)
+                w_prog = max(0.0, min(1.0, (p - s_frac) / span))
+                break
+
+        step = min(4, int(w_prog * 5))
+        state = (w_idx, step)
+        if state == self._last_word_state:
+            return
+        self._last_word_state = state
+
+        alphas = (0.60, 0.72, 0.84, 0.94, 1.0)
+        cur_alpha = alphas[step]
+        parts = []
+        for i, word in enumerate(self._words):
+            esc = html.escape(word)
+            if i < w_idx:
+                parts.append(f'<span style="color: #ffffff;">{esc}</span>')
+            elif i == w_idx:
+                parts.append(f'<span style="color: rgba(255, 255, 255, {cur_alpha:.2f});">{esc}</span>')
+            else:
+                parts.append(f'<span style="color: rgba(255, 255, 255, 0.36);">{esc}</span>')
+
+        self._lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._lbl.setText(" ".join(parts))
 
     def update_style(self):
         focus = "QFrame:focus { border: 1px solid rgba(255,255,255,0.65); }"
@@ -1406,10 +1464,11 @@ class SpotifyLyricsWidget(QFrame):
 
         # Smooth Scroll Animation
         self._scroll_anim = QPropertyAnimation(self.scroll_area.verticalScrollBar(), b"value", self)
-        self._scroll_anim.setDuration(240)
+        self._scroll_anim.setDuration(180)
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self._synced_lines: list[tuple[float, str]] = []
+        self._line_durations: list[float] = []
         self._line_buttons: list[LyricLineWidget] = []
         self._lyric_tab_stop = None
         self._keyboard_reading = False
@@ -1535,6 +1594,17 @@ class SpotifyLyricsWidget(QFrame):
         self._clear_lines()
         self.content_stack.setCurrentIndex(0)
         self._synced_lines = list(synced_lines)
+        self._line_durations = []
+        for i, (t_sec, text) in enumerate(self._synced_lines):
+            words_count = max(1, len(text.split()))
+            t_next = (
+                self._synced_lines[i + 1][0]
+                if i + 1 < len(self._synced_lines)
+                else t_sec + max(2.0, min(5.5, words_count * 0.42))
+            )
+            gap = max(0.35, t_next - t_sec)
+            vocal_est = max(1.1, min(gap, words_count * 0.48 + 0.4))
+            self._line_durations.append(vocal_est)
         self._current_line_idx = -1
 
         vp_h = self.scroll_area.viewport().height()
@@ -1591,8 +1661,8 @@ class SpotifyLyricsWidget(QFrame):
         if not self._synced_lines or not self._line_buttons:
             return
 
-        # 0.25s vocal anticipation compensation so highlighting lands squarely on the opening syllable
-        sync_time = pos_sec + 0.25
+        # 0.30s vocal anticipation compensation so highlighting lands squarely on the opening syllable
+        sync_time = pos_sec + 0.30
 
         active_idx = -1
         for i, (t_sec, _) in enumerate(self._synced_lines):
@@ -1616,6 +1686,12 @@ class SpotifyLyricsWidget(QFrame):
                     self._set_lyric_tab_stop(active)
                 if not self._user_scrolling:
                     self._scroll_to_line(active_idx)
+
+        if 0 <= active_idx < len(self._line_buttons):
+            line_start = self._synced_lines[active_idx][0]
+            line_dur = self._line_durations[active_idx] if active_idx < len(self._line_durations) else 3.0
+            progress = max(0.0, min(1.0, (sync_time - line_start) / max(0.25, line_dur)))
+            self._line_buttons[active_idx].set_word_progress(progress)
 
     def _scroll_to_line(self, idx: int):
         if not self._auto_scroll_enabled or not self.isVisible() or self._keyboard_reading:
@@ -1642,6 +1718,7 @@ class SpotifyLyricsWidget(QFrame):
         self._layout_scroll_timer.stop()
         self._scroll_anim.stop()
         self._synced_lines = []
+        self._line_durations = []
         self._lyric_tab_stop = None
         self._keyboard_reading = False
         self.scroll_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)

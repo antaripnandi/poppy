@@ -35,7 +35,7 @@ def parse_lrc(lrc_text: str) -> list[tuple[float, str]]:
         if match:
             mins = int(match.group(1))
             secs = float(match.group(2))
-            text = match.group(3).strip()
+            text = re.sub(r'\s+', ' ', re.sub(r'<\d+:\d+(?:\.\d+)?>', '', match.group(3))).strip()
             if text:
                 lines.append((mins * 60.0 + secs, text))
     lines.sort(key=lambda x: x[0])

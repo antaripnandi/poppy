@@ -139,6 +139,41 @@ def test_new_lyrics_center_the_current_line_after_layout(qapp):
     assert line.y() - bar.value() + line.height() <= widget.scroll_area.viewport().height()
 
 
+def test_word_by_word_lyrics_highlight_and_timeline_jitter_guard(qapp):
+    from poppy.ui.views import MusicTabView
+
+    enhanced = "[00:10.00] <00:10.00> Hello <00:10.50> dark <00:11.00> world"
+    assert parse_lrc(enhanced) == [(10.0, "Hello dark world")]
+
+    widget = SpotifyLyricsWidget()
+    widget.set_synced_lyrics([
+        (10.0, "Hello dark world"),
+        (13.0, "Next line here"),
+    ])
+    widget.update_playback_time(10.0)
+    row0 = widget._line_buttons[0]
+    assert row0._is_active is True
+    assert row0._lbl.textFormat() == Qt.TextFormat.RichText
+    start_html = row0._lbl.text()
+    assert "Hello" in start_html and "0.36" in start_html
+
+    widget.update_playback_time(12.2)
+    end_html = row0._lbl.text()
+    assert end_html != start_html
+    assert "color: #ffffff;" in end_html
+
+    widget.update_playback_time(13.0)
+    assert row0._is_active is False
+    assert row0._lbl.textFormat() == Qt.TextFormat.PlainText
+    assert row0._lbl.text() == "Hello dark world"
+
+    tab = MusicTabView()
+    tab.update_timeline(20.0, 120.0, True)
+    tab._pos_sec = 20.5
+    tab.update_timeline(20.1, 120.0, True)
+    assert tab._pos_sec == 20.5
+
+
 def test_clickable_slider_jump(qapp):
     slider = ClickableSlider(Qt.Orientation.Horizontal)
     slider.setRange(0, 100)
