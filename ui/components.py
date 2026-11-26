@@ -1339,6 +1339,9 @@ class SpotifyLyricsWidget(QFrame):
         hdr_row.addWidget(lbl_hdr)
         hdr_row.addStretch()
         layout.addLayout(hdr_row)
+        self._hdr_row = hdr_row
+        self._top_spacing_item = None
+        self._bottom_spacing_item = None
 
         # Content stack: Page 0 = Lyrics Scroll Area, Page 1 = Placeholder / Status
         self.content_stack = QStackedWidget(self)
@@ -1472,8 +1475,24 @@ class SpotifyLyricsWidget(QFrame):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._update_padding()
         if hasattr(self, "_layout_scroll_timer"):
             self._layout_scroll_timer.start(0)
+
+    def _update_padding(self):
+        vp_h = self.scroll_area.viewport().height()
+        vp_w = self.scroll_area.viewport().width()
+        if vp_h > 80:
+            half_h = max(60, vp_h // 2)
+            if self._top_spacing_item is not None:
+                self._top_spacing_item.changeSize(0, half_h, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            if self._bottom_spacing_item is not None:
+                self._bottom_spacing_item.changeSize(0, half_h, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        margin_x = max(0, (vp_w - 600) // 2) if vp_w > 640 else 0
+        self.lines_layout.setContentsMargins(margin_x, 4, margin_x, 8)
+        if hasattr(self, "_hdr_row"):
+            self._hdr_row.setContentsMargins(margin_x + 4, 0, 4, 4)
+        self.lines_layout.invalidate()
 
     def _on_user_scroll(self):
         self._scroll_anim.stop()
@@ -1518,7 +1537,10 @@ class SpotifyLyricsWidget(QFrame):
         self._synced_lines = list(synced_lines)
         self._current_line_idx = -1
 
-        self.lines_layout.addSpacing(60)
+        vp_h = self.scroll_area.viewport().height()
+        half_h = max(60, vp_h // 2) if vp_h > 80 else 100
+
+        self._top_spacing_item = self.lines_layout.addSpacing(half_h)
         for time_sec, text in synced_lines:
             btn = LyricLineWidget(time_sec, text, self.lines_container)
             btn.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -1530,8 +1552,9 @@ class SpotifyLyricsWidget(QFrame):
             self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self._set_lyric_tab_stop(self._line_buttons[0])
 
-        self.lines_layout.addSpacing(100)
+        self._bottom_spacing_item = self.lines_layout.addSpacing(half_h)
         self.lines_layout.addStretch()
+        self._update_padding()
         self._layout_scroll_timer.start(0)
 
     def set_plain_lyrics(self, plain_text: str):
@@ -1614,6 +1637,8 @@ class SpotifyLyricsWidget(QFrame):
                     bar.setValue(target_y)
 
     def _clear_lines(self):
+        self._top_spacing_item = None
+        self._bottom_spacing_item = None
         self._layout_scroll_timer.stop()
         self._scroll_anim.stop()
         self._synced_lines = []

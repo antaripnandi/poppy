@@ -830,9 +830,11 @@ class MusicTabView(QWidget):
         metadata_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         metadata_layout.addWidget(self.lbl_title)
         metadata_layout.addWidget(self.lbl_artist)
-        self.identity_layout.addWidget(metadata, 1)
+        self.identity_layout.addWidget(metadata, 0, alignment=Qt.AlignmentFlag.AlignCenter)
         self.identity_metadata = metadata
-        player.insertWidget(1, self.identity)
+        player.insertStretch(1, 1)
+        player.insertWidget(2, self.identity)
+        player.insertStretch(3, 1)
         self.apply_layout(self._layout_name)
 
         self._playback_timer = QTimer(self)
@@ -977,7 +979,6 @@ class MusicTabView(QWidget):
         self.pills_layout.setSpacing(5)
         player.addWidget(self.sessions_widget)
         self.sessions_widget.hide()
-        player.addStretch()
         columns.addWidget(self.player_card, 1)
         self.lyrics_widget = SpotifyLyricsWidget(self)
         self.lyrics_widget.setMinimumWidth(180)
@@ -1012,21 +1013,34 @@ class MusicTabView(QWidget):
         metadata = self.identity_metadata.minimumSizeHint().height()
         identity_gap = self.identity_layout.spacing() if not horizontal else 0
         room = available_height - self.layout().contentsMargins().top() - self.layout().contentsMargins().bottom()
-        room -= fixed + (player.count() - 1) * gap + 2 * padding
+        items_count = sum(1 for i in range(player.count()) if player.itemAt(i).widget() or player.itemAt(i).layout())
+        room -= fixed + max(0, items_count - 1) * gap + 2 * padding
         if not horizontal:
             room -= metadata + identity_gap
         min_art = min(96, spec["art_size"])
         if room < min_art:
-            room += 2 * (padding - 10) + (player.count() - 1) * (gap - 4)
+            room += 2 * (padding - 10) + max(0, items_count - 1) * (gap - 4)
             vertical, gap = 10, 4
         else:
             vertical = padding
-        size = max(min_art, min(spec["art_size"], room))
+        if room <= spec["art_size"]:
+            size = max(min_art, room)
+        else:
+            max_allowed = min(320, int(spec["art_size"] + (room - spec["art_size"]) * 0.42))
+            card_w = self.player_card.width() if self.player_card.width() > 100 else 600
+            max_w = max(min_art, card_w - 2 * padding - 40)
+            size = max(min_art, min(max_allowed, max_w, room))
         self.player_shell.setContentsMargins(0, 0, 0, 0)
         player.setContentsMargins(padding, vertical, padding, vertical)
         player.setSpacing(gap)
         self.lbl_large_art.setFixedSize(size, size)
         self.identity.setMinimumHeight(max(size, metadata) if horizontal else size + metadata + identity_gap)
+        if size > 220:
+            set_widget_style(self.lbl_title, "font-family: 'Segoe UI'; font-size: 22px; font-weight: 600; color: #edf1f0;")
+            set_widget_style(self.lbl_artist, "font-family: 'Segoe UI'; font-size: 14px; color: #a7adab;")
+        else:
+            set_widget_style(self.lbl_title, "font-family: 'Segoe UI'; font-size: 18px; font-weight: 500; color: #edf1f0;")
+            set_widget_style(self.lbl_artist, "font-family: 'Segoe UI'; font-size: 12px; color: #a7adab;")
         self.identity_layout.invalidate()
         player.invalidate()
         player.parentWidget().updateGeometry()
