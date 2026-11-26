@@ -653,32 +653,112 @@ class AudioVisualizerBars(QWidget):
 
 
 class MetricLabel(QLabel):
-    """Clean hardware telemetry label."""
-    def __init__(self, tag: str, val: str = "--%", parent=None):
+    """Circular hardware telemetry meter preserving QLabel text semantics."""
+
+    def __init__(self, tag: str, val: str = "--%", parent=None, accent: str = "#6e9bff"):
         super().__init__(parent)
         self.tag = tag
+        self._val_str = val
+        self._accent = QColor(accent)
+        self._progress = self._parse_progress(val)
         self.setText(f"{tag} {val}")
-        self._default_style = """
-            QLabel {
-                background: transparent;
-                border: none;
-                color: #a7adab;
-                font-family: 'Segoe UI';
-                font-size: 11px;
-                padding: 3px 2px;
-            }
-        """
-        self.apply_design(current_layout())
+        self.setMinimumSize(56, 52)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(52)
+
+    @staticmethod
+    def _parse_progress(val_str: str):
+        text = (val_str or "").strip()
+        if text.endswith("%"):
+            num = text[:-1].strip()
+            try:
+                return max(0.0, min(1.0, float(num) / 100.0))
+            except ValueError:
+                return None
+        return None
+
+    def set_accent(self, accent: str):
+        self._accent = QColor(accent)
+        self.update()
 
     def apply_design(self, name):
-        set_widget_style(self, self._default_style)
         self.update()
 
     def set_val(self, val_str: str):
+        self._val_str = val_str
+        self._progress = self._parse_progress(val_str)
         self.setText(f"{self.tag} {val_str}")
+        self.update()
+
+    def sizeHint(self):
+        return QSize(64, 52)
+
+    def minimumSizeHint(self):
+        return QSize(52, 52)
 
     def paintEvent(self, event):
-        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        light = is_light_theme()
+        w = self.width()
+        ring_size = 32.0
+        stroke = 3.0
+        ring_x = (w - ring_size) / 2.0
+        ring_y = 2.0
+        draw_rect = QRectF(ring_x + stroke / 2.0, ring_y + stroke / 2.0,
+                           ring_size - stroke, ring_size - stroke)
+
+        track_color = QColor(0, 0, 0, 24) if light else QColor(255, 255, 255, 24)
+        pen_track = QPen(track_color, stroke)
+        pen_track.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen_track)
+        painter.drawEllipse(draw_rect)
+
+        if self._progress is not None and self._progress > 0.0:
+            pct = self._progress * 100.0
+            if self.tag == "Battery" and pct <= 20.0:
+                arc_color = QColor("#dc2626" if light else "#e5484d")
+            elif self.tag != "Battery" and pct >= 85.0:
+                arc_color = QColor("#dc2626" if light else "#e5484d")
+            elif self.tag != "Battery" and pct >= 70.0:
+                arc_color = QColor("#d97706" if light else "#f59e0b")
+            else:
+                arc_color = QColor(self._accent)
+                if light and arc_color.lightness() > 145:
+                    arc_color = arc_color.darker(160)
+            pen_arc = QPen(arc_color, stroke)
+            pen_arc.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen_arc)
+            painter.drawArc(draw_rect, 90 * 16, -round(self._progress * 360 * 16))
+
+        val_color = (
+            QColor("#737373" if light else "#85858b")
+            if self._progress is None
+            else QColor("#171717" if light else "#ededed")
+        )
+        painter.setPen(val_color)
+        val_font = QFont("Segoe UI")
+        val_font.setPixelSize(9)
+        val_font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(val_font)
+        painter.drawText(
+            QRectF(ring_x, ring_y, ring_size, ring_size),
+            Qt.AlignmentFlag.AlignCenter,
+            self._val_str,
+        )
+
+        tag_color = QColor("#525252" if light else "#a1a1a6")
+        painter.setPen(tag_color)
+        tag_font = QFont("Segoe UI")
+        tag_font.setPixelSize(11)
+        tag_font.setWeight(QFont.Weight.Normal)
+        painter.setFont(tag_font)
+        painter.drawText(
+            QRectF(0, ring_y + ring_size + 2.0, w, 16.0),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            self.tag,
+        )
 
 
 class ScreenTimeHomeWidget(CardFrame):

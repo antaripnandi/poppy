@@ -81,6 +81,7 @@ class HomeTabView(QWidget):
         self._track_title = "Nothing playing"
         self._track_artist = ""
         self._layout_name = "Soft"
+        self._accent = "#6e9bff"
         self._dashboard_wide = True
         self._hidden_sections = set()
         self._init_ui()
@@ -172,10 +173,10 @@ class HomeTabView(QWidget):
         telemetry_row = QGridLayout()
         self.telemetry_grid = telemetry_row
         telemetry_row.setSpacing(8)
-        self.lbl_cpu = MetricLabel("CPU", "--%")
-        self.lbl_gpu = MetricLabel("GPU", "--%")
-        self.lbl_ram = MetricLabel("RAM", "--%")
-        self.lbl_bat = MetricLabel("Battery", "--%")
+        self.lbl_cpu = MetricLabel("CPU", "--%", accent=self._accent)
+        self.lbl_gpu = MetricLabel("GPU", "--%", accent=self._accent)
+        self.lbl_ram = MetricLabel("RAM", "--%", accent=self._accent)
+        self.lbl_bat = MetricLabel("Battery", "--%", accent=self._accent)
         self.metrics = (self.lbl_cpu, self.lbl_gpu, self.lbl_ram, self.lbl_bat)
         for column, metric in enumerate(self.metrics):
             telemetry_row.addWidget(metric, 0, column)
@@ -613,8 +614,7 @@ class HomeTabView(QWidget):
         metric_columns = 4
         for i, metric in enumerate(self.metrics):
             self.telemetry_grid.removeWidget(metric)
-            self.telemetry_grid.addWidget(metric, i // metric_columns, i % metric_columns,
-                                          Qt.AlignmentFlag.AlignLeft)
+            self.telemetry_grid.addWidget(metric, i // metric_columns, i % metric_columns)
             metric.apply_design(name)
 
     def fit_height(self, available_height, width=None, *, max_height=None):
