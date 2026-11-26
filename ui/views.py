@@ -180,6 +180,7 @@ class HomeTabView(QWidget):
         self.metrics = (self.lbl_cpu, self.lbl_gpu, self.lbl_ram, self.lbl_bat)
         for column, metric in enumerate(self.metrics):
             telemetry_row.addWidget(metric, 0, column)
+            telemetry_row.setColumnStretch(column, 1)
         self.clock_face = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.clock_face.setSpacing(4)
         self.clock_detail = QVBoxLayout()
@@ -593,12 +594,6 @@ class HomeTabView(QWidget):
                         border-radius: 6px; color: #edf1f0; padding: 8px; font-size: 13px; }
             QTextEdit:focus { border-color: #a7adab; }
         """)
-        clock_layout = self.card_clock.layout()
-        before, after = clock_layout.count() - 2, clock_layout.count() - 1
-        if clock_layout.itemAt(before).spacerItem() is not None:
-            spacer = clock_layout.takeAt(before).spacerItem()
-            clock_layout.insertSpacerItem(after, spacer)
-            clock_layout.setStretch(after, 1)
         labels = ("Keep awake", "Microphone", "Focus", "Screen snip",
                   "Pick color", "Calculator", "Bluetooth", "Lock PC")
         for (button, original, source), label in zip(self.quick_actions, labels):
@@ -615,6 +610,7 @@ class HomeTabView(QWidget):
         for i, metric in enumerate(self.metrics):
             self.telemetry_grid.removeWidget(metric)
             self.telemetry_grid.addWidget(metric, i // metric_columns, i % metric_columns)
+            self.telemetry_grid.setColumnStretch(i % metric_columns, 1)
             metric.apply_design(name)
 
     def fit_height(self, available_height, width=None, *, max_height=None):

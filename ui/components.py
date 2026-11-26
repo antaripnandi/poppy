@@ -662,9 +662,9 @@ class MetricLabel(QLabel):
         self._accent = QColor(accent)
         self._progress = self._parse_progress(val)
         self.setText(f"{tag} {val}")
-        self.setMinimumSize(56, 52)
+        self.setMinimumSize(64, 64)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(52)
+        self.setFixedHeight(64)
 
     @staticmethod
     def _parse_progress(val_str: str):
@@ -691,10 +691,10 @@ class MetricLabel(QLabel):
         self.update()
 
     def sizeHint(self):
-        return QSize(64, 52)
+        return QSize(112, 64)
 
     def minimumSizeHint(self):
-        return QSize(52, 52)
+        return QSize(64, 64)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -702,10 +702,10 @@ class MetricLabel(QLabel):
 
         light = is_light_theme()
         w = self.width()
-        ring_size = 32.0
-        stroke = 3.0
-        ring_x = (w - ring_size) / 2.0
-        ring_y = 2.0
+        ring_size = 42.0
+        stroke = 4.0
+        ring_x = 0.0
+        ring_y = 0.0
         draw_rect = QRectF(ring_x + stroke / 2.0, ring_y + stroke / 2.0,
                            ring_size - stroke, ring_size - stroke)
 
@@ -739,7 +739,7 @@ class MetricLabel(QLabel):
         )
         painter.setPen(val_color)
         val_font = QFont("Segoe UI")
-        val_font.setPixelSize(9)
+        val_font.setPixelSize(11)
         val_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(val_font)
         painter.drawText(
@@ -751,12 +751,12 @@ class MetricLabel(QLabel):
         tag_color = QColor("#525252" if light else "#a1a1a6")
         painter.setPen(tag_color)
         tag_font = QFont("Segoe UI")
-        tag_font.setPixelSize(11)
+        tag_font.setPixelSize(12)
         tag_font.setWeight(QFont.Weight.Normal)
         painter.setFont(tag_font)
         painter.drawText(
-            QRectF(0, ring_y + ring_size + 2.0, w, 16.0),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            QRectF(ring_x, ring_y + ring_size + 4.0, ring_size, 16.0),
+            Qt.AlignmentFlag.AlignCenter,
             self.tag,
         )
 
