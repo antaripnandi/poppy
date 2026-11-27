@@ -826,9 +826,10 @@ class ScreenTimeHomeWidget(CardFrame):
             if index < len(apps):
                 app, _, formatted, *paths = apps[index]
                 path = paths[0] if paths else ""
-                if icon.property("appPath") != path:
-                    icon.setPixmap(app_icon(path).pixmap(QSize(18, 18), icon.devicePixelRatioF()))
+                if (icon.property("appPath"), icon.property("appName")) != (path, app):
+                    icon.setPixmap(app_icon(path, name=app).pixmap(QSize(18, 18), icon.devicePixelRatioF()))
                     icon.setProperty("appPath", path)
+                    icon.setProperty("appName", app)
                 name.setText(app)
                 name.setToolTip(app)
                 duration.setText(formatted)

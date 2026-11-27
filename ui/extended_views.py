@@ -33,6 +33,7 @@ from poppy.ui.app_icons import app_icon
 from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
 from poppy.core.annotation_wheel import AnnotationWheel
 from poppy.core.system_features import current_desktop_windows, activate_desktop_window, window_exe_path
+from poppy.core.screentime_manager import app_display_name
 from poppy.core.storage import data_path, write_json
 
 
@@ -961,12 +962,21 @@ class DesktopsTabView(QWidget):
         layout.addWidget(win_lbl)
 
         self.windows = QListWidget()
-        set_widget_style(self.windows, _WINDOW_LIST_STYLE +
-            "QListWidget { outline: none; }"
-            "QListWidget::item:selected:active { background: rgba(255,255,255,0.22); }",
-        )
-        self.windows.setIconSize(QSize(20, 20))
+        set_widget_style(self.windows, """
+            QListWidget { background: #141414; border: none; border-radius: 6px; outline: none; color: #edf1f0; }
+            QListWidget::item { height: 28px; padding: 0 8px; border-radius: 6px; }
+            QListWidget::item:hover:!selected { background: rgba(255,255,255,0.07); }
+            QListWidget::item:selected { background: rgba(255,255,255,0.14); color: #f1f5f9; }
+            QListWidget::item:selected:focus { background: rgba(255,255,255,0.22); }
+            QScrollBar:vertical { width: 4px; background: transparent; }
+            QScrollBar::handle:vertical { min-height: 20px; border-radius: 2px; background: #555a60; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+        """)
+        self.windows.setIconSize(QSize(18, 18))
         self.windows.setSpacing(2)
+        self.windows.setUniformItemSizes(True)
+        self.windows.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.windows.setAccessibleName("Windows on the current desktop")
         self.windows.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.windows.itemActivated.connect(self._activate_window)
@@ -995,13 +1005,6 @@ class DesktopsTabView(QWidget):
         v.addLayout(body)
         return card, body
 
-    @staticmethod
-    def _friendly_exe_name(exe_path: str, fallback: str = "App") -> str:
-        if not exe_path:
-            return fallback
-        base = os.path.splitext(os.path.basename(exe_path))[0]
-        return base.capitalize() if base else fallback
-
     def _clear_layout(self, target_layout):
         while target_layout.count():
             item = target_layout.takeAt(0)
@@ -1021,7 +1024,7 @@ class DesktopsTabView(QWidget):
         for name, exe_path, meta in entries[:3]:
             btn = QPushButton(name + (f"   ·   {meta}" if meta else ""))
             hwnd = self._open_exe_hwnds.get(exe_path.lower()) or self._open_name_hwnds.get(name.lower())
-            btn.setIcon(app_icon(exe_path, hwnd))
+            btn.setIcon(app_icon(exe_path, hwnd, name=name))
             btn.setIconSize(QSize(18, 18))
             btn.setToolTip(exe_path or name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1129,14 +1132,18 @@ class DesktopsTabView(QWidget):
                 hwnd, title = entry[0], entry[1]
                 exe_path = ""
 
-            item = QListWidgetItem(app_icon(exe_path, hwnd), title)
+            app_name = app_display_name(exe_path, "")
+            label = title
+            if app_name and app_name.casefold() not in title.casefold():
+                label = f"{app_name} · {title}"
+            item = QListWidgetItem(app_icon(exe_path, hwnd, name=app_name or title), label)
             item.setData(Qt.ItemDataRole.UserRole, hwnd)
             item.setToolTip(f"{title}\n{exe_path}" if exe_path else title)
             self.windows.addItem(item)
 
             if exe_path:
                 self._open_exe_hwnds.setdefault(exe_path.lower(), hwnd)
-                app_name = self._friendly_exe_name(exe_path, title)
+                app_name = app_name or title
                 self._open_name_hwnds.setdefault(app_name.lower(), hwnd)
                 if app_name.lower() not in seen_apps:
                     seen_apps.add(app_name.lower())

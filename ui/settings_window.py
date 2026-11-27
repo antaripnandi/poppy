@@ -1821,9 +1821,10 @@ class SettingsWindow(QWidget):
             if index < len(top_apps):
                 name, _, duration, *paths = top_apps[index]
                 path = paths[0] if paths else ""
-                if icon.property("appPath") != path:
-                    icon.setPixmap(app_icon(path).pixmap(icon.size(), icon.devicePixelRatioF()))
+                if (icon.property("appPath"), icon.property("appName")) != (path, name):
+                    icon.setPixmap(app_icon(path, name=name).pixmap(icon.size(), icon.devicePixelRatioF()))
                     icon.setProperty("appPath", path)
+                    icon.setProperty("appName", name)
                 label.setText(f"{name} · {duration}")
             row.setVisible(index < len(top_apps))
 

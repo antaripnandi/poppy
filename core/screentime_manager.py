@@ -55,7 +55,13 @@ _APP_NAME_MAP = {
     "explorer": "File Explorer",
     "poppy": "Poppy Notch",
     "devenv": "Visual Studio",
+    "chatgpt": "ChatGPT",
 }
+
+
+def app_display_name(exe_path: str, fallback: str = "App") -> str:
+    stem = os.path.splitext(os.path.basename(exe_path))[0]
+    return _APP_NAME_MAP.get(stem.lower(), stem[:1].upper() + stem[1:]) if stem else fallback
 
 
 def _get_active_app_info() -> tuple[str, str]:
@@ -68,10 +74,15 @@ def _get_active_app_info() -> tuple[str, str]:
         if not hwnd:
             return "System", ""
 
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return "Poppy Notch", ""
+
         exe_path = window_exe_path(hwnd)
         if exe_path:
-            base, _ = os.path.splitext(os.path.basename(exe_path))
-            return _APP_NAME_MAP.get(base.lower(), base.capitalize()), exe_path
+            return app_display_name(exe_path), exe_path
     except Exception:
         pass
     return "Desktop", ""
