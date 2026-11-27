@@ -219,8 +219,38 @@ def test_desktops_tab_view(qapp, monkeypatch):
     view._show_windows([(123, "Example document")])
     assert view.windows.count() == 1
     assert view.windows.item(0).text() == "Example document"
+    assert not view.windows.item(0).icon().isNull()
     view.windows.itemActivated.emit(view.windows.item(0))
     assert activated == [123]
+    view.deleteLater()
+    qapp.processEvents()
+
+
+def test_desktops_tab_view_top3_cards_and_icons(qapp):
+    import sys
+
+    class StubScreenTime:
+        def get_recent_apps(self, limit=3):
+            return [("Python", sys.executable), ("Notes", ""), ("Code", "")][:limit]
+
+        def get_top_apps_with_exe(self, limit=3):
+            return [
+                ("Python", 3600, "1h 00m", sys.executable),
+                ("Notes", 1200, "20m", ""),
+                ("Code", 600, "10m", ""),
+            ][:limit]
+
+    view = DesktopsTabView(screentime=StubScreenTime())
+    view._show_windows([(456, "Python Window", sys.executable)])
+    assert view.windows.count() == 1
+    assert not view.windows.item(0).icon().isNull()
+
+    recent_btns = view.recent_card.findChildren(QPushButton)
+    most_btns = view.most_card.findChildren(QPushButton)
+    assert len(recent_btns) == 3
+    assert len(most_btns) == 3
+    assert not recent_btns[0].icon().isNull()
+    assert not most_btns[0].icon().isNull()
     view.deleteLater()
     qapp.processEvents()
 

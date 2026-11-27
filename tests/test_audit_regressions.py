@@ -265,7 +265,7 @@ def test_screentime_clears_the_active_label_for_excluded_apps(monkeypatch):
     manager = screentime_manager.ScreenTimeManager({"screentime": {"excluded_apps": ["Private"]}})
     active = iter(("Editor", "Private"))
     monkeypatch.setattr(screentime_manager, "_get_idle_seconds", lambda: 0)
-    monkeypatch.setattr(screentime_manager, "_get_active_app_name", lambda: next(active))
+    monkeypatch.setattr(screentime_manager, "_get_active_app_info", lambda: (next(active), ""))
     manager._on_tick()
     assert manager._current_app == "Editor"
     manager._on_tick()

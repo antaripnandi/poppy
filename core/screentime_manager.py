@@ -15,6 +15,7 @@ import ctypes
 from ctypes import wintypes
 from PySide6.QtCore import QObject, Signal, QTimer
 from poppy.core.storage import data_path, write_json
+from poppy.core.system_features import window_exe_path
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -37,61 +38,43 @@ def _get_idle_seconds() -> float:
     return 0.0
 
 
-def _get_active_app_name() -> str:
-    """Return the friendly name of the active foreground application."""
+_APP_NAME_MAP = {
+    "code": "Visual Studio Code",
+    "brave": "Brave",
+    "chrome": "Chrome",
+    "msedge": "Edge",
+    "firefox": "Firefox",
+    "spotify": "Spotify",
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "notion": "Notion",
+    "windowsterminal": "Terminal",
+    "powershell": "PowerShell",
+    "cmd": "Command Prompt",
+    "explorer": "File Explorer",
+    "poppy": "Poppy Notch",
+    "devenv": "Visual Studio",
+}
+
+
+def _get_active_app_info() -> tuple[str, str]:
+    """Return (friendly_name, exe_path) of the active foreground application."""
     try:
         user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
         user32.GetForegroundWindow.restype = wintypes.HWND
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
 
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return "System"
+            return "System", ""
 
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if not pid.value:
-            return "System"
-
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        hProcess = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-        if not hProcess:
-            return "System"
-
-        buf = ctypes.create_unicode_buffer(1024)
-        size = wintypes.DWORD(1024)
-        exe_name = ""
-        if kernel32.QueryFullProcessImageNameW(hProcess, 0, buf, ctypes.byref(size)):
-            exe_name = os.path.basename(buf.value)
-        kernel32.CloseHandle(hProcess)
-
-        if exe_name:
-            base, _ = os.path.splitext(exe_name)
-            mapping = {
-                "code": "Visual Studio Code",
-                "brave": "Brave",
-                "chrome": "Chrome",
-                "msedge": "Edge",
-                "firefox": "Firefox",
-                "spotify": "Spotify",
-                "discord": "Discord",
-                "telegram": "Telegram",
-                "slack": "Slack",
-                "notion": "Notion",
-                "windowsterminal": "Terminal",
-                "powershell": "PowerShell",
-                "cmd": "Command Prompt",
-                "explorer": "File Explorer",
-                "poppy": "Poppy Notch",
-                "devenv": "Visual Studio"
-            }
-            return mapping.get(base.lower(), base.capitalize())
+        exe_path = window_exe_path(hwnd)
+        if exe_path:
+            base, _ = os.path.splitext(os.path.basename(exe_path))
+            return _APP_NAME_MAP.get(base.lower(), base.capitalize()), exe_path
     except Exception:
         pass
-    return "Desktop"
+    return "Desktop", ""
 
 
 def format_duration(seconds: int) -> str:
@@ -122,6 +105,8 @@ class ScreenTimeManager(QObject):
         self._today_seconds = 0
         self._continuous_seconds = 0
         self._today_apps: dict[str, int] = {}
+        self._app_exes: dict[str, str] = {}
+        self._recent_apps: list[dict] = []
         self._current_app = "Desktop"
 
         self._goal_alerted_today = False
@@ -171,11 +156,24 @@ class ScreenTimeManager(QObject):
         sorted_apps = sorted(self._today_apps.items(), key=lambda x: x[1], reverse=True)
         return [(name, sec, format_duration(sec)) for name, sec in sorted_apps[:limit]]
 
+    def get_top_apps_with_exe(self, limit: int = 3) -> list[tuple[str, int, str, str]]:
+        """Return [(app_name, seconds, formatted_str, exe_path)] sorted by duration desc."""
+        return [
+            (name, sec, fmt, self._app_exes.get(name, ""))
+            for name, sec, fmt in self.get_top_apps(limit)
+        ]
+
+    def get_recent_apps(self, limit: int = 3) -> list[tuple[str, str]]:
+        """Return [(app_name, exe_path)] ordered from most recently used."""
+        return [(row["name"], row.get("exe", "")) for row in self._recent_apps[:limit] if row.get("name")]
+
     def reset_today(self):
         """Reset today's recorded screen time and streak."""
         self._today_seconds = 0
         self._continuous_seconds = 0
         self._today_apps.clear()
+        self._app_exes.clear()
+        self._recent_apps.clear()
         self._goal_alerted_today = False
         self._last_break_alert_minute = 0
         self._save_data()
@@ -193,6 +191,8 @@ class ScreenTimeManager(QObject):
             self._today_seconds = 0
             self._continuous_seconds = 0
             self._today_apps.clear()
+            self._app_exes.clear()
+            self._recent_apps.clear()
             self._goal_alerted_today = False
             self._last_break_alert_minute = 0
 
@@ -208,11 +208,17 @@ class ScreenTimeManager(QObject):
 
             # Track foreground app
             if self._cfg().get("track_apps", True):
-                app_name = _get_active_app_name()
+                app_name, exe_path = _get_active_app_info()
                 excluded = [x.strip().lower() for x in self._cfg().get("excluded_apps", []) if x.strip()]
                 if app_name.lower() not in excluded:
                     self._current_app = app_name
                     self._today_apps[app_name] = self._today_apps.get(app_name, 0) + 1
+                    if exe_path:
+                        self._app_exes[app_name] = exe_path
+                    if app_name not in ("System", "Desktop", "Poppy Notch"):
+                        self._recent_apps = [r for r in self._recent_apps if r.get("name") != app_name]
+                        self._recent_apps.insert(0, {"name": app_name, "exe": exe_path or self._app_exes.get(app_name, "")})
+                        del self._recent_apps[10:]
 
             # Check healthy break reminder
             if self._cfg().get("break_reminders_enabled", True):
@@ -254,6 +260,8 @@ class ScreenTimeManager(QObject):
                     day_data = data.get(self._today_str, {})
                     self._today_seconds = day_data.get("seconds", 0)
                     self._today_apps = day_data.get("apps", {})
+                    self._app_exes = day_data.get("app_exes", {})
+                    self._recent_apps = day_data.get("recent_apps", [])
                     self._goal_alerted_today = day_data.get("goal_alerted", False)
         except Exception:
             pass
@@ -272,6 +280,8 @@ class ScreenTimeManager(QObject):
             data[self._today_str] = {
                 "seconds": self._today_seconds,
                 "apps": self._today_apps,
+                "app_exes": self._app_exes,
+                "recent_apps": self._recent_apps,
                 "goal_alerted": self._goal_alerted_today,
                 "updated_at": datetime.datetime.now().isoformat()
             }

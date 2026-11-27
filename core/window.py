@@ -697,7 +697,7 @@ class DynamicNotchWindow(QWidget):
         self.tab_stack.addWidget(self.tab_docs)
 
         # 5: Desktops Tab
-        self.tab_desktops = DesktopsTabView(self, accent=self._theme["accent"])
+        self.tab_desktops = DesktopsTabView(self, accent=self._theme["accent"], screentime=self.screentime)
         self.tab_stack.addWidget(self.tab_desktops)
 
         # 6: Timer Tab
@@ -863,7 +863,7 @@ class DynamicNotchWindow(QWidget):
         show_screen_time = st_cfg.get("enabled", True) and st_cfg.get("show_in_main_menu", True)
         if show_screen_time:
             self.tab_home.screentime_widget.update_stats(
-                self.screentime.get_today_seconds(), self.screentime.get_top_apps(5),
+                self.screentime.get_today_seconds(), self.screentime.get_top_apps_with_exe(5),
                 st_cfg.get("track_apps", True),
             )
         self.tab_home.set_sections(hidden, show_screen_time)
@@ -871,9 +871,12 @@ class DynamicNotchWindow(QWidget):
     def _on_screentime_stats_updated(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str):
         st_cfg = self.config.get("screentime", {})
         panel = self.tab_home.screentime_widget
+        settings_visible = self._settings_window and self._settings_window.isVisible()
+        if top_apps and (not panel.isHidden() or settings_visible):
+            top_apps = self.screentime.get_top_apps_with_exe(len(top_apps))
         if not panel.isHidden() and panel.update_stats(total_sec, top_apps, st_cfg.get("track_apps", True)):
             self._resize_expanded_panel()
-        if self._settings_window and self._settings_window.isVisible():
+        if settings_visible:
             self._settings_window.update_screentime_display(
                 total_sec, streak_sec, top_apps, active_app, self.screentime.get_goal_hours()
             )

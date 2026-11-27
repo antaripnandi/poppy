@@ -408,7 +408,7 @@ def test_slow_bluetooth_driver_does_not_block_ui_or_overlap_scans(monkeypatch):
 def test_break_reminders_follow_configured_interval(monkeypatch):
     from poppy.core.screentime_manager import ScreenTimeManager
     monkeypatch.setattr("poppy.core.screentime_manager._get_idle_seconds", lambda: 0)
-    monkeypatch.setattr("poppy.core.screentime_manager._get_active_app_name", lambda: "Synthetic")
+    monkeypatch.setattr("poppy.core.screentime_manager._get_active_app_info", lambda: ("Synthetic", ""))
     manager = ScreenTimeManager({"screentime": {"break_interval_minutes": 60}})
     alerts = []
     manager.break_reminder_triggered.connect(alerts.append)

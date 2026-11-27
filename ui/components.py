@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from poppy.ui.theme import set_widget_style, LAYOUT_THEMES, is_light_theme, current_layout, keyboard_focused
 from poppy.ui.icons import Icons, get_fluent_font_family
+from poppy.ui.app_icons import app_icon
 from poppy.core.system_controls import AudioPeakMeter, system_animations_enabled
 
 
@@ -793,36 +794,41 @@ class ScreenTimeHomeWidget(CardFrame):
         set_widget_style(self.empty, "font-size: 12px; color: #a7adab;")
         layout.addWidget(self.empty)
         self.rows = []
-        for rank in range(1, 6):
+        self._app_icons = []
+        for _ in range(5):
             row = QWidget(self)
             row.setMinimumHeight(20)
             line = QHBoxLayout(row)
             line.setContentsMargins(0, 0, 0, 0)
-            rank_label = QLabel(str(rank))
-            rank_label.setFixedWidth(20)
+            icon = QLabel()
+            icon.setFixedSize(18, 18)
             name = QLabel()
             name.setTextFormat(Qt.TextFormat.PlainText)
             name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             duration = QLabel()
-            for label in (rank_label, duration):
-                set_widget_style(label, "font-size: 12px; color: #a7adab;")
+            set_widget_style(duration, "font-size: 12px; color: #a7adab;")
             set_widget_style(name, "font-size: 12px; color: #edf1f0;")
-            line.addWidget(rank_label)
+            line.addWidget(icon)
             line.addWidget(name, 1)
             line.addWidget(duration)
             layout.addWidget(row)
             row.hide()
             self.rows.append((row, name, duration))
+            self._app_icons.append(icon)
         self._row_count = 0
 
     def update_stats(self, total_sec, top_apps, track_apps=True):
         hours, minutes = divmod(total_sec // 60, 60)
         self.lbl_time.setText(f"{hours}h {minutes:02d}m" if hours else f"{minutes}m")
         apps = top_apps[:5] if track_apps else []
-        for index, (row, name, duration) in enumerate(self.rows):
+        for index, ((row, name, duration), icon) in enumerate(zip(self.rows, self._app_icons)):
             row.setVisible(index < len(apps))
             if index < len(apps):
-                app, _, formatted = apps[index]
+                app, _, formatted, *paths = apps[index]
+                path = paths[0] if paths else ""
+                if icon.property("appPath") != path:
+                    icon.setPixmap(app_icon(path).pixmap(QSize(18, 18), icon.devicePixelRatioF()))
+                    icon.setProperty("appPath", path)
                 name.setText(app)
                 name.setToolTip(app)
                 duration.setText(formatted)

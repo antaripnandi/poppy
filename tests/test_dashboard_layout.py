@@ -272,6 +272,7 @@ def test_screen_time_home_shows_five_ranked_apps_on_short_displays(dashboard_win
     assert [name.text() for row, name, _ in panel.rows if not row.isHidden()] == [
         "App 7", "App 6", "App 5", "App 4", "App 3",
     ]
+    assert all(not label.pixmap().isNull() for label in panel._app_icons)
     assert window.width() == DEFAULT_PANEL_WIDTH
     assert panel.x() > home.card_controls.geometry().right()
     assert home.home_scroll.verticalScrollBar().maximum() == 0

@@ -13,7 +13,7 @@ import uuid
 import threading
 
 from PySide6.QtCore import (
-    Qt, QPoint, Signal, QTimer, QEvent
+    Qt, QPoint, Signal, QTimer, QEvent, QSize
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QPainterPath, QCursor,
@@ -21,23 +21,24 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QLineEdit, QFrame, QApplication, QFileDialog, QMessageBox, QLayout, QBoxLayout, QSizePolicy, QListWidget, QListWidgetItem
+    QLineEdit, QFrame, QApplication, QFileDialog, QMessageBox, QLayout,
+    QBoxLayout, QSizePolicy, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import QSaveFile, QIODevice
 from shiboken6 import isValid
 
 from poppy.ui.theme import contrast_ink, set_widget_style
 from poppy.ui.icons import Icons
+from poppy.ui.app_icons import app_icon
 from poppy.ui.components import CardFrame, IconButton, DraggableThumbnail, ScrollArea
 from poppy.core.annotation_wheel import AnnotationWheel
-from poppy.core.system_features import current_desktop_windows, activate_desktop_window
+from poppy.core.system_features import current_desktop_windows, activate_desktop_window, window_exe_path
 from poppy.core.storage import data_path, write_json
 
 
 _WINDOW_LIST_STYLE = """
     QListWidget { background: #1b2027; color: #f1f5f9;
                   border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px; }
-    QListWidget:focus { border-color: rgba(255,255,255,0.55); }
     QListWidget::item { padding: 6px 8px; border-radius: 4px; }
     QListWidget::item:hover { background: rgba(255,255,255,0.08); }
     QListWidget::item:selected { background: rgba(255,255,255,0.16); color: #f1f5f9; }
@@ -771,7 +772,8 @@ class LauncherTabView(QWidget):
         self.input_search.returnPressed.connect(self._launch_current)
         layout.addWidget(self.input_search)
         self.results = QListWidget()
-        set_widget_style(self.results, _WINDOW_LIST_STYLE)
+        set_widget_style(self.results, _WINDOW_LIST_STYLE +
+                         "QListWidget:focus { border-color: rgba(255,255,255,0.55); }")
         self.results.setAccessibleName("Matching commands")
         self.results.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.results.itemActivated.connect(lambda item: self._launch_current())
@@ -841,46 +843,237 @@ class LauncherTabView(QWidget):
 # 5. Desktops / Spaces Tab View
 # =====================================================================
 
+_BENTO_CARD_STYLE = """
+    QFrame#desktopBentoCard {
+        background: rgba(255, 255, 255, 0.032);
+        border: 1px solid rgba(255, 255, 255, 0.075);
+        border-radius: 10px;
+    }
+"""
+
+_APP_PILL_STYLE = """
+    QPushButton {
+        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid transparent;
+        border-radius: 7px;
+        padding: 5px 8px;
+        text-align: left;
+        color: #e2e8f0;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    QPushButton:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.12);
+    }
+    QPushButton:pressed {
+        background: rgba(255, 255, 255, 0.13);
+    }
+"""
+
+_COMPACT_BTN_STYLE = """
+    QPushButton {
+        background: rgba(255, 255, 255, 0.045);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 7px;
+        padding: 4px 9px;
+        color: #cbd5e1;
+        font-size: 11px;
+        font-weight: 500;
+    }
+    QPushButton:hover {
+        background: rgba(255, 255, 255, 0.10);
+        color: #f8fafc;
+    }
+    QPushButton:disabled {
+        opacity: 0.45;
+    }
+"""
+
+
 class DesktopsTabView(QWidget):
-    """Windows on the current desktop, with direct virtual-desktop shortcuts."""
+    """Desktop apps, recently/most used top-3 cards, and open windows with auto app icons."""
 
     windows_ready = Signal(object)
 
-    def __init__(self, parent=None, accent="#6e9bff"):
+    def __init__(self, parent=None, accent="#6e9bff", screentime=None):
         super().__init__(parent)
+        self._accent = accent
+        self._screentime = screentime
         self._refreshing = False
+        self._open_exe_hwnds: dict[str, int] = {}
+        self._open_name_hwnds: dict[str, int] = {}
+        self._window_apps: list[tuple[str, str]] = []
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(10)
+
+        # Header + desktop controls
         header = QHBoxLayout()
-        self.summary = QLabel("Open windows")
-        set_widget_style(self.summary, "font-size: 15px; font-weight: 500; color: #edf1f0;")
+        header.setSpacing(6)
+        self.summary = QLabel("Desktop Apps")
+        set_widget_style(self.summary, "font-size: 15px; font-weight: 600; color: #edf1f0;")
         header.addWidget(self.summary)
+
+        self.count_badge = QLabel("0 open")
+        set_widget_style(
+            self.count_badge,
+            "font-size: 11px; color: #94a3b8; background: rgba(255,255,255,0.06);"
+            "border-radius: 8px; padding: 2px 8px;"
+        )
+        header.addWidget(self.count_badge)
         header.addStretch()
-        for label, callback in (
-            ("Previous desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x25)),
-            ("Next desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x27)),
-            ("New desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x44)),
-            ("Task View", lambda: self._desktop_shortcut(0x5B, 0x09)),
+
+        for label, tip, callback in (
+            ("Prev", "Previous desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x25)),
+            ("Next", "Next desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x27)),
+            ("+ New", "New virtual desktop", lambda: self._desktop_shortcut(0x5B, 0x11, 0x44)),
+            ("Task View", "Open Task View", lambda: self._desktop_shortcut(0x5B, 0x09)),
         ):
             button = QPushButton(label)
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            set_widget_style(button, _COMPACT_BTN_STYLE)
             button.clicked.connect(callback)
             header.addWidget(button)
+
         self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_style(self.refresh_button, _COMPACT_BTN_STYLE)
         self.refresh_button.clicked.connect(self.refresh_windows)
         header.addWidget(self.refresh_button)
         layout.addLayout(header)
 
+        # Side-by-side Top 3 Bento cards: Recently Used | Most Used
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(10)
+
+        self.recent_card, self.recent_layout = self._make_app_card("RECENTLY USED")
+        self.most_card, self.most_layout = self._make_app_card("MOST USED")
+        cards_row.addWidget(self.recent_card, 1)
+        cards_row.addWidget(self.most_card, 1)
+        layout.addLayout(cards_row)
+
+        # Open windows section
+        win_lbl = QLabel("OPEN WINDOWS")
+        set_widget_style(win_lbl, "font-size: 10px; font-weight: 700; color: #8b95a5; letter-spacing: 0.8px;")
+        layout.addWidget(win_lbl)
+
         self.windows = QListWidget()
-        set_widget_style(self.windows, _WINDOW_LIST_STYLE)
+        set_widget_style(self.windows, _WINDOW_LIST_STYLE +
+            "QListWidget { outline: none; }"
+            "QListWidget::item:selected:active { background: rgba(255,255,255,0.22); }",
+        )
+        self.windows.setIconSize(QSize(20, 20))
+        self.windows.setSpacing(2)
         self.windows.setAccessibleName("Windows on the current desktop")
         self.windows.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.windows.itemActivated.connect(self._activate_window)
         layout.addWidget(self.windows, 1)
-        self.status = QLabel("Double-click a window or press Enter to switch to it.")
-        set_widget_style(self.status, "font-size: 12px; color: #a7adab;")
+
+        self.status = QLabel("Double-click a window or click any top app to switch or launch.")
+        set_widget_style(self.status, "font-size: 11px; color: #8b95a5;")
         layout.addWidget(self.status)
         self.windows_ready.connect(self._show_windows)
+
+        self._refresh_app_cards()
+
+    def _make_app_card(self, title: str):
+        card = QFrame()
+        card.setObjectName("desktopBentoCard")
+        set_widget_style(card, _BENTO_CARD_STYLE)
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+        lbl = QLabel(title)
+        set_widget_style(lbl, "font-size: 10px; font-weight: 700; color: #8b95a5; letter-spacing: 0.8px;")
+        v.addWidget(lbl)
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(3)
+        v.addLayout(body)
+        return card, body
+
+    @staticmethod
+    def _friendly_exe_name(exe_path: str, fallback: str = "App") -> str:
+        if not exe_path:
+            return fallback
+        base = os.path.splitext(os.path.basename(exe_path))[0]
+        return base.capitalize() if base else fallback
+
+    def _clear_layout(self, target_layout):
+        while target_layout.count():
+            item = target_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+    def _populate_app_card(self, target_layout, entries: list[tuple[str, str, str]], empty_text: str):
+        self._clear_layout(target_layout)
+        if not entries:
+            lbl = QLabel(empty_text)
+            set_widget_style(lbl, "font-size: 11px; color: #64748b; padding: 6px 2px;")
+            target_layout.addWidget(lbl)
+            target_layout.addStretch()
+            return
+        for name, exe_path, meta in entries[:3]:
+            btn = QPushButton(name + (f"   ·   {meta}" if meta else ""))
+            hwnd = self._open_exe_hwnds.get(exe_path.lower()) or self._open_name_hwnds.get(name.lower())
+            btn.setIcon(app_icon(exe_path, hwnd))
+            btn.setIconSize(QSize(18, 18))
+            btn.setToolTip(exe_path or name)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            set_widget_style(btn, _APP_PILL_STYLE)
+            btn.clicked.connect(lambda _=False, n=name, p=exe_path: self._open_or_focus_app(n, p))
+            target_layout.addWidget(btn)
+        target_layout.addStretch()
+
+    def _refresh_app_cards(self):
+        recent_entries: list[tuple[str, str, str]] = []
+        most_entries: list[tuple[str, str, str]] = []
+
+        if self._screentime is not None:
+            for name, exe in self._screentime.get_recent_apps(3):
+                recent_entries.append((name, exe, ""))
+            for name, _sec, fmt, exe in self._screentime.get_top_apps_with_exe(3):
+                most_entries.append((name, exe, fmt))
+
+        # Backfill from currently open windows if ScreenTime doesn't have 3 entries yet
+        seen_recent = {n.lower() for n, _, _ in recent_entries}
+        for name, exe in self._window_apps:
+            if len(recent_entries) >= 3:
+                break
+            if name.lower() not in seen_recent:
+                seen_recent.add(name.lower())
+                recent_entries.append((name, exe, ""))
+
+        seen_most = {n.lower() for n, _, _ in most_entries}
+        for name, exe in self._window_apps:
+            if len(most_entries) >= 3:
+                break
+            if name.lower() not in seen_most:
+                seen_most.add(name.lower())
+                most_entries.append((name, exe, "Open"))
+
+        self._populate_app_card(self.recent_layout, recent_entries, "No recent apps yet")
+        self._populate_app_card(self.most_layout, most_entries, "No usage data yet")
+
+    def _open_or_focus_app(self, name: str, exe_path: str):
+        hwnd = self._open_exe_hwnds.get(exe_path.lower()) if exe_path else None
+        if not hwnd:
+            hwnd = self._open_name_hwnds.get(name.lower())
+        if hwnd and activate_desktop_window(hwnd):
+            return
+        if exe_path and os.path.exists(exe_path):
+            try:
+                os.startfile(exe_path)
+                QTimer.singleShot(700, self, self.refresh_windows)
+                return
+            except OSError:
+                pass
+        self.status.setText(f"Could not switch to or launch {name}.")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -894,7 +1087,8 @@ class DesktopsTabView(QWidget):
 
         def read_windows():
             try:
-                rows = current_desktop_windows()
+                raw = current_desktop_windows()
+                rows = [(hwnd, title, window_exe_path(hwnd)) for hwnd, title in raw]
             except (OSError, AttributeError):
                 rows = None
             try:
@@ -908,18 +1102,47 @@ class DesktopsTabView(QWidget):
         self._refreshing = False
         self.refresh_button.setEnabled(True)
         self.windows.clear()
+        self._open_exe_hwnds.clear()
+        self._open_name_hwnds.clear()
+        self._window_apps.clear()
+
         if rows is None:
-            self.summary.setText("Open windows")
+            self.summary.setText("Desktop Apps")
+            self.count_badge.setText("0 open")
             self.status.setText("Windows could not list this desktop. You can still use Task View.")
+            self._refresh_app_cards()
             return
+
         count = len(rows)
-        self.summary.setText(f"{count} open window{'s' if count != 1 else ''}")
-        self.status.setText("Double-click a window or press Enter to switch to it." if rows else "No app windows on this desktop.")
-        for hwnd, title in rows:
-            item = QListWidgetItem(title)
+        self.summary.setText("Desktop Apps")
+        self.count_badge.setText(f"{count} open")
+        self.status.setText(
+            "Double-click a window or click any top app to switch or launch."
+            if rows else "No app windows on this desktop."
+        )
+
+        seen_apps = set()
+        for entry in rows:
+            if len(entry) >= 3:
+                hwnd, title, exe_path = entry[0], entry[1], entry[2]
+            else:
+                hwnd, title = entry[0], entry[1]
+                exe_path = ""
+
+            item = QListWidgetItem(app_icon(exe_path, hwnd), title)
             item.setData(Qt.ItemDataRole.UserRole, hwnd)
-            item.setToolTip(title)
+            item.setToolTip(f"{title}\n{exe_path}" if exe_path else title)
             self.windows.addItem(item)
+
+            if exe_path:
+                self._open_exe_hwnds.setdefault(exe_path.lower(), hwnd)
+                app_name = self._friendly_exe_name(exe_path, title)
+                self._open_name_hwnds.setdefault(app_name.lower(), hwnd)
+                if app_name.lower() not in seen_apps:
+                    seen_apps.add(app_name.lower())
+                    self._window_apps.append((app_name, exe_path))
+
+        self._refresh_app_cards()
 
     def _activate_window(self, item):
         if not activate_desktop_window(item.data(Qt.ItemDataRole.UserRole)):

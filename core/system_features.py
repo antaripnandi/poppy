@@ -95,6 +95,36 @@ def current_desktop_windows():
     return windows
 
 
+def window_exe_path(hwnd) -> str:
+    """Return the executable path for a window handle, or '' if unavailable."""
+    try:
+        user32 = ctypes.WinDLL("user32")
+        kernel32 = ctypes.WinDLL("kernel32")
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
+        ]
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return buf.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    return ""
+
+
 def activate_desktop_window(hwnd):
     user32 = ctypes.WinDLL("user32")
     for method in (user32.IsWindow, user32.IsIconic, user32.SetForegroundWindow):

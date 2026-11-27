@@ -25,6 +25,7 @@ from poppy.core import APP_VERSION
 from poppy.core.download_watcher import default_download_folder
 from poppy.core.system_features import get_autostart_state, set_autostart_state
 from poppy.ui.components import ToggleSwitch, SettingRow, ScrollArea, ClickableSlider, CardFrame
+from poppy.ui.app_icons import app_icon
 from poppy.ui.weather_location import WeatherLocationEdit
 from poppy.core.spotify_playback import SpotifyPlayback
 from poppy.ui.spotify_controls import SpotifyAccountControls
@@ -851,6 +852,20 @@ class SettingsWindow(QWidget):
         self.lbl_st_top_apps = QLabel("Top apps appear as you work")
         set_widget_style(self.lbl_st_top_apps, "font-size: 12px; color: #9ca3a5; background: transparent; border: none;")
         l_card_summary.addWidget(self.lbl_st_top_apps)
+        self._st_app_rows = []
+        for _ in range(3):
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            icon = QLabel()
+            icon.setFixedSize(16, 16)
+            name = QLabel()
+            name.setTextFormat(Qt.TextFormat.PlainText)
+            line.addWidget(icon)
+            line.addWidget(name, 1)
+            row.hide()
+            l_card_summary.addWidget(row)
+            self._st_app_rows.append((row, icon, name))
         l_st.addWidget(card_st_summary)
 
         # Card 1: Tracking & Display
@@ -1783,6 +1798,8 @@ class SettingsWindow(QWidget):
         self.bar_st_goal.setValue(0)
         self.lbl_st_streak.setText("Active streak: 0m")
         self.lbl_st_top_apps.setText("Reset complete.")
+        for row, _, _ in self._st_app_rows:
+            row.hide()
 
     def update_screentime_display(self, total_sec: int, streak_sec: int, top_apps: list, active_app: str, goal_hours: float):
         h = total_sec // 3600
@@ -1797,11 +1814,18 @@ class SettingsWindow(QWidget):
 
         self.lbl_st_streak.setText(f"Active streak: {streak_sec // 60}m")
 
-        if top_apps:
-            app_text = "Top Apps: " + "  •  ".join(f"{name}: {fmt}" for name, sec, fmt in top_apps[:3])
-            self.lbl_st_top_apps.setText(app_text)
-        else:
-            self.lbl_st_top_apps.setText(f"Active now: {active_app}" if active_app else "No tracked app active.")
+        self.lbl_st_top_apps.setText(
+            "Top apps" if top_apps else (f"Active now: {active_app}" if active_app else "No tracked app active.")
+        )
+        for index, (row, icon, label) in enumerate(self._st_app_rows):
+            if index < len(top_apps):
+                name, _, duration, *paths = top_apps[index]
+                path = paths[0] if paths else ""
+                if icon.property("appPath") != path:
+                    icon.setPixmap(app_icon(path).pixmap(icon.size(), icon.devicePixelRatioF()))
+                    icon.setProperty("appPath", path)
+                label.setText(f"{name} · {duration}")
+            row.setVisible(index < len(top_apps))
 
     def select_page(self, page_name: str):
         self.search_settings.clear()
